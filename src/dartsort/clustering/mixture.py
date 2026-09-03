@@ -65,6 +65,8 @@ from ..util.internal_config import (
     ComponentDistanceMetric,
     ComputationConfig,
     DARTsortInternalConfig,
+    KmeansppSelection,
+    KmeansppStopping,
     RefinementConfig,
 )
 from ..util.interpolation_util import (
@@ -97,10 +99,10 @@ from ..util.spiketorch import (
     sign,
     spawn_torch_rg,
 )
-from ..util.torch_util import BModule, torch_compiler
+from ..util.torch_util import BModule, cleanup_and_log_gpu_usage, torch_compiler
 from .cluster_util import decrumb, linkage, maximal_leaf_groups
 from .clustering_features import StableWaveformFeatures
-from .kmeans import batched_kmeans, kmeans
+from .kmeans import _one_gumbel_nolog, batched_kmeans, kmeans
 
 if TYPE_CHECKING:
     from ..transform.temporal_pca import BaseTemporalPCA
@@ -137,6 +139,9 @@ def tmm_demix(
     splits and merges.
     """
     prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
+
+    saving = save_cfg is not None and save_cfg.save_intermediate_labels
+    _init_save_kw = dict(output_dir=save_step_labels_dir, cfg=save_cfg)
 
     mix_data = instantiate_and_bootstrap_tmm(
         sorting=sorting,
@@ -4607,6 +4612,466 @@ def instantiate_and_bootstrap_tmm(
     )
 
 
+@databag
+class TruncatedKmeansppResult:
+    full_labels: Tensor
+
+    # data smuggling
+    xt: Tensor
+    whitenedx: Tensor
+    CmoCooinvx: Tensor
+    noise_logliks: Tensor
+
+
+def truncated_kmeanspp(
+    *,
+    x: Tensor,
+    train_x: Tensor,
+    neighborhoods: SpikeNeighborhoods,
+    neighb_cov: NeighborhoodCovariance,
+    train_ixs: Tensor | slice,
+    train_neighbs: SpikeNeighborhoods,
+    batch_size: int,
+    n_tries: int,
+    seed: np.random.Generator | int,
+    stop_rms: float = 5.0,
+    min_count: int = 5,
+    patience: int = 21,
+    greedy_proposals: int = 1,
+    neighb_overlap: float | None = None,
+    selection: KmeansppSelection = "phi",
+    stopping: KmeansppStopping = "patience",
+    max_components_per_channel: int = 5,
+) -> TruncatedKmeansppResult:
+    """Neighborhood sparsity-aware kmeans++
+
+    Seeds are picked from the training set by _truncated_kmeanspp_inner(), which
+    chooses its own number of them, and then every spike is labeled by its nearest
+    seed. Distances only ever involve channels which both spikes were observed on.
+
+    stop_rms is a covering radius in noise standard deviations, and min_count is
+    the smallest number of spikes worth seeding a centroid for. stopping,
+    patience and greedy_proposals control the search for the last centroids: see
+    _truncated_kmeanspp_inner().
+
+    selection scores the n_tries candidate seedings: "phi" takes the smallest mean
+    squared distance, and "marginal" adds min_count * stop_rms^2 per centroid to
+    it, the same price phase 3 charges.
+    """
+    base_rg = np.random.default_rng(seed)
+    max_k = min(train_x.shape[0], max_components_per_channel * neighb_cov.n_channels)
+    feat_rank = neighb_cov.feat_rank
+    n_channels = neighb_cov.n_channels
+    neighb_chans = neighborhoods.b.neighborhoods
+    max_nc_obs = neighb_chans.shape[1]
+    assert torch.equal(neighb_chans, train_neighbs.b.neighborhoods)
+    if isinstance(train_ixs, slice):
+        pass
+    elif torch.is_tensor(train_ixs):
+        assert train_x.shape[0] == train_ixs.shape[0]
+    else:
+        panic(train_ixs)
+
+    xt, whitenedx, CmoCooinvx, noise_logliks = _whiten_impute_and_noise_score(
+        x=train_x, neighborhoods=train_neighbs, neighb_cov=neighb_cov
+    )
+
+    neighb_rel_inds = _neighborhood_relative_index(neighb_chans, n_channels)
+    # rel_inds < max_nc_obs is the neighborhoods' channel indicator, so this is
+    # adjacency restricted to pairs which really share a channel -- adjacency
+    # alone admits disjoint pairs when neighb_overlap is 0
+    obs = (neighb_rel_inds < max_nc_obs).to(whitenedx)
+    if neighb_overlap is None:
+        neighb_adj = neighb_cov.b.neighb_adj
+    else:
+        neighb_adj = neighborhoods.adjacency(neighb_overlap).to(whitenedx.device)
+    visible = torch.logical_and(neighb_adj > 0, obs @ obs.T > 0)
+    del obs
+
+    # loop n_tries times and pick the best scoring of...
+    centroid_ixs: Tensor | None = None
+    best_score = torch.inf
+    best_phi = torch.inf
+    centroid_cost = min_count * stop_rms**2 / whitenedx.shape[0]
+    if logger.isEnabledFor(DARTSORTDEBUG):
+        pbar = progrange(n_tries, desc="kmeans++ tries")
+    else:
+        pbar = None
+    for _ in range(n_tries) if pbar is None else pbar:
+        try_ixs, phi = _truncated_kmeanspp_inner(
+            X=whitenedx,
+            Xneighbixs=train_neighbs.b.neighborhood_ids,
+            neighborhoods=neighb_chans,
+            neighb_rel_inds=neighb_rel_inds,
+            visible=visible,
+            base_rg=base_rg,
+            max_k=max_k,
+            stop_rms=stop_rms,
+            min_count=min_count,
+            patience=patience,
+            greedy_proposals=greedy_proposals,
+            stopping=stopping,
+            feat_rank=feat_rank,
+        )
+        if selection == "phi":
+            score = phi
+        elif selection == "marginal":
+            score = phi + centroid_cost * try_ixs.shape[0]
+        else:
+            panic(selection)
+        if centroid_ixs is None or score < best_score:
+            if pbar is not None:
+                pbar.set_description(
+                    f"best: k={try_ixs.shape[0]} phi={phi:.4f} {selection}={score:.4f}"
+                )
+            centroid_ixs = try_ixs
+            best_score = score
+            best_phi = phi
+    assert centroid_ixs is not None
+    n_centroids = centroid_ixs.shape[0]
+    logger.dartsortdebug(
+        f"kmeans++: {n_centroids} centroids at rms={math.sqrt(best_phi):0.3f}, "
+        f"best of {n_tries} by {selection} (centroid cost {centroid_cost:0.3g} "
+        f"over {whitenedx.shape[0]} train spikes)."
+    )
+
+    # in batches, label each x by its best centroid
+    device = whitenedx.device
+    neighb_ids = neighborhoods.b.neighborhood_ids
+    cent_neighbs = train_neighbs.b.neighborhood_ids[centroid_ixs]
+    cent_rel_inds = neighb_rel_inds[cent_neighbs]
+    cent = whitenedx[centroid_ixs].view(n_centroids, feat_rank, max_nc_obs)
+    cent = F.pad(cent, (0, 1))
+    cent_visible = visible[:, cent_neighbs]
+
+    full_labels = torch.full(x.shape[:1], -1, dtype=torch.long, device=device)
+    order, indptr, _ = _index_spikes_by_neighborhood(
+        neighb_ids, neighborhoods.n_neighborhoods
+    )
+    indptr_list = indptr.tolist()
+    for ni in range(neighborhoods.n_neighborhoods):
+        members = order[indptr_list[ni] : indptr_list[ni + 1]]
+        if not members.numel():
+            continue
+
+        (cand,) = cent_visible[ni].nonzero(as_tuple=True)
+        if not cand.numel():
+            # kmeans++ ran out of components before covering this neighborhood
+            continue
+        rel_inds = cent_rel_inds[:, neighb_chans[ni]]
+        shared = rel_inds < max_nc_obs
+        n_shared = shared.sum(dim=1)
+        cvals = torch.take_along_dim(cent[cand], rel_inds[cand][:, None, :], dim=2)
+        cvals = cvals.reshape(cand.shape[0], feat_rank * max_nc_obs)
+        cmask = shared[cand].to(cvals)
+        cnormsq = cvals.square().sum(dim=1)
+        denom = n_shared[cand].mul(feat_rank).to(cvals)
+
+        for bs in range(0, members.numel(), batch_size):
+            bix = members[bs : bs + batch_size]
+            xb = x[bix.to(x.device)].to(device)
+            wx, _ = _whiten_and_noise_score_batch(
+                x=xb, neighb_ids=neighb_ids[bix], neighb_cov=neighb_cov
+            )
+            # ||x||^2 - 2<x,c> + ||c||^2, restricted to shared channels
+            xsq = wx.view(bix.shape[0], feat_rank, max_nc_obs).square().sum(dim=1)
+            d = xsq @ cmask.T
+            d = d.addmm_(wx, cvals.T, alpha=-2.0)
+            d = d.add_(cnormsq).div_(denom)
+            full_labels[bix] = cand[d.argmin(dim=1)]
+
+    n_unlabeled = (full_labels < 0).sum().item()
+    if n_unlabeled:
+        logger.warning(f"kmeans++ left {n_unlabeled} spikes unlabeled.")
+
+    return TruncatedKmeansppResult(
+        full_labels=full_labels,
+        xt=xt,
+        whitenedx=whitenedx,
+        CmoCooinvx=CmoCooinvx,
+        noise_logliks=noise_logliks,
+    )
+
+
+def _truncated_kmeanspp_inner(
+    X: Tensor,
+    Xneighbixs: Tensor,
+    neighborhoods: Tensor,
+    neighb_rel_inds: Tensor,
+    visible: Tensor,
+    base_rg: np.random.Generator,
+    max_k: int,
+    stop_rms: float,
+    min_count: float,
+    patience: int,
+    greedy_proposals: int,
+    stopping: KmeansppStopping,
+    feat_rank: int,
+) -> tuple[Tensor, float]:
+    """Pick centroids, and how many of them, in three phases
+
+    Phase 1 gives every occupied neighborhood a centroid which it shares channels
+    with, so that every spike has a comparison to make. Phase 2 runs kmeans++ D^2
+    sampling [1] until no neighborhood holds min_count spikes beyond stop_rms.
+
+    Those two phases only buy coverage, and coverage is satisfied by far fewer
+    centroids than a mixture wants. Phase 3 buys resolution: it draws
+    greedy_proposals candidates, scores each by how much it would reduce the total
+    squared distance, and commits the best -- the local trials of [4]. `stopping`
+    picks when it quits, both variants pricing a centroid at min_count spikes at
+    the covering scale:
+
+    "patience" commits only when that price is repaid, which is the DP-means
+    criterion [2] applied to one centroid at a time, and quits after `patience`
+    consecutive rounds where nothing was worth committing.
+
+    "dpmeanspp" commits every draw and quits once the mean squared distance falls
+    below min_count * stop_rms^2 * k * (log2 k + 2) / n, testing the same price
+    against all k centroids at once. The log factor is the kmeans++ approximation
+    bound of [1], which is what a D^2 draw gives up against an optimal placement.
+
+    [1] Arthur and Vassilvitskii. k-means++: the advantages of careful seeding.
+        SODA 2007. https://theory.stanford.edu/~sergei/papers/kMeansPP-soda.pdf
+    [2] Kulis and Jordan. Revisiting k-means: new algorithms via Bayesian
+        nonparametrics. ICML 2012. https://arxiv.org/abs/1111.0352
+    [3] Gonzalez. Clustering to minimize the maximum intercluster distance. TCS
+        38:293-306, 1985. https://doi.org/10.1016/0304-3975(85)90224-5
+    [4] Bahmani et al. Scalable k-means++. VLDB 2012.
+        https://arxiv.org/abs/1203.6402
+    """
+    n = X.shape[0]
+    gen = spawn_torch_rg(base_rg, device=X.device)
+    max_nc_obs = neighborhoods.shape[1]
+    n_neighb = visible.shape[0]
+    assert X.shape == (n, feat_rank * max_nc_obs)
+
+    # Initialize
+    train_centroid_ixs = X.new_full((max_k,), n, dtype=torch.long)
+    # mean square per whitened dim shared with the nearest centroid, so that
+    # its sqrt is on the scale of stop_rms. inf where no centroid is visible.
+    distsq = X.new_full((n,), torch.inf)
+
+    # sort spikes by neighborhood to derive a CSR indptr: each step below reads
+    # only the neighborhoods which can see its centroid
+    order, indptr, counts = _index_spikes_by_neighborhood(Xneighbixs, n_neighb)
+
+    buf = torch.empty_like(distsq)
+    stop_distsq = stop_rms**2
+    propose_kw = dict(
+        X=X,
+        Xneighbixs=Xneighbixs,
+        neighborhoods=neighborhoods,
+        neighb_rel_inds=neighb_rel_inds,
+        visible=visible,
+        order=order,
+        indptr=indptr,
+        counts=counts,
+        feat_rank=feat_rank,
+    )
+    k = 0
+
+    # -- phase 1: every occupied neighborhood gets a centroid it can see
+    covered = counts == 0
+    while k < max_k and not covered.all():
+        # uniformly over the spikes which see nothing: a neighborhood wppt its
+        # size, then one of its members
+        (uncov,) = covered.logical_not().nonzero(as_tuple=True)
+        nj = uncov[torch.multinomial(counts[uncov].to(X), 1, generator=gen)[0]]
+        j = torch.rand((), device=X.device, generator=gen).mul_(counts[nj]).long()
+        train_centroid_ixs[k] = order[indptr[nj] + j]
+        _truncated_kmeanspp_step_(
+            distsq=distsq, centroid_ix=train_centroid_ixs[k], **propose_kw
+        )
+        covered.logical_or_(visible[Xneighbixs[train_centroid_ixs[k]]])
+        k += 1
+
+    # -- phase 2: D^2 until no neighborhood holds a unit's worth of far spikes
+    while k < max_k:
+        mass = _uncovered_mass(distsq, Xneighbixs, n_neighb, stop_distsq, buf)
+        (unsat,) = (mass >= min_count).nonzero(as_tuple=True)
+        if not unsat.numel():
+            break
+        train_centroid_ixs[k] = _one_gumbel_nolog(distsq, gen, buf)
+        _truncated_kmeanspp_step_(
+            distsq=distsq, centroid_ix=train_centroid_ixs[k], **propose_kw
+        )
+        k += 1
+
+    # -- phase 3: commit centroids until the stopping rule quits
+    floor = min_count * stop_distsq
+    centroid_budget = floor / n
+    fails = 0
+    phase3_enabled = stopping != "patience" or patience > 0
+    while phase3_enabled and k < max_k:
+        best_gain, best = -1.0, None
+        for _ in range(greedy_proposals):
+            cix = _one_gumbel_nolog(distsq, gen, buf)
+            ix, d = _truncated_kmeanspp_propose(centroid_ix=cix, **propose_kw)
+            if d is None:
+                continue
+            gain = distsq[ix].sub_(d).clamp_(min=0.0).sum().item()
+            if gain > best_gain:
+                best_gain, best = gain, (cix, ix, d)
+        if stopping == "patience":
+            if best is None or best_gain < floor:
+                fails += 1
+                if fails >= patience:
+                    break
+                continue
+            fails = 0
+        elif stopping == "dpmeanspp":
+            if best is None:
+                break
+            if distsq.mean().item() <= centroid_budget * k * (math.log2(k) + 2):
+                break
+        else:
+            panic(stopping)
+        train_centroid_ixs[k], ix, d = best
+        _truncated_kmeanspp_commit_(distsq, ix, d)
+        k += 1
+
+    phi = distsq.mean().item()
+    if not math.isfinite(phi):
+        n_unreachable = distsq.isinf().sum().item()
+        logger.warning(
+            f"kmeans++ hit max_k={max_k} in its coverage phase, leaving "
+            f"{n_unreachable} spikes with no centroid to compare to."
+        )
+
+    return train_centroid_ixs[:k], phi
+
+
+def _uncovered_mass(
+    distsq: Tensor,
+    neighborhood_ids: Tensor,
+    n_neighborhoods: int,
+    stop_distsq: float,
+    buf: Tensor,
+) -> Tensor:
+    """Effective number of uncovered spikes in each neighborhood
+
+    Weights ramp from 0 at the covering radius to 1 far outside it, so a barely
+    uncovered spike counts for little and an extreme outlier counts for one. Both
+    bounds matter: the first keeps the covered bulk from swamping the total, and
+    the second keeps one artifact from impersonating a unit. Decreasing over the
+    iteration, since distsq only shrinks, so it is a termination criterion (an
+    inverse participation ratio would discount outliers harder but is not).
+    """
+    w = torch.reciprocal(distsq, out=buf).mul_(-stop_distsq).add_(1.0).clamp_(min=0.0)
+    mass = distsq.new_zeros(n_neighborhoods)
+    return mass.index_add_(0, neighborhood_ids, w)
+
+
+def _truncated_kmeanspp_propose(
+    *,
+    X: Tensor,
+    centroid_ix: Tensor,
+    Xneighbixs: Tensor,
+    neighborhoods: Tensor,
+    neighb_rel_inds: Tensor,
+    visible: Tensor,
+    order: Tensor,
+    indptr: Tensor,
+    counts: Tensor,
+    feat_rank: int,
+) -> tuple[Tensor, Tensor | None]:
+    """Distances from a candidate centroid to the spikes which can see it
+
+    Returns the spike indices and their distances, without touching distsq, so
+    that a candidate can be scored before it is committed. Spikes in the
+    neighborhoods which can see the centroid's are measured on the channels the
+    two share. Sharing nothing gives an infinite distance, though visible pairs
+    share a channel by construction.
+    """
+    cent_neighb = Xneighbixs[centroid_ix]
+    (vis_neighbs,) = visible[cent_neighb].nonzero(as_tuple=True)
+    ix = _spikes_in_neighborhoods(order, indptr, counts, vis_neighbs)
+    if not ix.numel():
+        return ix, None
+
+    # channels the centroid misses, and the spikes' own padding, index the pad
+    # channel: 0 in cent, False in shared
+    max_nc_obs = neighborhoods.shape[1]
+    rel_inds = neighb_rel_inds[cent_neighb][neighborhoods[Xneighbixs[ix]]]
+    shared = rel_inds < max_nc_obs
+    n_shared = shared.sum(dim=1)
+    cent = F.pad(X[centroid_ix].view(feat_rank, max_nc_obs), (0, 1))
+    cent = cent[:, rel_inds].permute(1, 0, 2)
+
+    # one centroid, so difference directly. truncated_kmeanspp()'s labeling loop
+    # has many, and expands the square into gemms instead.
+    d = X[ix].view(ix.numel(), feat_rank, max_nc_obs) - cent
+    d = d.square_().mul_(shared.unsqueeze(1)).sum(dim=(1, 2))
+    d = d.div_(n_shared.mul(feat_rank).clamp_(min=1))
+    d.masked_fill_(n_shared == 0, torch.inf)
+    return ix, d
+
+
+def _truncated_kmeanspp_commit_(distsq: Tensor, ix: Tensor, d: Tensor) -> None:
+    """Min-update distsq in place with a proposal's distances. Destroys d."""
+    torch.minimum(distsq[ix], d, out=d)
+    distsq[ix] = d
+
+
+def _truncated_kmeanspp_step_(
+    *, distsq: Tensor, centroid_ix: Tensor, **propose_kw
+) -> None:
+    """Propose a centroid and commit it unconditionally"""
+    ix, d = _truncated_kmeanspp_propose(centroid_ix=centroid_ix, **propose_kw)
+    if d is not None:
+        _truncated_kmeanspp_commit_(distsq, ix, d)
+
+
+def _neighborhood_relative_index(neighborhoods: Tensor, n_channels: int) -> Tensor:
+    """Relative index for aligning features across pairs of neighborhoods
+
+    rel_inds[j, c] is the position of channel c in neighborhoods[j], or max_nc_obs
+    (invalid) if unobserved there, following spiketorch.get_relative_index(). For a
+    spike in neighborhood a and a centroid in neighborhood b,
+        rel_inds[b][neighborhoods[a]]
+    is that pair's relative index, sending the spike's channels to their positions
+    in the centroid's features and to the invalid index off their intersection.
+    Pad the centroid with a zero channel to gather zeros there, as in
+    spiketorch.reindex().
+    """
+    nneighb, max_nc_obs = neighborhoods.shape
+    rel_inds = neighborhoods.new_full((nneighb, n_channels + 1), max_nc_obs)
+    positions = torch.arange(max_nc_obs, device=neighborhoods.device)
+    rel_inds.scatter_(1, neighborhoods, positions.broadcast_to(neighborhoods.shape))
+    # a spike's padding is shared with nobody
+    rel_inds[:, n_channels] = max_nc_obs
+    return rel_inds
+
+
+def _index_spikes_by_neighborhood(
+    neighborhood_ids: Tensor, n_neighborhoods: int
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Sort spikes by neighborhood, CSR style
+
+    order[indptr[j]:indptr[j + 1]] are the spikes in neighborhood j.
+    """
+    counts = torch.bincount(neighborhood_ids, minlength=n_neighborhoods)
+    order = torch.argsort(neighborhood_ids, stable=True)
+    indptr = F.pad(counts.cumsum(0), (1, 0))
+    return order, indptr, counts
+
+
+def _spikes_in_neighborhoods(
+    order: Tensor, indptr: Tensor, counts: Tensor, neighbs: Tensor
+) -> Tensor:
+    """Concatenated members of the neighborhoods in neighbs
+
+    See _index_spikes_by_neighborhood(), which builds the index.
+    """
+    sizes = counts[neighbs]
+    total = int(sizes.sum())
+    if not total:
+        return order[:0]
+    # ragged arange over the selected CSR rows
+    starts = torch.repeat_interleave(indptr[neighbs] - sizes.cumsum(0) + sizes, sizes)
+    return order[starts + torch.arange(total, device=order.device)]
+
+
 def run_split(
     tmm: TruncatedMixtureModel,
     *,
@@ -5924,8 +6389,6 @@ def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
         # set observed-only stuff
         logdet[j] = jlogdet
         # fancy inds to front! love that.
-        jCooinv_out = jCooinv.view(rank, ncoi, rank, ncoi).permute(1, 3, 0, 2)
-        Cooinv[j, :, joixvix[:, None], :, joixvix[None]] = jCooinv_out
         jLinv_out = jLinv.view(rank, ncoi, rank, ncoi).permute(1, 3, 0, 2)
         Linv[j, :, joixvix[:, None], :, joixvix[None]] = jLinv_out
 
@@ -5946,10 +6409,9 @@ def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
 
     obsdim = rank * nc_obs
     missdim = rank * nc_miss_near
-    Cooinv = Cooinv.view(nneighb, obsdim, obsdim)
     CooinvCom = CooinvCom.view(nneighb, obsdim, missdim)
     Linv = Linv.view(nneighb, obsdim, obsdim)
-    return logdet, Cooinv, CooinvCom, Linv
+    return logdet, CooinvCom, Linv
 
 
 def _whiten_impute_and_noise_score(
@@ -6134,7 +6596,7 @@ def _initialize_single(
 
 
 def coincidence_matrix(
-    x: Tensor, y: Tensor, nx: int, ny: int, dtype=torch.long
+    x: Tensor, y: Tensor, nx: int, ny: int, dtype=torch.long, batch_size: int = 1 << 18
 ) -> Tensor:
     """Get a confusion matrix of sorts: C[p,q] is |{i:x[i]=p,y[i]=q}|.
 
@@ -6143,34 +6605,31 @@ def coincidence_matrix(
     x can have -1, y can't. x can be 1d or 2d, y matches first dim.
     Similar to but faster than stack(x,y).unique(0), especially if you
     need this matrix.
+
+    The -1s in x are routed into a dump row which is dropped on the way out, so
+    that no index has to be materialized for the valid entries: nonzero() on an
+    x-shaped mask costs several times x itself, and x here is the full candidate
+    set.
     """
     assert x.shape[:1] == y.shape
-
-    # get rid of -1s in x (labels) and get corresponding y (neighbs)
-    xpos = x >= 0
-    if x.ndim == 2:
-        pos_ii, pos_jj = xpos.nonzero(as_tuple=True)
-        xx = x[pos_ii, pos_jj]
-    elif x.ndim == 1:
-        (pos_ii,) = xpos.nonzero(as_tuple=True)
-        xx = x[pos_ii]
-    else:
-        panic()
-    yy = y[pos_ii]
+    if x.ndim == 1:
+        x = x[:, None]
+    assert x.ndim == 2
 
     if pnoid:
-        assert xx.max() < nx, f"{xx.max()} {nx}"
-        assert yy.max() < ny, f"{yy.max()} {ny}"
-        assert xx.min() >= 0
-        assert yy.min() >= 0
+        assert x.max() < nx, f"{x.max()} {nx}"
+        assert y.max() < ny, f"{y.max()} {ny}"
+        assert y.min() >= 0
 
-    # build coincidence matrix
-    co = torch.zeros((nx, ny), dtype=dtype, device=x.device)
-    iflat = yy.add_(xx, alpha=ny)
-    one = torch.ones((1,), dtype=dtype, device=co.device).broadcast_to(iflat.shape)
-    co.view(-1).scatter_add_(dim=0, index=iflat, src=one)
+    co = torch.zeros(((nx + 1) * ny,), dtype=dtype, device=x.device)
+    one = torch.ones((1,), dtype=dtype, device=co.device)
+    for i0 in range(0, x.shape[0], batch_size):
+        i1 = min(x.shape[0], i0 + batch_size)
+        iflat = torch.where(x[i0:i1] >= 0, x[i0:i1], nx)
+        iflat = iflat.mul_(ny).add_(y[i0:i1, None]).view(-1)
+        co.scatter_add_(dim=0, index=iflat, src=one.broadcast_to(iflat.shape))
 
-    return co
+    return co.view(nx + 1, ny)[:nx]
 
 
 def candidate_adjacencies(

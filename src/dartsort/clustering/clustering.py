@@ -219,8 +219,10 @@ class Clusterer:
     ) -> np.ndarray:
         """Unused method but shows API."""
         del features, recording, motion
-        assert sorting.labels is not None
-        return sorting.labels
+        if sorting.labels is None:
+            return np.full_like(sorting.channels, -1)
+        else:
+            return sorting.labels
 
 
 clustering_strategies["none"] = Clusterer
