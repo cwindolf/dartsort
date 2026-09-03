@@ -13,6 +13,7 @@ from tqdm.auto import tqdm
 
 from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
 from ..clustering.mixture import (
+    MixtureModelAndDatasets,
     NeighborhoodLUT,
     Scores,
     StreamingSpikeData,
@@ -166,7 +167,8 @@ class MixtureVisData:
         self, unit_id: int, count=128
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         inu_train, chans = self.train_inds_and_chans(unit_id, count=count)
-        features = self.train_data.x[inu_train]
+        features = self.train_data.dense_slice(torch.asarray(inu_train)).x()
+        assert features is not None
         waveforms = self.reconstruct_flat(features)
         features = features.numpy(force=True)
         return inu_train, chans, features, waveforms
@@ -1034,7 +1036,7 @@ class SplitView(MixtureComponentPlot):
             orig_labels = None
 
         if debug_info.split_data is not None:
-            n_spikes = debug_info.split_data.x.shape[0]
+            n_spikes = debug_info.split_data.N
         else:
             n_spikes = 0
 
@@ -1063,9 +1065,9 @@ class SplitView(MixtureComponentPlot):
 
         # compute amplitudes
         if debug_info.split_data is not None:
-            x = debug_info.split_data.x.view(
-                n_spikes, -1, mix_data.tmm.neighb_cov.max_nc_obs
-            )
+            x = debug_info.split_data.x()
+            assert x is not None
+            x = x.view(n_spikes, -1, mix_data.tmm.neighb_cov.max_nc_obs)
             t = mix_data.train_times[debug_info.split_data.indices.cpu()]
             amps = x.square().sum(dim=1).amax(dim=1).sqrt_().numpy(force=True)
         else:
@@ -1431,6 +1433,13 @@ def fit_mixture_for_vis(
         run_merge(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
         mix_data.tmm.em(mix_data.train_data)
 
+    return mixture_vis_data(mix_data=mix_data, sorting=sorting, motion=motion)
+
+
+def mixture_vis_data(
+    *, mix_data: MixtureModelAndDatasets, sorting: DARTsortSorting, motion
+) -> MixtureVisData:
+    assert mix_data.full_data is not None
     train_scores = mix_data.tmm.soft_assign(
         data=mix_data.train_data,
         needs_bootstrap=False,
@@ -1760,7 +1769,7 @@ def vis_split_interpolation(
         whiten=whiten,
     )
 
-    n_spikes = split_data.x.shape[0]
+    n_spikes = split_data.N
     assert kmeans_x is not None
     assert kmeans_x.shape[0] == n_spikes
     assert kmeans_chans is not None
@@ -1791,8 +1800,13 @@ def vis_split_interpolation(
     # original observed waveforms
     orig_wfs = []
     orig_chans = []
+    if whiten:
+        orig_x = split_data.whitenedx
+    else:
+        orig_x = split_data.x()
+        assert orig_x is not None
     for vix in vis_ix:
-        f = (split_data.whitenedx if whiten else split_data.x)[vix]
+        f = orig_x[vix]
         f = mix_data.reconstruct_flat(f)
         orig_wfs.append(f)
         orig_chans.append(
@@ -1888,7 +1902,9 @@ def vis_obs_interpolation(
             params=ip,
         )
 
-    features = {"actual": mix_data.train_data.x[trix]}
+    actual_x = mix_data.train_data.dense_slice(trix).x()
+    assert actual_x is not None
+    features = {"actual": actual_x}
     origf = mix_data.sorting.slice_feature_by_name(
         "collisioncleaned_tpca_features", fix
     )
