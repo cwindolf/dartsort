@@ -228,6 +228,22 @@ class Clusterer:
 clustering_strategies["none"] = Clusterer
 
 
+class RemoveLabelsClusterer(Clusterer):
+    def _cluster(
+        self,
+        features: SimpleMatrixFeatures,
+        stable_features: StableWaveformFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording | None,
+        motion: MotionInfo,
+    ) -> np.ndarray:
+        del features, recording, motion
+        return np.full_like(sorting.channels, -1)
+
+
+clustering_strategies["remove_labels"] = RemoveLabelsClusterer
+
+
 class ChannelSnapClusterer(Clusterer):
     def _cluster(
         self,
