@@ -156,13 +156,18 @@ def entropy(Q: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
 
 
 def ecl(
-    resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0, reduce_mean: bool = True
+    resps: Tensor | None,
+    log_liks: Tensor,
+    cl_alpha: float = 1.0,
+    reduce_mean: bool = True,
 ) -> Tensor:
-    h = entropy(resps, dim=1, reduce_mean=reduce_mean)
-    log_lik = log_liks.logsumexp(dim=1)
+    crit = log_liks.logsumexp(dim=1)
     if reduce_mean:
-        log_lik = log_lik.mean()
-    crit = log_lik - cl_alpha * h
+        crit = crit.mean()
+    if cl_alpha > 0:
+        assert resps is not None
+        h = entropy(resps, dim=1, reduce_mean=reduce_mean)
+        crit = crit - cl_alpha * h
     return crit
 
 
