@@ -493,10 +493,10 @@ def test_tree_groups(K, dist_kind, max_group_size, max_distance, link):
 # -- kmeans++ initialization
 
 
-def test_neighborhood_relative_index():
+def test_neighb_relative_index():
     nc = 5
     neighborhoods = torch.tensor([[0, 1, 2], [2, 3, 4], [1, 4, nc]])
-    rel_inds = mixture._neighborhood_relative_index(neighborhoods, nc)
+    rel_inds = mixture._neighb_relative_index(neighborhoods, nc)
 
     # channel 2 is neighborhood 1's first channel and neighborhood 0's third
     assert rel_inds[1, 2] == 0
@@ -555,7 +555,7 @@ def test_truncated_kmeanspp_step():
     ids = torch.arange(n, device=device) % n_neighb
     X = torch.randn(n, feat_rank * width, device=device, generator=gen)
 
-    rel_inds = mixture._neighborhood_relative_index(neighborhoods, nc)
+    rel_inds = mixture._neighb_relative_index(neighborhoods, nc)
     obs = (rel_inds < width).to(X)
     visible = (obs @ obs.T) > 0
     order, indptr, counts = mixture._sort_to_compressed_neighborhood_sparse(ids, n_neighb)
@@ -563,7 +563,7 @@ def test_truncated_kmeanspp_step():
     centroids = (0, n_neighb)
     distsq = X.new_full((n,), torch.inf)
     for c in centroids:
-        mixture._truncated_kmeanspp_step_(
+        ix, d = mixture._truncated_kmeanspp_propose(
             X=X,
             distsq=distsq,
             centroid_ix=torch.tensor(c, device=device),
@@ -576,6 +576,8 @@ def test_truncated_kmeanspp_step():
             counts=counts,
             feat_rank=feat_rank,
         )
+        if d is not None:
+            mixture._truncated_kmeanspp_commit_(distsq, ix, d)
 
     for i in range(n):
         check = min(

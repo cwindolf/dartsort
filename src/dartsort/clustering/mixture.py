@@ -3606,11 +3606,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
             scores=train_scores, n_units=self.n_units
         )
         mean_val_resp = mean_responsibilities(scores=val_scores, n_units=self.n_units)
-        cur_crit = ecl(
-            resps=val_scores.responsibilities,
-            log_liks=val_scores.log_liks,
+        val_row_crit = ecl(
+            resps=None,
+            log_liks=val_scores.log_liks.double(),
             cl_alpha=self.p.demolish_cl_alpha,
-        ).item()
+            reduce_mean=False,
+        )
+        cur_crit = val_row_crit.mean().item()
 
         # checking this invariant at the top
         assert self.b.log_proportions.isfinite().all()
@@ -3631,6 +3633,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 train_scores=train_scores,
                 eval_scores=val_scores,
                 cur_crit=cur_crit,
+                eval_row_crit=val_row_crit,
                 train_data=train_data,
                 eval_data=val_data,
             )
@@ -6060,6 +6063,7 @@ def evaluate_group_demolitions(
     cur_crit: float | None,
     train_scores: Scores,
     eval_scores: Scores,
+    eval_row_crit: Tensor | None = None,
 ) -> GroupDemolition:
     group_ = group.to(train_scores.candidates)
 
@@ -6105,6 +6109,13 @@ def evaluate_group_demolitions(
         assert group_eval_data is not None
         group_eval_scores = eval_scores.slice(group_eval_data.indices)
         nongroup_eval_scores = remove_units_from_scores(group_eval_scores, group)
+    elif eval_row_crit is None:
+        eval_row_crit = ecl(
+            resps=None,
+            log_liks=eval_scores.log_liks.double(),
+            cl_alpha=alpha,
+            reduce_mean=False,
+        )
 
     for demo_mask in submasks(can_demolish, skip_full=True):
         if mm.p.refit_in_demolition:
@@ -6118,8 +6129,9 @@ def evaluate_group_demolitions(
                 group_train_data=group_train_data,  # ty: ignore[possibly-unresolved-reference]
                 mm=mm,
             )
+            imp = crit - cur_crit
         else:
-            crit = _evaluate_single_demolition(
+            imp = _evaluate_single_demolition(
                 orig_log_props=mm.b.log_proportions,
                 noise_log_prop=mm.b.noise_log_prop,
                 cl_alpha=alpha,
@@ -6127,8 +6139,8 @@ def evaluate_group_demolitions(
                 demolish_mask=demo_mask,
                 train_scores=train_scores,
                 eval_scores=eval_scores,
+                eval_row_crit=eval_row_crit,
             )
-        imp = crit - cur_crit
         if imp > best_imp:
             best_demo = GroupDemolition(
                 unit_ids=group, improvement=imp, demolished=demo_mask
@@ -6146,6 +6158,7 @@ def _evaluate_single_demolition(
     demolish_mask: Tensor,
     train_scores: Scores,
     eval_scores: Scores,
+    eval_row_crit: Tensor | None = None,
 ) -> float:
     n_units = orig_log_props.numel()
     assert demolish_mask.shape == group.shape
@@ -6153,17 +6166,11 @@ def _evaluate_single_demolition(
     # determine mean responsibility after demolition on train set
     chopping_block = group[demolish_mask]
     if not chopping_block.numel():
-        return ecl(
-            resps=eval_scores.responsibilities,
-            log_liks=eval_scores.log_liks,
-            cl_alpha=cl_alpha,
-        ).item()
-    train_scores_adj = remove_units_from_scores(
-        train_scores, chopping_block, sort=False
+        return 0.0
+    adj_train_resp = mean_responsibilities_after_removal(
+        scores=train_scores, remove_units=chopping_block, n_units=n_units
     )
-    adj_train_resp = mean_responsibilities(train_scores_adj, n_units=n_units)
     assert adj_train_resp.shape == (n_units + 1,)
-    del train_scores_adj
 
     # determine what adjustment of proportions would result
     adj_train_resp = adj_train_resp[:n_units]
@@ -6172,18 +6179,13 @@ def _evaluate_single_demolition(
     new_log_props = adj_train_resp.log() + non_noise_lp
 
     # evaluate effect on heldout set
-    eval_scores_adj = proportion_adjust_scores(
+    return proportion_adjust_criterion_change(
         scores=eval_scores,
         orig_log_props=orig_log_props,
         new_log_props=new_log_props,
-        with_responsibilities=cl_alpha > 0,
-        sort=False,
-    )
-    return ecl(
-        resps=eval_scores_adj.responsibilities,
-        log_liks=eval_scores_adj.log_liks,
         cl_alpha=cl_alpha,
-    ).item()
+        orig_row_criterion=eval_row_crit,
+    )
 
 
 def _evaluate_single_refit_demolition(
@@ -6668,7 +6670,7 @@ def _initialize_single(
 
 
 def coincidence_matrix(
-    x: Tensor, y: Tensor, nx: int, ny: int, dtype=torch.long, batch_size: int = 1 << 18
+    x: Tensor, y: Tensor, nx: int, ny: int, dtype=torch.long, batch_size: int = 2**18
 ) -> Tensor:
     """Get a confusion matrix of sorts: C[p,q] is |{i:x[i]=p,y[i]=q}|.
 
@@ -7087,7 +7089,7 @@ def concatenate_scores(scoress: list[Scores], dim=0) -> Scores:
 
 
 def remove_units_from_scores(
-    scores: Scores, unit_ids: Tensor, *, sort=True, batch_size: int = 4096
+    scores: Scores, unit_ids: Tensor, *, sort=True, batch_size: int = 2**16
 ) -> Scores:
     """Return copy of scores where log_liks for candidates in unit_ids are -inf (and resps are 0)."""
     nu = unit_ids.shape[0]
@@ -7133,7 +7135,7 @@ def proportion_adjust_scores(
     new_log_props: Tensor,
     with_responsibilities: bool,
     sort=True,
-    batch_size: int = 4096,
+    batch_size: int = 2**16,
 ) -> Scores:
     """What would the scores be if the log props were these, not those?"""
     diff = new_log_props - orig_log_props
@@ -7247,7 +7249,7 @@ def mean_responsibilities(
     n_units: int | None = None,
     responsibilities: torch.Tensor | None = None,
     candidates: torch.Tensor | None = None,
-    batch_size: int = 8192,
+    batch_size: int = 2**16,
 ) -> torch.Tensor:
     """Average per-spike responsibility by unit for scores a Scores object."""
     if responsibilities is not None:
@@ -7271,41 +7273,33 @@ def mean_responsibilities(
     assert resp.shape[1] in (ncand, ncand + 1)
     includes_noise = resp.shape[1] == ncand + 1
     assert resp.shape[0] == cand.shape[0]
-    batch_size = min(batch_size, resp.shape[0])
+    n = resp.shape[0]
 
     if n_units is None:
         n_units = int(cand.amax()) + 1
     assert n_units > 0
 
-    # count candidates per batch
-    ncand = (cand >= 0).count_nonzero(dim=1)
-    padlen = batch_size * math.ceil(cand.shape[0] / batch_size)
-    if padlen > ncand.shape[0]:
-        ncand = F.pad(ncand, (0, padlen - ncand.shape[0]))
-    ncand = ncand.view(-1, batch_size).sum(1).cpu()
-    assert len(range(0, resp.shape[0], batch_size)) == ncand.shape[0]
-
     # welford running mean responsiblity by batches
-    resp_mean = resp.new_zeros(n_units + includes_noise, dtype=torch.double)
+    knoise = n_units + includes_noise
+    resp_mean = resp.new_zeros(knoise + 1, dtype=torch.double)
     rsum_batch = resp_mean.clone()
-    for bix, i0 in enumerate(range(0, resp.shape[0], batch_size)):
-        i1 = min(resp.shape[0], i0 + batch_size)
+    for i0 in range(0, n, batch_size):
+        i1 = min(n, i0 + batch_size)
         nbatch = i1 - i0
-        if not nbatch:
-            continue
         rsum_batch.zero_()
 
-        nc = int(ncand[bix].item())
-        cii, cjj = _nonzero_static(cand[i0:i1] >= 0, size=nc).T
-        if cii.numel():
-            c = cand[i0:i1][cii, cjj].long()
-            r = resp[i0:i1][cii, cjj].double()
-            rsum_batch.scatter_add_(dim=0, index=c, src=r)
+        cix = F.threshold(cand[i0:i1], threshold=-1, value=knoise)
+        rsum_batch.scatter_add_(
+            dim=0,
+            index=cix.view(-1),
+            src=resp[i0:i1, :ncand].double().reshape(-1),
+        )
         if includes_noise:
             rsum_batch[n_units] += resp[i0:i1, -1].double().sum()
 
         rmean_batch = rsum_batch.mul_(1.0 / nbatch)
         resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+    resp_mean = resp_mean[:knoise]
 
     # check that things didn't explode
     assert resp_mean.isfinite().all(), "Responsibility mean not finite"
@@ -7322,6 +7316,93 @@ def mean_responsibilities(
         ), f"Responsiblity sum > 1, to wit {resp_mean.sum()}"
 
     return resp_mean
+
+
+def mean_responsibilities_after_removal(
+    scores: Scores,
+    remove_units: Tensor,
+    n_units: int,
+    batch_size: int = 2**18,
+) -> Tensor:
+    n, ncand = scores.candidates.shape
+    assert scores.log_liks.shape == (n, ncand + 1)
+    remove_units = remove_units.sort().values
+    remove_units = remove_units.to(scores.candidates)
+    nremove = remove_units.shape[0]
+
+    # welford running mean responsiblity by batches, as in mean_responsibilities
+    knoise = n_units + 1
+    resp_mean = scores.log_liks.new_zeros(knoise + 1, dtype=torch.double)
+    rsum_batch = resp_mean.clone()
+    for i0 in range(0, n, batch_size):
+        i1 = min(n, i0 + batch_size)
+        nbatch = i1 - i0
+        rsum_batch.zero_()
+
+        bcand = scores.candidates[i0:i1]
+        binds = torch.searchsorted(remove_units, bcand)
+        binds = binds.clamp_(0, nremove - 1)
+        bye = bcand == remove_units[binds]
+
+        bll = scores.log_liks[i0:i1].clone()
+        bll[:, :ncand].masked_fill_(bye, -torch.inf)
+        bresp = bll.softmax(dim=1).nan_to_num_()
+
+        cix = F.threshold(bcand, threshold=-1, value=knoise)
+        rsum_batch.scatter_add_(
+            dim=0,
+            index=cix.reshape(-1),
+            src=bresp[:, :ncand].double().reshape(-1),
+        )
+        rsum_batch[n_units] += bresp[:, -1].double().sum()
+
+        rmean_batch = rsum_batch.mul_(1.0 / nbatch)
+        resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+
+    resp_mean = resp_mean[:knoise]
+    _assert_propclose(resp_mean.sum(), resp_mean.new_ones(()))
+    return resp_mean
+
+
+def proportion_adjust_criterion_change(
+    *,
+    scores: Scores,
+    orig_log_props: Tensor,
+    new_log_props: Tensor,
+    cl_alpha: float,
+    orig_row_criterion: Tensor | None = None,
+    batch_size: int = 2**18,
+) -> float:
+    """How much would ecl change if the log props were these, not those?"""
+    diff = (new_log_props.double() - orig_log_props.double()).nan_to_num_()
+    diff = F.pad(diff, (0, 1))
+
+    cand, log_liks = scores.candidates, scores.log_liks
+    n, ncand = cand.shape
+    assert orig_row_criterion is None or orig_row_criterion.shape == (n,)
+
+    mean = diff.new_zeros(())
+    for i0 in range(0, n, batch_size):
+        i1 = min(n, i0 + batch_size)
+        nbatch = i1 - i0
+
+        bdiff = diff[cand[i0:i1]]
+        if scores.duties is not None:
+            bdiff *= scores.duties[i0:i1, None]
+
+        bll = log_liks[i0:i1].double()
+        if orig_row_criterion is None:
+            borig = ecl(resps=None, log_liks=bll, cl_alpha=cl_alpha, reduce_mean=False)
+        else:
+            borig = orig_row_criterion[i0:i1]
+
+        bll[:, :ncand] += bdiff
+        badj = ecl(resps=None, log_liks=bll, cl_alpha=cl_alpha, reduce_mean=False)
+
+        bmean = badj.sub_(borig).mean()
+        mean += bmean.sub_(mean).mul_(nbatch / i1)
+
+    return mean.item()
 
 
 def stack_tmms(tmms: list[TruncatedMixtureModel]) -> BaseMixtureModel:

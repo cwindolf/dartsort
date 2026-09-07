@@ -165,7 +165,8 @@ def ecl(
     if reduce_mean:
         crit = crit.mean()
     if cl_alpha > 0:
-        assert resps is not None
+        if resps is None:
+            resps = log_liks.softmax(dim=1).nan_to_num_()
         h = entropy(resps, dim=1, reduce_mean=reduce_mean)
         crit = crit - cl_alpha * h
     return crit
