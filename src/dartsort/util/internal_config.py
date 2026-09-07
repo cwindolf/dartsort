@@ -254,7 +254,7 @@ class ClusteringFeaturesConfig:
     log_transform_amplitude: bool = False
     amp_log_c: float = 5.0
     amp_scale: float = 3.0
-    amplitude_kind: Literal["peak", "ptp", "rms"] = "peak"
+    amplitude_kind: Literal["peak", "ptp", "rms", "stored"] = "peak"
     x_scale: float = 1.0
     n_main_channel_pcs: int = 5
     n_multi_channel_pcs: int = 0
@@ -519,8 +519,8 @@ class RefinementConfig:
     merge_group_size: int = 5
     n_search: int | None = 3
     n_explore: int | None = None
-    train_batch_size: int = 512
-    eval_batch_size: int = 512
+    train_batch_size: int = 2048
+    eval_batch_size: int = 2048
     split_friend_distance: float = 0.8
     split_distance_threshold: float = 1.5
     merge_distance_threshold: float = 1.5
@@ -644,6 +644,10 @@ class FeaturizationConfig:
     save_amplitudes: bool = True
     save_amplitude_vectors: bool = False
     save_all_amplitudes: bool = False
+    # per-channel amplitudes of the output waveform, saved even under denoise_only.
+    # in the subtraction pipeline the output waveform is the one removed from the
+    # trace, so these describe what subtraction deposited on each channel.
+    output_amplitude_vectors: Literal["none", "ptp", "peak"] = "none"
     # localization runs on output waveforms
     do_localization: bool = True
     localization_radius: float = 100.0
@@ -1111,6 +1115,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             input_waveforms_name="raw",
             output_waveforms_name="subtracted",
             save_output_waveforms=cfg.save_subtracted_waveforms,
+            output_amplitude_vectors=cfg.subtracted_amplitude_vectors,
             nn_denoiser_class_name=cfg.nn_denoiser_class_name,
             nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
             nn_denoiser_extra_kwargs=cfg.nn_denoiser_extra_kwargs,
@@ -1130,6 +1135,8 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             first_denoiser_noise_snips=cfg.nn_denoiser_noise_waveforms,
             first_denoiser_spatial_dedup_radius=cfg.first_denoiser_spatial_dedup_radius,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
+            save_iteration=cfg.save_subtraction_iteration,
+            save_residnorm_decrease=cfg.save_residnorm_decrease,
             temporal_dedup_radius_samples=cfg.temporal_dedup_radius_samples,
             positive_temporal_dedup_radius_samples=cfg.positive_temporal_dedup_radius_samples,
             denoise_before_localization=cfg.denoise_before_localization,
@@ -1263,6 +1270,8 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         kmeanspp_neighb_overlap=cfg.kmeanspp_neighb_overlap,
         kmeanspp_selection=cfg.kmeanspp_selection,
         kmeanspp_stopping=cfg.kmeanspp_stopping,
+        train_batch_size=cfg.gmm_batch_size,
+        eval_batch_size=cfg.gmm_batch_size,
         robust_df=cfg.robust_df,
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,

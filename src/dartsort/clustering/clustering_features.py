@@ -28,7 +28,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
-from ..util.py_util import databag
+from ..util.py_util import databag, panic
 from ..util.spiketorch import ptp, svd_lowrank_helper
 from ..util.waveform_util import make_channel_index, single_channel_index
 from . import cluster_util
@@ -135,30 +135,35 @@ class SimpleMatrixFeatures:
             assert x is not None
             features.append(x[:, None] * clustering_features_cfg.x_scale)
 
-        if clustering_features_cfg.amplitude_kind in ("peak", "ptp"):
+        if clustering_features_cfg.amplitude_kind == "stored":
+            amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
+            assert isinstance(amp, np.ndarray)
+        elif clustering_features_cfg.amplitude_kind in ("peak", "ptp"):
+            amp = None
             if main_channel_feats is not None:
                 amp = _reconstruct_main_channel_amplitudes(
                     sorting=sorting,
                     main_channel_feats=main_channel_feats,
                     clustering_features_cfg=clustering_features_cfg,
                 )
-            else:
+            if amp is None:
                 amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
+                assert isinstance(amp, np.ndarray)
         elif clustering_features_cfg.amplitude_kind == "rms":
             amp = get_tpca_norms(
                 sorting,
                 tpca_dataset=clustering_features_cfg.pca_dataset_name,
                 out_dataset=None,
             )
+            assert isinstance(amp, np.ndarray)
         else:
-            amp = None
+            panic(clustering_features_cfg.amplitude_kind)
 
         v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
         if (
             clustering_features_cfg.use_amplitude
             or clustering_features_cfg.use_signed_amplitude
         ):
-            assert amp is not None
             check_numbers("amp", amp, raise_for_numerics=raise_on_na)
             if clustering_features_cfg.log_transform_amplitude:
                 ampft = cast(np.ndarray, clustering_features_cfg.amp_log_c + amp)
@@ -248,8 +253,8 @@ class StableWaveformFeatures:
         *,
         sorting: DARTsortSorting,
         motion: MotionInfo,
-        clustering_features_cfg: ClusteringFeaturesConfig,
-        computation_cfg: ComputationConfig | None,
+        clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
+        computation_cfg: ComputationConfig | None = None,
     ) -> Self:
         computation_cfg = ensure_computation_config(computation_cfg)
         shifts, n_pitches_shift = motion.pitch_shifts(
@@ -375,11 +380,6 @@ def _reconstruct_main_channel_amplitudes(
     main_channel_feats: Tensor,
     clustering_features_cfg: ClusteringFeaturesConfig,
 ) -> np.ndarray | None:
-    """Drift-corrected main channel amplitudes from interpolated TPCA features.
-
-    None if the TPCA basis isn't on disk. It's saved when peeling finishes, so
-    callers running mid-fit fall back to the stored amplitudes.
-    """
     model_dir = try_get_model_dir(sorting)
     if model_dir is None or featurization_pipeline_path(model_dir) is None:
         logger.warning(
@@ -393,7 +393,6 @@ def _reconstruct_main_channel_amplitudes(
         "_tpca_features"
     )
     tpca = get_tpca(sorting, name_prefix=name_prefix)
-    # force_reconstruct ignores the mean, so amplitudes would be off if centered
     assert not tpca.centered
     waveforms = tpca.force_reconstruct(main_channel_feats[:, :, None])
 
@@ -403,7 +402,7 @@ def _reconstruct_main_channel_amplitudes(
     elif kind == "ptp":
         amps = ptp(waveforms, dim=1)
     else:
-        raise ValueError(f"Unknown {kind=}.")
+        panic(kind)
     return amps[:, 0].numpy(force=True)
 
 

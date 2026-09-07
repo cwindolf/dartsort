@@ -376,6 +376,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_n_candidates: int = 5
     gmm_n_search: int | None = 3
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5
+    gmm_batch_size: int = 2048
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     cov_kind: str = "factorizednoise"
@@ -399,6 +400,9 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # store extra intermediates@
     save_subtracted_waveforms: bool = False
+    subtracted_amplitude_vectors: Literal["none", "ptp", "peak"] = "none"
+    save_subtraction_iteration: bool = False
+    save_residnorm_decrease: bool = False
     save_collisioncleaned_waveforms: bool = False
     always_save_detailed_features: bool = False
     precomputed_templates_npz: str | None = None

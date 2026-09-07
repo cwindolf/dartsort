@@ -326,13 +326,19 @@ class WaveformPipeline(torch.nn.Module):
 
             if transformer.needs_fit():
                 transformer.train()
-                transformer.fit(
-                    recording=recording,
-                    computation_cfg=computation_cfg,
-                    hdf5_filename=hdf5_filename,
-                    pipeline=self,
-                    **features,
-                )
+                try:
+                    transformer.fit(
+                        recording=recording,
+                        computation_cfg=computation_cfg,
+                        hdf5_filename=hdf5_filename,
+                        pipeline=self,
+                        **features,
+                    )
+                except Exception as e:
+                    raise ValueError(
+                        f"Error fitting {transformer} at index {tix} of pipeline:\n{self}"
+                        f"Features are: {list(features.keys())}"
+                    ) from e
             transformer.eval()
             transformer.requires_grad_(False)
 
@@ -490,7 +496,10 @@ def split_featurization_cfg_for_denoised_features(
 
     loc_off = dict(do_localization=False, additional_com_localization=False)
     amp_off = dict(
-        save_amplitudes=False, save_amplitude_vectors=False, save_all_amplitudes=False
+        save_amplitudes=False,
+        save_amplitude_vectors=False,
+        save_all_amplitudes=False,
+        output_amplitude_vectors="none",
     )
     collisioncleaned_kw = {}
     denoised_kw = {}
@@ -567,7 +576,8 @@ def featurization_config_to_class_names_and_kwargs(
 
     will_localize_or_amplitude = _will_localize_or_amplitude(fc)
     early_stack = (
-        will_localize_or_amplitude and fc.singlechan_denoised_amplitudes_and_localizations
+        will_localize_or_amplitude
+        and fc.singlechan_denoised_amplitudes_and_localizations
     )
     if early_stack:
         loc_kw = _add_localization_and_ampvec(featurization_cfg)
@@ -695,6 +705,8 @@ def _saves_amplitudes(fc: FeaturizationConfig):
 
 
 def _will_localize_or_amplitude(fc: FeaturizationConfig):
+    if fc.output_amplitude_vectors != "none":
+        return True
     return (not fc.denoise_only) and (fc.do_localization or _saves_amplitudes(fc))
 
 
@@ -711,6 +723,8 @@ def _add_localization_and_ampvec(fc: FeaturizationConfig):
     )
     do_peak_vec = do_feats and need_vec and (fc.localization_amplitude_type == "peak")
     do_ptp_vec = do_feats and need_vec and (fc.localization_amplitude_type == "ptp")
+    do_peak_vec |= fc.output_amplitude_vectors == "peak"
+    do_ptp_vec |= fc.output_amplitude_vectors == "ptp"
     do_logptt = do_feats and fc.save_all_amplitudes
     do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
     if do_any_amp or (do_feats and fc.save_all_amplitudes):
