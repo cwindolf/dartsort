@@ -1142,7 +1142,13 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
             labels_npy = f.parent / f"{labels_stem}.npy"
 
         if not labels_npy.exists():
-            raise ValueError(f"{labels_npy} does not exist.")
+            parent = f if f.is_dir() else f.parent
+            glb = list(parent.glob(f"*{labels_stem}*.npy"))
+            if len(glb) < 1:
+                raise ValueError(f"{labels_npy} not found.")
+            elif len(glb) > 1:
+                raise ValueError(f"Ambiguous {labels_stem=} matched {labels_npy}.")
+            labels_npy = glb[0]
         labels = np.load(labels_npy)
         if not labels.shape == st.channels.shape:
             raise ValueError(
