@@ -355,7 +355,13 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # filters
     gmm_isolation_threshold: float | None = None
-    collision_cleaning_error_threshold: float | None = 0.3
+    collision_cleaning_error_threshold: float | None = None
+    max_cc_flag_rate: float = 1.0
+    cc_flag_entropy_cutoff: float = 2.0
+    cc_flag_excess_rate: float | None = 0.3
+    cc_flag_chance_jitter_samples: int = 150
+    cc_flag_chance_draws: int = 2
+    cc_flag_temporal_radius_samples: int | None = None
 
     # gaussian mixture high level
     initial_rank: int | None = None

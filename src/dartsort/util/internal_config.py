@@ -595,7 +595,17 @@ class RefinementConfig:
     # bad unit filter params
     gmm_isolation_threshold: float | None = None
     gmm_isolation_neighbor_fraction: float = 0.9
-    collision_cleaning_error_threshold: float | None = 0.3
+    collision_cleaning_error_threshold: float | None = None
+
+    max_cc_flag_rate: float = 1.0
+    cc_flag_entropy_cutoff: float = 2.0
+    cc_flag_excess_rate: float | None = None
+    cc_flag_temporal_radius_samples: int = 7
+    cc_flag_dedup_temporal_radius_samples: int = 7
+    cc_flag_spatial_dedup_radius_um: float | None = 50.0
+    cc_flag_radius_um: float = 200.0
+    cc_flag_chance_jitter_samples: int = 150
+    cc_flag_chance_draws: int = 2
 
     # deduplication control
     dedup_ms: float = 0.25
@@ -815,8 +825,6 @@ class MatchingConfig:
     always_keep_ptp: float = 10.0
     min_template_snr: float = 0.0
     min_template_count: int = 10
-    max_cc_flag_rate: float = 0.4
-    cc_flag_entropy_cutoff: float = 2.0
     depth_order: bool = True
     template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig()
     template_realignment_cfg: TemplateRealignmentConfig = TemplateRealignmentConfig()
@@ -945,7 +953,9 @@ default_agglomerate_cfg = RefinementConfig(
     ),
     spikeinterface_merge_preset="none",
 )
-default_post_refinement_cfg = RefinementConfig(refinement_strategy="filter")
+default_post_refinement_cfg = RefinementConfig(
+    refinement_strategy="filter", cc_flag_excess_rate=0.3
+)
 default_post_refinement_cfgs = (default_post_refinement_cfg,)
 
 
@@ -1416,14 +1426,36 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     if cfg.post_refinement_merge:
         assert pre_refinement_cfg is not None
         post_refinement_cfgs.append(pre_refinement_cfg)
-    if cfg.gmm_isolation_threshold or cfg.collision_cleaning_error_threshold:
-        post_refinement_cfgs.append(
-            RefinementConfig(
-                refinement_strategy="filter",
-                gmm_isolation_threshold=cfg.gmm_isolation_threshold,
-                collision_cleaning_error_threshold=cfg.collision_cleaning_error_threshold,
-            )
+    cc_flag_active = (
+        cfg.max_cc_flag_rate < 1.0 or cfg.cc_flag_excess_rate is not None
+    ) and isinstance(initial_detection_cfg, SubtractionConfig)
+    if (
+        cfg.gmm_isolation_threshold
+        or cfg.collision_cleaning_error_threshold
+        or cc_flag_active
+    ):
+        filter_cfg = RefinementConfig(
+            refinement_strategy="filter",
+            gmm_isolation_threshold=cfg.gmm_isolation_threshold,
+            collision_cleaning_error_threshold=cfg.collision_cleaning_error_threshold,
         )
+        if cc_flag_active:
+            filter_cfg = replace(
+                filter_cfg,
+                max_cc_flag_rate=cfg.max_cc_flag_rate,
+                cc_flag_entropy_cutoff=cfg.cc_flag_entropy_cutoff,
+                cc_flag_excess_rate=cfg.cc_flag_excess_rate,
+                cc_flag_chance_jitter_samples=cfg.cc_flag_chance_jitter_samples,
+                cc_flag_chance_draws=cfg.cc_flag_chance_draws,
+                cc_flag_temporal_radius_samples=(
+                    cfg.cc_flag_temporal_radius_samples
+                    or initial_detection_cfg.temporal_dedup_radius_samples
+                ),
+                cc_flag_dedup_temporal_radius_samples=initial_detection_cfg.temporal_dedup_radius_samples,
+                cc_flag_spatial_dedup_radius_um=initial_detection_cfg.spatial_dedup_radius_um,
+                cc_flag_radius_um=initial_detection_cfg.subtract_radius_um,
+            )
+        post_refinement_cfgs.append(filter_cfg)
 
     return DARTsortInternalConfig(
         waveform_cfg=waveform_cfg,

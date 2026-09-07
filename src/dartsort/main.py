@@ -336,10 +336,6 @@ def _dartsort_impl(
         # next few lines say: please subsample if not the final step
         if step == 0:
             panic(step)
-        elif step == 1:
-            previous_detection_cfg = cfg.initial_detection_cfg
-        else:
-            previous_detection_cfg = cfg.matching_cfg
 
         if is_final or cfg.subsampling_spikes_per_channel is None:
             _nspk = None
@@ -377,7 +373,6 @@ def _dartsort_impl(
                 ensure_coverage=_pres,
                 hdf5_filename=f"matching{step}.h5",
                 model_subdir=f"matching{step}_models",
-                previous_detection_cfg=previous_detection_cfg,
                 prev_step_name=f"refined{step - 1}",
                 save_cfg=cfg,
                 load_simple_features=will_refine,
@@ -584,7 +579,6 @@ def match(
     featurization_cfg: FeaturizationConfig = default_featurization_cfg,
     matching_cfg=default_matching_cfg,
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
-    previous_detection_cfg: Any | None = None,
     prev_step_name: str | None = None,
     save_cfg: DARTsortInternalConfig | None = None,
     chunk_starts_samples=None,
@@ -618,15 +612,12 @@ def match(
             always_keep_ptp=matching_cfg.always_keep_ptp,
             min_template_snr=matching_cfg.min_template_snr,
             min_template_count=matching_cfg.min_template_count,
-            max_cc_flag_rate=matching_cfg.max_cc_flag_rate,
-            cc_flag_entropy_cutoff=matching_cfg.cc_flag_entropy_cutoff,
             depth_order=matching_cfg.depth_order,
             waveform_cfg=waveform_cfg,
             template_cfg=template_cfg,
             realign_cfg=matching_cfg.template_realignment_cfg,
             template_merge_cfg=matching_cfg.template_merge_cfg,
             computation_cfg=computation_cfg,
-            detection_cfg=previous_detection_cfg,
             fit_featurization_tsvd=featurization_cfg.tpca_from_templates,
             featurization_cfg=featurization_cfg,
             tsvd=template_denoising_tsvd,

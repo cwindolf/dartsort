@@ -37,7 +37,9 @@ def denoiser_time_shifts(
     spike_length_samples: int,
     peak_sign: "PeakSign",
     denoiser_realignment_shift: int,
-) -> Tensor:
+    detection_mask: Tensor | None = None,
+    times_samples: Tensor | None = None,
+) -> tuple[Tensor, Tensor | None]:
     # extract main channel traces
     main_channel_rel_inds = subtract_rel_inds[channels]
     denoised_main_channel_traces = waveforms.take_along_dim(
@@ -63,8 +65,16 @@ def denoiser_time_shifts(
 
     # find shifts just by argmax
     peaks = snips.argmax(dim=1)
-    dt = peaks.sub_(denoiser_realignment_shift).to(dtype=torch.int16)
-    return dt
+    dt = peaks.sub_(denoiser_realignment_shift)
+
+    # did we land in the drink?
+    if detection_mask is not None:
+        assert times_samples is not None
+        mask = detection_mask[times_samples + dt, channels]
+    else:
+        mask = None
+
+    return dt, mask
 
 
 def check_residual_decrease(
@@ -76,9 +86,10 @@ def check_residual_decrease(
     local_whiteners: Tensor | None = None,
     whitening_kernel: Tensor | None = None,
     channels: Tensor | None = None,
-) -> tuple[Tensor | None, dict[str, Tensor]]:
+) -> tuple[Tensor, dict[str, Tensor]]:
     if not threshold:
-        return None, {}
+        mask = dn_wfs.new_ones(len(dn_wfs), dtype=torch.bool)
+        return mask, {}
     assert orig_wfs is not None
 
     orig_wfs = flatten_denan_and_whiten_batched(
@@ -103,13 +114,12 @@ def check_residual_decrease(
     reduction = conv.mul_(2.0).sub_(norm)
     threshold = threshold**2
 
-    keep = cast(torch.Tensor, threshold < reduction)
-    (keep,) = keep.nonzero(as_tuple=True)
+    mask = cast(torch.Tensor, threshold < reduction)
     if save_residnorm_decrease:
         features = dict(residnorm_decreases=reduction)
     else:
         features = {}
-    return keep, features
+    return mask, features
 
 
 @torch_compile
@@ -342,29 +352,12 @@ def subtract_chunk(
         voltages = residual[times_samples, channels]
 
         # never look at these again.
-        time_ix = times_samples.unsqueeze(1) + dedup_temporal_ix
-        time_ix = time_ix.clamp_(0, traces.shape[0] - 1)
+        time_ix_dedup = times_samples.unsqueeze(1) + dedup_temporal_ix
+        time_ix_dedup = time_ix_dedup.clamp_(0, traces.shape[0] - 1)
         if dedup_channel_index is not None:
-            chan_ix = dedup_channel_index[channels]
+            chan_ix_dedup = dedup_channel_index[channels]
         else:
-            chan_ix = channels.unsqueeze(1)
-        detection_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0
-
-        # take extra care to exclude positive peaks appearing near stronger troughs
-        if pos_dedup_temporal_radius:
-            assert pos_dedup_temporal_ix is not None
-            (neg,) = (voltages < 0).nonzero(as_tuple=True)
-            time_ix = times_samples[neg].unsqueeze(1) + pos_dedup_temporal_ix
-            time_ix = time_ix.clamp_(0, traces.shape[0] - 1)
-            if dedup_channel_index is not None:
-                chan_ix = dedup_channel_index[channels[neg]]
-            else:
-                chan_ix = channels[neg].unsqueeze(1)
-
-            pd_mask = torch.ones_like(detection_mask)
-            pd_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0
-            pd_mask.logical_or_(residual < 0)
-            detection_mask = torch.logical_and(detection_mask, pd_mask)
+            chan_ix_dedup = channels.unsqueeze(1)
 
         # throw away spikes which cannot be subtracted
         keep = times_samples == times_samples.clamp(
@@ -397,7 +390,7 @@ def subtract_chunk(
 
         waveforms, features = denoising_pipeline(waveforms, channels=channels)
 
-        resid_keep, new_feats = check_residual_decrease(
+        mask, new_feats = check_residual_decrease(
             original_waveforms,
             waveforms,
             threshold=residnorm_decrease_threshold,
@@ -407,17 +400,52 @@ def subtract_chunk(
             channels=channels,
         )
         features.update(new_feats)
-        if resid_keep is not None:
-            if not resid_keep.numel():
-                continue
-            assert original_waveforms is not None
-            if resid_keep.numel() < len(original_waveforms):
-                waveforms = waveforms[resid_keep]
-                times_samples = times_samples[resid_keep]
-                channels = channels[resid_keep]
-                voltages = voltages[resid_keep]
-                for k, ft in features.items():
-                    features[k] = ft[resid_keep]
+
+        # -- follow the nn's realignment advice, if requested
+        if realign_to_denoiser:
+            assert subtract_rel_inds is not None
+            features["time_shifts"], realign_mask = denoiser_time_shifts(
+                waveforms=waveforms,
+                channels=channels,
+                voltages=voltages,
+                subtract_rel_inds=subtract_rel_inds,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
+                peak_sign=peak_sign,
+                denoiser_realignment_shift=denoiser_realignment_shift,
+                detection_mask=detection_mask,
+                times_samples=times_samples,
+            )
+            if realign_mask is not None:
+                mask.logical_and_(realign_mask)
+
+        # -- apply dedup criteria
+        # take extra care to exclude positive peaks appearing near stronger troughs
+        detection_mask[time_ix_dedup[:, :, None], chan_ix_dedup[:, None, :]] = 0
+        if pos_dedup_temporal_radius:
+            assert pos_dedup_temporal_ix is not None
+            (neg,) = (voltages < 0).nonzero(as_tuple=True)
+            neg_keep = keep[neg]
+            time_ix = times_samples[neg].unsqueeze(1) + pos_dedup_temporal_ix
+            time_ix = time_ix.clamp_(0, traces.shape[0] - 1)
+            chan_ix_dedup = chan_ix_dedup[neg_keep]
+
+            pd_mask = torch.ones_like(detection_mask)
+            pd_mask[time_ix[:, :, None], chan_ix_dedup[:, None, :]] = 0
+            pd_mask.logical_or_(residual < 0)
+            detection_mask.logical_and_(pd_mask)
+
+        del voltages  # unused below?
+        (resid_keep,) = mask.nonzero(as_tuple=True)
+        nkept = resid_keep.numel()
+        if not nkept:
+            continue
+        elif nkept < len(waveforms):
+            waveforms = waveforms[resid_keep]
+            times_samples = times_samples[resid_keep]
+            channels = channels[resid_keep]
+            for k, ft in features.items():
+                features[k] = ft[resid_keep]
 
         # -- subtract in place
         residual = subtract_spikes_(
@@ -431,20 +459,6 @@ def subtract_chunk(
             already_padded=True,
             in_place=True,
         )
-
-        # -- follow the nn's realignment advice, if requested
-        if realign_to_denoiser:
-            assert subtract_rel_inds is not None
-            features["time_shifts"] = denoiser_time_shifts(
-                waveforms=waveforms,
-                channels=channels,
-                voltages=voltages,
-                subtract_rel_inds=subtract_rel_inds,
-                trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
-                peak_sign=peak_sign,
-                denoiser_realignment_shift=denoiser_realignment_shift,
-            )
 
         # -- store this iter's outputs
         spike_times.append(times_samples)

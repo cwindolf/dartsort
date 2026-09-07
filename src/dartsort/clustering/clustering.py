@@ -908,7 +908,7 @@ class FilterRefinement(Refinement):
 
     def needs_stable_features(self):
         return super().needs_stable_features() or bool(
-            self.refinement_cfg.collision_cleaning_error_threshold
+            self.refinement_cfg.collision_cleaning_error_threshold is not None
         )
 
     def _refine(
@@ -921,8 +921,11 @@ class FilterRefinement(Refinement):
     ):
         assert recording is not None
 
-        if self.refinement_cfg.collision_cleaning_error_threshold:
-            assert stable_features is not None
+        cc_error_active = (
+            self.refinement_cfg.collision_cleaning_error_threshold is not None
+            or self.refinement_cfg.max_cc_flag_rate < 1.0
+        )
+        if cc_error_active:
             sorting = refine_util.collision_cleaning_error_filter(
                 sorting=sorting,
                 recording=recording,
