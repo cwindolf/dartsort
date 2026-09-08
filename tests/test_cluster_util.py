@@ -42,6 +42,46 @@ def test_reorder_by_depth(n_units):
     assert (np.diff(new_centroids) >= 0).all()
 
 
+@pytest.mark.parametrize("in_place", [False, True])
+def test_reorder_by_depth_remaps_candidates(in_place):
+    # decreasing depths, so reverse
+    labels = np.array([0, 0, 1, 1, 2, 2])
+    centroids = np.array([2.0, 1.0, 0.0])
+    candidates = np.array(
+        [[0, 1], [0, 2], [1, 0], [1, 2], [2, 0], [2, -1]], dtype=np.int64
+    )
+    responsibilities = np.full((6, 3), 1.0 / 3.0)
+    log_liks = np.zeros((6, 3))
+    log_liks[5, 1] = -np.inf
+
+    sorting = DARTsortSorting(
+        times_samples=np.arange(6, dtype=np.int64),
+        channels=np.zeros(6, dtype=np.int64),
+        labels=labels.copy(),
+        ephemeral_features={
+            "gmm_candidates": candidates.copy(),
+            "gmm_responsibilities": responsibilities.copy(),
+            "gmm_log_liks": log_liks.copy(),
+        },
+    )
+    assert sorting.labels is not None
+
+    out, reorder = reorder_by_depth(sorting, centroids=centroids, in_place=in_place)
+    assert out.labels is not None
+    assert np.array_equal(reorder, [2, 1, 0])
+
+    expected = np.where(candidates >= 0, reorder[candidates], -1)
+    assert np.array_equal(out.gmm_candidates, expected)
+    assert np.array_equal(out.labels, reorder[labels])
+
+    assert out.gmm_responsibilities[5, 1] == 0.0
+    np.testing.assert_allclose(out.gmm_responsibilities[5, -1], 2.0 / 3.0)
+
+    if not in_place:
+        assert np.array_equal(sorting.gmm_candidates, candidates)
+        assert np.array_equal(sorting.labels, labels)
+
+
 def test_recluster():
     # basic check of recluster
     coords = np.array([0.0, 0.1, 1.0, 1.1, 2.0])

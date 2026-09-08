@@ -957,6 +957,9 @@ default_post_refinement_cfg = RefinementConfig(
     refinement_strategy="filter", cc_flag_excess_rate=0.3
 )
 default_post_refinement_cfgs = (default_post_refinement_cfg,)
+default_clean_cfg = RefinementConfig(
+    refinement_strategy="clean", template_merge_cfg=None
+)
 
 
 @cfg_dataclass
@@ -977,6 +980,7 @@ class DARTsortInternalConfig:
     refinement_cfg: RefinementConfig = default_refinement_cfg
     post_refinement_cfgs: Sequence[RefinementConfig] = default_post_refinement_cfgs
     agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
+    clean_cfg: RefinementConfig | None = default_clean_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
     computation_cfg: ComputationConfig = default_computation_cfg
@@ -1365,16 +1369,10 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         tmpdir_parent=cfg.tmpdir_parent,
     )
 
-    # final aggregation
-    if cfg.agg_kind == "none":
-        agg_cfg = RefinementConfig(
-            refinement_strategy="agglomerate",
-            template_merge_cfg=None,
-            qda_force_merge_for_temp_dist_below=0.0,
-            dedup_ms=cfg.deduplication_ms,
-            spikeinterface_merge_preset="none",
-            spikeinterface_merge_max_distance=0.0,
-        )
+    # final aggregation, always followed by the cleanup pass
+    agg_cfg: RefinementConfig | None
+    if cfg.agg_kind == "clean":
+        agg_cfg = None
     elif cfg.agg_kind == "template_distance":
         agg_whiten_cfg = WhiteningConfig(
             strategy=cfg.agg_template_whiten_strategy,
@@ -1393,7 +1391,6 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             refinement_strategy="agglomerate",
             template_merge_cfg=agg_tmcfg,
             qda_threshold=0.0,
-            dedup_ms=cfg.deduplication_ms,
             spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
             spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
         )
@@ -1415,12 +1412,17 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             refinement_strategy="agglomerate",
             template_merge_cfg=agg_tmcfg,
             qda_force_merge_for_temp_dist_below=cfg.agg_no_qda_template_distance,
-            dedup_ms=cfg.deduplication_ms,
             spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
             spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
         )
     else:
         raise ValueError(f"Unknown {cfg.agg_kind=}.")
+
+    clean_cfg = RefinementConfig(
+        refinement_strategy="clean",
+        template_merge_cfg=None,
+        dedup_ms=cfg.deduplication_ms,
+    )
 
     post_refinement_cfgs: list[RefinementConfig] = []
     if cfg.post_refinement_merge:
@@ -1468,6 +1470,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         initial_refinement_cfg=initial_refinement_cfg,
         post_refinement_cfgs=tuple(post_refinement_cfgs),
         agglomerate_cfg=agg_cfg,
+        clean_cfg=clean_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,
         clustering_features_cfg=clustering_features_cfg,

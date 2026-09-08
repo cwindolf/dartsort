@@ -946,44 +946,50 @@ class DARTsortSorting:
             remap = flatten_remapping(old_unique)
             apply_label_remapping_in_place(new_labels, remap)
 
-        keys = ("merged_candidates", "gmm_candidates")
-        if not include_gmm_properties or not any(self.has_dataset(k) for k in keys):
+        if not include_gmm_properties:
             return self.ephemeral_replace(labels=new_labels)
 
-        new_props = dict(labels=new_labels)
-        for k in keys:
-            if in_place and self.has_dataset_on_disk_not_loaded(k):
+        new_props: dict[str, np.ndarray] = dict(labels=new_labels)
+        new_props.update(
+            self.remap_gmm_properties(remap, new_K=new_K, in_place=in_place)
+        )
+        return self.ephemeral_replace(**new_props)
+
+    def remap_gmm_properties(
+        self, remap: np.ndarray, *, new_K: int, in_place: bool, prefixes=("merged", "gmm")
+    ) -> dict[str, np.ndarray]:
+        """Apply `remap` to GMM candidates, optionally in-place
+
+        Candidates not in [0, new_K) -- eg "ghost" units, which are not
+        top candidates but still exist in the lower ranks -- have their
+        probability added to the noise component.
+        """
+        for prefix in prefixes:
+            cand_key = f"{prefix}_candidates"
+            if in_place and self.has_dataset_on_disk_not_loaded(cand_key):
                 assert self.parent_h5_path is not None
-                _gmm_remap_on_disk(self.parent_h5_path, remap, prefix=k.split("_")[0])
-                break
-            if not self.has_dataset(k):
+                _gmm_remap_on_disk(self.parent_h5_path, remap, prefix=prefix)
+                return {}
+            if not self.has_dataset(cand_key):
                 continue
-            candidates = getattr(self, k)
-            assert candidates is not None
 
-            new_candidates = candidates if in_place else candidates.copy()
-            apply_label_remapping_in_place(new_candidates, remap, allow_over=True)
-
-            # now, "ghost" units (not top candidates but still existing
-            # in the lower ranks) can have some probability mass that
-            # needs to be deleted.
-            resp_key = k.replace("candidates", "responsibilities")
-            resps = getattr(self, resp_key)
-            loglik_key = k.replace("candidates", "log_liks")
-            logliks = getattr(self, loglik_key)
+            resp_key = f"{prefix}_responsibilities"
+            loglik_key = f"{prefix}_log_liks"
+            candidates = cast(np.ndarray, getattr(self, cand_key))
+            resps = cast(np.ndarray, getattr(self, resp_key))
+            logliks = cast(np.ndarray, getattr(self, loglik_key))
             if not in_place:
+                candidates = candidates.copy()
                 resps = resps.copy()
                 logliks = logliks.copy()
-            vacuum_neg_candidate_prob(new_K, new_candidates, resps, logliks)
 
-            new_props[k] = new_candidates
-            new_props[resp_key] = resps
-            new_props[loglik_key] = logliks
+            apply_label_remapping_in_place(candidates, remap, allow_over=True)
+            vacuum_neg_candidate_prob(new_K, candidates, resps, logliks)
 
             # if "merged" were present, then labels don't match "gmm"
-            break
+            return {cand_key: candidates, resp_key: resps, loglik_key: logliks}
 
-        return self.ephemeral_replace(**new_props)
+        return {}
 
     def __str__(self):
         name = self.__class__.__name__
@@ -1478,75 +1484,25 @@ def sorting_isis(sorting: DARTsortSorting):
     return isis_ms
 
 
-def merged_responsibilities(
-    sorting: DARTsortSorting,
-    responsibilities_key="gmm_responsibilities",
-    candidates_key="gmm_candidates",
-):
-    labels = sorting.labels
-    assert labels is not None, "0"
-
-    candidates = cast(np.ndarray, getattr(sorting, candidates_key))
-    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
-    if responsibilities.shape[1] > 1:
-        assert (responsibilities[:, 0] >= responsibilities[:, 1:-1].max(1)).all(), "1"
-
-    notnoise = responsibilities[:, 0] >= responsibilities[:, -1]
-    clabels = np.where(notnoise, candidates[:, 0], -1)
-
-    lvalid = labels >= 0
-    cvalid = clabels >= 0
-    assert np.array_equal(lvalid, cvalid), "2"
-
-    Klabel = labels.max() + 1
-    Kcand = candidates.max() + 1
-    lc, ctol = candidates_to_labels(clabels, labels, Klabel, Kcand)
-
-    # replace candidates -1 with invalid entry, will also become invalid in ctol
-    c = np.where(candidates < 0, Kcand, candidates)
-    # remap to merged ids
-    c = ctol[c]
-
-    # now deduplicate... this can be faster but fine for now.
-    luniq, lcount = np.unique(lc[:, 0], return_counts=True)
-    luniq_check = np.unique(labels)
-    luniq_check = luniq_check[luniq_check >= 0]
-    assert np.array_equal(luniq_check, luniq), "3"
-    mergedl = luniq[lcount > 1]
-    mergedr = responsibilities[:, : candidates.shape[1]].copy()
-    for ll in mergedl:
-        eql = c == ll
-        six, cix = np.nonzero(eql)
-        sixu, sixfirst, sixflat = np.unique(six, return_index=True, return_inverse=True)
-
-        # sum weight for each spike
-        wsum = np.zeros(sixu.shape)
-        np.add.at(wsum, sixflat, responsibilities[six, cix])
-
-        # delete old
-        c[six, cix] = Kcand
-        mergedr[six, cix] = 0.0
-
-        # write new into first ixs
-        c[sixu, cix[sixfirst]] = ll
-        mergedr[sixu, cix[sixfirst]] = wsum
-
-    return dict(
-        K=Klabel, Kcand=Kcand, merged_responsibilities=mergedr, merged_candidates=c
-    )
+def gmm_score_prefix(
+    sorting: DARTsortSorting, prefixes: Sequence[str] = ("merged", "gmm")
+) -> str:
+    """The prefix of the soft assignment arrays attached to this sorting."""
+    for prefix in prefixes:
+        if getattr(sorting, f"{prefix}_candidates", None) is not None:
+            return prefix
+    raise AttributeError("No scores attached to sorting.")
 
 
-def get_gmm_scores(sorting: DARTsortSorting, prefixes=("merged", "gmm")) -> "Scores":
+def get_gmm_scores(
+    sorting: DARTsortSorting, prefixes: Sequence[str] = ("merged", "gmm")
+) -> "Scores":
     from ..clustering.mixture import Scores
 
-    for prefix in prefixes:
-        cand = getattr(sorting, f"{prefix}_candidates", None)
-        log_liks = getattr(sorting, f"{prefix}_log_liks", None)
-        resp = getattr(sorting, f"{prefix}_responsibilities", None)
-        if cand is not None:
-            break
-    else:
-        raise AttributeError("No scores attached to sorting.")
+    prefix = gmm_score_prefix(sorting, prefixes)
+    cand = getattr(sorting, f"{prefix}_candidates", None)
+    log_liks = getattr(sorting, f"{prefix}_log_liks", None)
+    resp = getattr(sorting, f"{prefix}_responsibilities", None)
 
     assert cand is not None
     assert log_liks is not None
@@ -1564,9 +1520,8 @@ def get_gmm_scores(sorting: DARTsortSorting, prefixes=("merged", "gmm")) -> "Sco
 
 def explode_soft_assignment_sorting(
     sorting: DARTsortSorting,
-    responsibilities_key="merged_responsibilities",
-    candidates_key="merged_candidates",
-    needs_merge: bool = False,
+    responsibilities_key: str | None = None,
+    candidates_key: str | None = None,
 ) -> DARTsortSorting:
     """Convert a hard-assigned sorting to a soft-assigned one
 
@@ -1577,22 +1532,17 @@ def explode_soft_assignment_sorting(
     """
     from .spiketorch import entropy
 
+    if responsibilities_key is None or candidates_key is None:
+        prefix = gmm_score_prefix(sorting)
+        responsibilities_key = responsibilities_key or f"{prefix}_responsibilities"
+        candidates_key = candidates_key or f"{prefix}_candidates"
+
     t_s = sorting.times_seconds
 
-    if needs_merge:
-        mgr = merged_responsibilities(
-            sorting,
-            responsibilities_key=responsibilities_key,
-            candidates_key=candidates_key,
-        )
-        mergedr = mgr["merged_responsibilities"]
-        c = mgr["merged_candidates"]
-        Klabel = mgr["K"]
-    else:
-        mergedr = getattr(sorting, responsibilities_key)
-        c = getattr(sorting, candidates_key)
-        mergedr = mergedr[:, : c.shape[1]]
-        Klabel = c.max() + 1
+    c = cast(np.ndarray, getattr(sorting, candidates_key))
+    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
+    mergedr = responsibilities[:, : c.shape[1]]
+    Klabel = c.max() + 1
 
     h = entropy(torch.asarray(mergedr), reduce_mean=False).numpy()
 
@@ -1608,7 +1558,6 @@ def explode_soft_assignment_sorting(
     times_samples = sorting.times_samples[spike_ix]
 
     # store weight as a feature
-    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
     feats = dict(
         soft_assignment_weight=mergedr[spike_ix, candidate_ix],
         times_seconds=t_s[spike_ix],
@@ -1623,20 +1572,6 @@ def explode_soft_assignment_sorting(
         sampling_frequency=sorting.sampling_frequency,
         ephemeral_features=feats,
     )
-
-
-def candidates_to_labels(clabels, labels, Klabel, Kcand):
-    # issue: we usually merge GMM components into new labels
-    # so, need to figure out the merge and remap, and there will be
-    # duplicates to handle
-    kept = np.flatnonzero(np.logical_and(labels >= 0, clabels >= 0))
-    lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
-    lc = lc[(lc >= 0).all(axis=1)]
-    # each candidate only appears once -- it is a merge.
-    assert np.all(np.unique(lc[:, 1], return_counts=True)[1] == 1), "ctol"
-    ctol = np.full((Kcand + 1,), fill_value=Klabel)
-    ctol[lc[:, 1]] = lc[:, 0]
-    return lc, ctol
 
 
 def check_recording(

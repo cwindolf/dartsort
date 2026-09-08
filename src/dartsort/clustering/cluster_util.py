@@ -339,6 +339,8 @@ def reorder_by_depth(
 ) -> tuple[DARTsortSorting, np.ndarray]:
     """Reorder cluster labels so that centroid depth is increasing
 
+    Also deals with soft assign candidates, if present.
+
     Parameters
     ----------
     sorting : DARTsortSorting
@@ -376,7 +378,12 @@ def reorder_by_depth(
     labels = sorting.labels if in_place else sorting.labels.copy()
     reorder = np.argsort(np.argsort(centroids, kind="stable"), kind="stable")
     apply_label_remapping_in_place(labels, reorder)
-    reordered_sorting = sorting.ephemeral_replace(labels=labels)
+
+    new_props: dict[str, np.ndarray] = dict(labels=labels)
+    new_props.update(
+        sorting.remap_gmm_properties(reorder, new_K=reorder.size, in_place=in_place)
+    )
+    reordered_sorting = sorting.ephemeral_replace(**new_props)
 
     return reordered_sorting, reorder
 

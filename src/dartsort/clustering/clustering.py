@@ -903,6 +903,25 @@ class AgglomerateRefinement(Refinement):
 refinement_strategies["agglomerate"] = AgglomerateRefinement
 
 
+class CleanRefinement(Refinement):
+    def _refine(
+        self,
+        features: SimpleMatrixFeatures,
+        stable_features: StableWaveformFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording | None,
+        motion: MotionInfo,
+    ):
+        del features, stable_features, recording
+        sorting, _ = agglomerate.clean_final_sorting(
+            sorting, motion=motion, dedup_ms=self.refinement_cfg.dedup_ms
+        )
+        return sorting
+
+
+refinement_strategies["clean"] = CleanRefinement
+
+
 class FilterRefinement(Refinement):
     """Runs various filters as specified in cfg"""
 

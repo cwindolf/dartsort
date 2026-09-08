@@ -301,6 +301,7 @@ def _dartsort_impl(
             cfg.pre_refinement_cfg,
             cfg.initial_refinement_cfg,
             *cfg.post_refinement_cfgs,
+            cfg.clean_cfg,
         ]
         with timer("cluster0", ret["timing"]):
             sorting = cluster(

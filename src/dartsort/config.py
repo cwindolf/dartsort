@@ -209,9 +209,8 @@ class DARTsortUserConfig:
     """Upsampling of templates during matching to allow for temporal aliasing of waveforms."""
 
     # -- final merge step
-    # TODO name this more prominently, clarify flags for dedup ms, decouple dedup and agg
-    agg_kind: Literal["none", "template_distance", "qda"] = "qda"
-    """Final distance or GMM-based merge type."""
+    agg_kind: Literal["clean", "template_distance", "qda"] = "qda"
+    """Final distance or GMM-based merge type. clean is a final postprocessing."""
 
     spikeinterface_merge_preset: str | Literal["none"] = "none"
     """Call out to SpikeInterface's auto_merge() for a final merge using timing / RP information.

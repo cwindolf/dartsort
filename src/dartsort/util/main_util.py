@@ -443,14 +443,19 @@ def _matching_step_cfgs(
     if gmm_as_classifier:
         gmm_clus_cfg = clus_cfg
         clus_cfg = None
-        ref_cfgs = [cfg.agglomerate_cfg]
+        ref_cfgs = [cfg.agglomerate_cfg, cfg.clean_cfg]
         will_refine = (
             cfg.agglomerate_cfg is not None
             and cfg.agglomerate_cfg.template_merge_cfg is not None
         )
     else:
         gmm_clus_cfg = None
-        ref_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg, cfg.agglomerate_cfg]
+        ref_cfgs = [
+            cfg.pre_refinement_cfg,
+            cfg.refinement_cfg,
+            cfg.agglomerate_cfg,
+            cfg.clean_cfg,
+        ]
         will_refine = True
     clfeat_cfg = cfg.clustering_features_cfg
 
@@ -484,7 +489,8 @@ def _matching_step_cfgs(
     # in the common case where we're just agglomerating at the end,
     # skip the whole clustering features business
     if clus_cfg is None and all(
-        rc is None or rc.refinement_strategy == "agglomerate" for rc in ref_cfgs
+        rc is None or rc.refinement_strategy in ("agglomerate", "clean")
+        for rc in ref_cfgs
     ):
         clfeat_cfg = replace(clfeat_cfg, skip=True)
 

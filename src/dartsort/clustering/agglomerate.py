@@ -13,6 +13,7 @@ from ..templates.template_util import shared_basis_compress_templates
 from ..templates.templates import TemplateData
 from ..util.data_util import (
     DARTsortSorting,
+    apply_label_remapping_in_place,
     count_not_sorted,
     pos_int_unique_and_counts,
 )
@@ -67,6 +68,7 @@ def agglomerate(
     computation_cfg: ComputationConfig | None = None,
     waveform_cfg: WaveformConfig,
     show_progress: bool = True,
+    in_place: bool = True,
 ) -> Agglomeration:
     computation_cfg = ensure_computation_config(computation_cfg)
 
@@ -75,10 +77,7 @@ def agglomerate(
         template_merge_cfg = refinement_cfg.template_merge_cfg
 
     if template_data is None:
-        did_flatten = True
-        sorting = sorting.flatten(include_gmm_properties=True, in_place=True)
-    else:
-        did_flatten = False
+        sorting = sorting.flatten(include_gmm_properties=True, in_place=in_place)
 
     if template_merge_cfg is not None:
         tdist = template_distances(
@@ -111,23 +110,18 @@ def agglomerate(
                 threshold=template_merge_cfg.merge_distance_threshold,
                 link=template_merge_cfg.linkage,
             )
-        elif not did_flatten:
-            agg_sorting = sorting.flatten(include_gmm_properties=True, in_place=True)
-            new_ids = None
+            # if this is refinement, make sure gmm labels are consistent!
+            if refinement_cfg is not None:
+                agg_sorting = combine_gmm_scores(
+                    agg_sorting, new_ids=new_ids, in_place=in_place
+                )
         else:
             agg_sorting = sorting
             new_ids = None
 
-        if refinement_cfg is not None:
-            agg_sorting = deduplicate_spikes(agg_sorting, refinement_cfg.dedup_ms)
-
-        agg_sorting, reorder = reorder_by_depth(
-            agg_sorting, motion=motion, in_place=True
+        agg_sorting, new_ids = clean_final_sorting(
+            agg_sorting, motion=motion, merge_mapping=new_ids, in_place=in_place
         )
-        if new_ids is None:
-            new_ids = reorder
-        else:
-            new_ids = reorder[np.unique(new_ids, return_inverse=True)[1]]
 
         return Agglomeration(
             agglomerated_sorting=agg_sorting,
@@ -243,12 +237,11 @@ def agglomerate(
         link=template_merge_cfg.linkage,
     )
 
-    agg_sorting = combine_gmm_scores(agg_sorting, new_ids=new_ids)
+    agg_sorting = combine_gmm_scores(agg_sorting, new_ids=new_ids, in_place=in_place)
 
-    agg_sorting = deduplicate_spikes(agg_sorting, refinement_cfg.dedup_ms)
-
-    agg_sorting, reorder = reorder_by_depth(agg_sorting, motion=motion, in_place=True)
-    new_ids = reorder[np.unique(new_ids, return_inverse=True)[1]]
+    agg_sorting, new_ids = clean_final_sorting(
+        agg_sorting, motion=motion, merge_mapping=new_ids, in_place=in_place
+    )
 
     return Agglomeration(
         agglomerated_sorting=agg_sorting,
@@ -780,14 +773,15 @@ def firing_corr(sorting: DARTsortSorting, dt: float, method="binsqrt"):
 
 
 def combine_gmm_scores(
-    sorting: DARTsortSorting, new_ids: np.ndarray, old_prefix="gmm", new_prefix="merged"
+    sorting: DARTsortSorting,
+    new_ids: np.ndarray,
+    prefix: str = "gmm",
+    in_place: bool = True,
 ) -> DARTsortSorting:
-    """If new_ids merges units, return a sorting with merged likelihoods."""
-    candidates = getattr(sorting, f"{old_prefix}_candidates", None)
-    responsibilities = getattr(sorting, f"{old_prefix}_responsibilities", None)
-    logliks = getattr(sorting, f"{old_prefix}_log_liks", None)
-
-    assert not hasattr(sorting, f"{new_prefix}_responsibilities")
+    """new_ids is a label remapping array."""
+    candidates = getattr(sorting, f"{prefix}_candidates", None)
+    responsibilities = getattr(sorting, f"{prefix}_responsibilities", None)
+    logliks = getattr(sorting, f"{prefix}_log_liks", None)
 
     havec = candidates is not None
     haver = responsibilities is not None
@@ -798,74 +792,104 @@ def combine_gmm_scores(
     assert candidates is not None
     assert responsibilities is not None
     assert logliks is not None
+    n_cand = candidates.shape[1]
+    assert logliks.shape[1] == responsibilities.shape[1] == n_cand + 1
 
     # check that new_ids is a merge
     assert (new_ids >= 0).all()
     unique_new_ids, new_id_counts = np.unique(new_ids, return_counts=True)
     assert unique_new_ids.shape[0] == unique_new_ids.max() + 1 <= new_ids.shape[0]
-    if unique_new_ids.shape == new_ids.shape:
-        return sorting.ephemeral_replace(
-            **{
-                f"{new_prefix}_candidates": candidates,
-                f"{new_prefix}_responsibilities": responsibilities,
-                f"{new_prefix}_log_liks": logliks,
-            }
-        )
+    if np.array_equal(new_ids, np.arange(new_ids.shape[0])):
+        return sorting
+
+    if not in_place:
+        candidates = candidates.copy()
+        responsibilities = responsibilities.copy()
+        logliks = logliks.copy()
 
     # check invariants at the top
-    if responsibilities.shape[1] > 2:
-        _maxdiff = np.diff(responsibilities[:, :-1], axis=1).max()
-        assert _maxdiff <= 1e-3, _maxdiff
-    assert np.greater_equal(np.isneginf(logliks[:, :-1]), candidates == -1).all()
+    nbye, maxdiff, n_neginf_viol = _check_soft_assign_invariants(
+        candidates, responsibilities, logliks
+    )
+    assert maxdiff <= 1e-3, maxdiff
+    assert not n_neginf_viol
     if sorting.labels is not None:
         not_noise = np.flatnonzero(sorting.labels >= 0)
         assert np.array_equal(
             sorting.labels[not_noise], new_ids[candidates[not_noise, 0]]
         )
 
-    # two steps: first merge, then sort
-    # merge candidates
-    new_ids_ = np.pad(new_ids, [(0, 1)], constant_values=-1)
-    orig_bye = candidates < 0
-    nbye = orig_bye.sum()
-    cand = np.where(orig_bye, new_ids.shape[0], candidates)
-    cand = new_ids_[cand]
-    assert (cand < 0).sum() >= nbye
-
-    # deduplicate
-    mergedr = responsibilities[:, : cand.shape[1]].copy()
-    mergedl = logliks[:, : cand.shape[1]].copy()
-    _combine_loop(cand, new_id_counts, mergedr, mergedl)
-
-    # now re-sort
-    order = np.argsort(-mergedl, axis=1, kind="stable")
-    cand = np.take_along_axis(cand, axis=1, indices=order)
-    mergedr = np.take_along_axis(mergedr, axis=1, indices=order)
-    mergedl = np.take_along_axis(mergedl, axis=1, indices=order)
-    mergedl = np.concatenate([mergedl, logliks[:, cand.shape[1] :]], axis=1)
-    mergedr = np.concatenate([mergedr, responsibilities[:, cand.shape[1] :]], axis=1)
+    # merge candidates, deduplicate, and re-sort by likelihood
+    apply_label_remapping_in_place(candidates, new_ids, allow_over=True)
+    _combine_loop(candidates, new_id_counts, responsibilities, logliks)
 
     # check invariants at the bottom
-    if mergedr.shape[1] > 2:
-        _maxdiff = np.diff(mergedr[:, : cand.shape[1]], axis=1).max()
-        assert _maxdiff <= 1e-3, _maxdiff
-    assert np.greater_equal(np.isneginf(mergedl[:, : cand.shape[1]]), cand == -1).all()
-    assert (cand < 0).sum() >= nbye
-    if sorting.labels is not None:
-        changed = sorting.labels != cand[:, 0]
-        changed = changed[sorting.labels >= 0]
+    new_nbye, maxdiff, n_neginf_viol = _check_soft_assign_invariants(
+        candidates, responsibilities, logliks
+    )
+    assert maxdiff <= 1e-3, maxdiff
+    assert not n_neginf_viol
+    assert new_nbye >= nbye
+
+    labels = sorting.labels
+    if labels is None:
+        labels = np.full(candidates.shape[0], -1, dtype=candidates.dtype)
+    elif not in_place:
+        labels = labels.copy()
+    n_changed, n_labeled = _assign_labels(candidates, logliks, labels)
+    if n_labeled:
         logger.dartsortdebug(
-            f"Mixture component aggregation changes {100 * changed.mean():0.2f}"
-            f"% of spike labels ({changed.sum().item()} spikes)."
+            f"Mixture component aggregation changes {100 * n_changed / n_labeled:0.2f}"
+            f"% of spike labels ({n_changed} spikes)."
         )
+
     return sorting.ephemeral_replace(
-        labels=np.where(mergedl[:, 0] >= mergedl[:, -1], cand[:, 0], -1),
+        labels=labels,
         **{
-            f"{new_prefix}_candidates": cand,
-            f"{new_prefix}_responsibilities": mergedr,
-            f"{new_prefix}_log_liks": mergedl,
+            f"{prefix}_candidates": candidates,
+            f"{prefix}_responsibilities": responsibilities,
+            f"{prefix}_log_liks": logliks,
         },
     )
+
+
+@numba.njit(parallel=True, nogil=True)
+def _check_soft_assign_invariants(
+    cand: np.ndarray, resp: np.ndarray, logliks: np.ndarray
+) -> tuple[int, float, int]:
+    n_cand = cand.shape[1]
+    nbye = 0
+    maxdiff = -np.inf
+    n_neginf_viol = 0
+
+    for s in numba.prange(cand.shape[0]):  # ty: ignore[not-iterable]
+        for j in range(n_cand):
+            if cand[s, j] < 0:
+                nbye += 1
+                if logliks[s, j] != -np.inf:
+                    n_neginf_viol += 1
+            if j + 1 < n_cand:
+                maxdiff = max(maxdiff, resp[s, j + 1] - resp[s, j])
+
+    return nbye, maxdiff, n_neginf_viol
+
+
+@numba.njit(parallel=True, nogil=True)
+def _assign_labels(
+    cand: np.ndarray, logliks: np.ndarray, labels: np.ndarray
+) -> tuple[int, int]:
+    """Update labels in-place, including some -1s."""
+    n_changed = 0
+    n_labeled = 0
+
+    for s in numba.prange(cand.shape[0]):  # ty: ignore[not-iterable]
+        if labels[s] >= 0:
+            n_labeled += 1
+            if labels[s] != cand[s, 0]:
+                n_changed += 1
+        labels[s] = cand[s, 0] if logliks[s, 0] >= logliks[s, -1] else -1
+
+    return n_changed, n_labeled
 
 
 @numba.njit(parallel=True, nogil=True)
@@ -875,9 +899,11 @@ def _combine_loop(
     mergedr: np.ndarray,
     mergedl: np.ndarray,
 ):
+    n_cand = cand.shape[1]
+
     for s in numba.prange(cand.shape[0]):  # ty: ignore
         spike_cand = cand[s]
-        for j in range(cand.shape[1] - 1):
+        for j in range(n_cand - 1):
             spike_candj = spike_cand[j]
 
             # noise or not a merge
@@ -892,7 +918,7 @@ def _combine_loop(
             # loop through and combine liks/resps, and -1 out the cands
             rsum = mergedr[s, j]
             lsum = mergedl[s, j]
-            for i, k in enumerate(range(j + 1, cand.shape[1])):
+            for i, k in enumerate(range(j + 1, n_cand)):
                 if not eq_spike_candj[i]:
                     continue
                 cand[s, k] = -1
@@ -911,7 +937,7 @@ def _combine_loop(
         # vacuum into noise component
         # this is partly to handle stuff that was missed before getting here
         # from flatten, for example
-        for j in range(cand.shape[1]):
+        for j in range(n_cand):
             if 0 <= spike_cand[j] < new_id_counts.shape[0]:
                 continue
             rsj = mergedr[s, j]
@@ -920,11 +946,68 @@ def _combine_loop(
             mergedr[s, -1] += rsj
             mergedr[s, j] = 0.0
 
+        # stable descending insertion sort by log likelihood
+        for j in range(1, n_cand):
+            cj = cand[s, j]
+            rj = mergedr[s, j]
+            lj = mergedl[s, j]
+            i = j - 1
+            while i >= 0 and mergedl[s, i] < lj:
+                cand[s, i + 1] = cand[s, i]
+                mergedr[s, i + 1] = mergedr[s, i]
+                mergedl[s, i + 1] = mergedl[s, i]
+                i -= 1
+            cand[s, i + 1] = cj
+            mergedr[s, i + 1] = rj
+            mergedl[s, i + 1] = lj
+
+
+def clean_final_sorting(
+    sorting: DARTsortSorting,
+    *,
+    motion: MotionInfo,
+    dedup_ms: float = -1.0,
+    merge_mapping: np.ndarray | None = None,
+    score_by=("merged_log_liks", "gmm_log_liks", "scores"),
+    in_place: bool = True,
+) -> tuple[DARTsortSorting, np.ndarray]:
+    """Deduplicate, flatten, depth-order
+
+    Parameters
+    ----------
+    sorting : DARTsortSorting
+    motion : MotionInfo
+    dedup_ms : float
+    merge_mapping : np.ndarray | None
+        If this sorting was the result of a merge, caller might want to know
+        what happened to those ids.
+        the depth reordering.
+    in_place : bool
+
+    Returns
+    -------
+    clean_sorting : DARTsortSorting
+    mapping : np.ndarray
+    """
+    if dedup_ms >= 0 and not any(sorting.has_dataset(k) for k in score_by):
+        logger.warning(
+            f"Not deduplicating: sorting has none of {score_by}. "
+            "Set dedup_ms<0 to silence this."
+        )
+        dedup_ms = -1.0
+
+    sorting = deduplicate_spikes(sorting, dedup_ms, in_place=in_place)
+    sorting, reorder = reorder_by_depth(sorting, motion=motion, in_place=in_place)
+    if merge_mapping is None:
+        return sorting, reorder
+    return sorting, reorder[np.unique(merge_mapping, return_inverse=True)[1]]
+
 
 def deduplicate_spikes(
     sorting: DARTsortSorting,
     radius_ms: float = -1.0,
     score_by=("merged_log_liks", "gmm_log_liks", "scores"),
+    in_place: bool = False,
 ) -> DARTsortSorting:
     if radius_ms < 0 or sorting.labels is None:
         return sorting
@@ -935,7 +1018,7 @@ def deduplicate_spikes(
     )
     assert radius_samples >= 0
 
-    new_labels = sorting.labels.copy()
+    new_labels = sorting.labels if in_place else sorting.labels.copy()
     scores = None
     for sck in score_by:
         if not sorting.has_dataset(sck):
@@ -955,18 +1038,19 @@ def deduplicate_spikes(
     # handle unsorted times
     if count_not_sorted(sorting.times_samples) > 0:
         tsort = np.argsort(sorting.times_samples, kind="stable")
-        new_labels = new_labels[tsort]
+        labels_by_time = new_labels[tsort]
         times_samples = sorting.times_samples[tsort]
         scores = scores[tsort]
     else:
-        times_samples = sorting.times_samples
         tsort = None
+        labels_by_time = new_labels
+        times_samples = sorting.times_samples
 
-    unit_ids, _, _ = pos_int_unique_and_counts(new_labels)
+    unit_ids, _, _ = pos_int_unique_and_counts(labels_by_time)
     ndrop = 0
-    unit_mask_tmp = np.empty(new_labels.shape, dtype=bool)
+    unit_mask_tmp = np.empty(labels_by_time.shape, dtype=bool)
     for unit_id in unit_ids:
-        in_unit = np.flatnonzero(np.equal(new_labels, unit_id, out=unit_mask_tmp))
+        in_unit = np.flatnonzero(np.equal(labels_by_time, unit_id, out=unit_mask_tmp))
         if in_unit.size <= 1:
             continue
         t = times_samples[in_unit]
@@ -975,11 +1059,11 @@ def deduplicate_spikes(
             continue
         discard = dedup_unit(t, dt, scores[in_unit], radius_samples)
         ndrop += discard.sum()
-        new_labels[in_unit[discard]] = -1
+        labels_by_time[in_unit[discard]] = -1
 
     logger.dartsortdebug(f"drop {ndrop}/{len(sorting)} isi violator spikes")
     if tsort is not None:
-        new_labels = new_labels[np.argsort(tsort)]
+        new_labels[tsort] = labels_by_time
 
     return sorting.ephemeral_replace(labels=new_labels)
 
