@@ -53,7 +53,7 @@ class DebugMatchingPursuitDenoiser(BaseWaveformDenoiser):
 
     def forward(self, waveforms, *, channels, **unused):
         channels_in_probe, waveforms_in_probe = get_channels_in_probe(
-            waveforms, channels, self.channel_index
+            waveforms, channels, self.b.channel_index
         )
         waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
         return set_channels_in_probe(waveforms_in_probe, waveforms, channels_in_probe)

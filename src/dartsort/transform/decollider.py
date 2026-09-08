@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, StackDataset, TensorDataset
 
+from ..util.internal_config import WaveformConfig
 from ..util.logging_util import get_logger, progrange
 from ..util.multiprocessing_util import handle_negative_jobs
 from ..util.py_util import panic
@@ -193,7 +194,7 @@ class Decollider(BaseMultichannelDenoiser):
             self.tpca = BaseTemporalPCA(
                 self.b.channel_index,
                 geom=self.b.geom,
-                waveform_cfg=self.waveform_cfg,
+                waveform_cfg=cast(WaveformConfig, self.waveform_cfg),
                 rank=self.svd_projection_rank,
             )
             self.tpca.spike_length_samples = self.spike_length_samples
@@ -812,5 +813,5 @@ class DecolliderDataLoader:
 def _check_has_dataset(h5, dset):
     if h5 is None:
         return
-    with h5py.File(h5, "r", locking=False) as h5:
-        return dset in h5
+    with h5py.File(h5, "r", locking=False) as h5h:
+        return dset in h5h
