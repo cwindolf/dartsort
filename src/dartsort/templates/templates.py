@@ -1,7 +1,7 @@
 import gc
 from dataclasses import replace
 from pathlib import Path
-from typing import ClassVar, Self
+from typing import ClassVar
 
 import numpy as np
 import torch
@@ -116,7 +116,7 @@ class TemplateData:
         return self.template_locations(mode=mode, radius=radius)[:, 1]
 
     @classmethod
-    def from_npz(cls, npz_path) -> Self:
+    def from_npz(cls, npz_path) -> "TemplateData":
         with np.load(npz_path, allow_pickle=True) as data:
             data = dict(**data)
             data["whiten_strategy"] = str(data["whiten_strategy"])
@@ -182,7 +182,7 @@ class TemplateData:
                 to_save[f"__prop_{k}"] = p
         np.savez(npz_path, **to_save)  # type: ignore
 
-    def __getitem__(self, subset) -> Self:
+    def __getitem__(self, subset) -> "TemplateData":
         if not np.array_equal(self.unit_ids, np.arange(len(self.unit_ids))):
             subset_ixs = np.searchsorted(self.unit_ids, subset, side="right") - 1
             matched = self.unit_ids[subset_ixs] == subset
@@ -212,7 +212,7 @@ class TemplateData:
             whiten_strategy=self.whiten_strategy,
         )
 
-    def coarsen(self) -> Self:
+    def coarsen(self) -> "TemplateData":
         """Weighted average all templates that share a unit id."""
         # update templates
         unit_ids_unique, flat_ids = np.unique(self.unit_ids, return_inverse=True)
@@ -258,7 +258,7 @@ class TemplateData:
         featurization_basis=None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
-    ) -> Self:
+    ) -> "TemplateData":
         # load if saved already and not overwriting
         if save_folder is not None:
             save_folder = Path(save_folder)
@@ -326,7 +326,7 @@ class TemplateData:
         whitener: Whitener | None = None,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
-    ) -> Self:
+    ) -> "TemplateData":
         raise NotImplementedError
 
 
