@@ -255,6 +255,7 @@ def _dartsort_impl(
 
     if next_step == 0:
         # first step: initial detection and motion estimation
+        is_final = cfg.detect_only or cfg.dredge_only or not cfg.matching_iterations
         with timer("initial_detection", ret["timing"]):
             sorting = initial_detection(
                 output_dir=store_dir,
@@ -264,10 +265,10 @@ def _dartsort_impl(
                 # note: usually motion=None here, except in certain benchmark comparisons
                 motion=motion,
                 load_simple_features=False,
+                save_residual=is_final and cfg.save_full_final_residual,
             )
         assert sorting is not None
         logger.info(f"Initial detection: {sorting}")
-        is_final = cfg.detect_only or cfg.dredge_only or not cfg.matching_iterations
         ds_save_features(cfg, sorting, output_dir, work_dir, is_final=is_final)
 
         if cfg.detect_only:
@@ -381,6 +382,7 @@ def _dartsort_impl(
                 save_cfg=cfg,
                 load_simple_features=will_refine,
                 fit_only=fit_only,
+                save_residual=is_final and cfg.save_full_final_residual,
             )
         if fit_only:
             ds_save_models(cfg, f"matching{step}", output_dir, work_dir)
@@ -447,6 +449,7 @@ def initial_detection(
     overwrite=False,
     show_progress=True,
     load_simple_features: bool = True,
+    save_residual: bool = False,
 ) -> DARTsortSorting:
     """Initial spike detection
 
@@ -488,10 +491,12 @@ def initial_detection(
             overwrite=overwrite,
             show_progress=show_progress,
             load_simple_features=load_simple_features,
+            save_residual=save_residual,
         )
         assert sorting is not None
     elif cfg.detection_type == "threshold":
         assert isinstance(cfg.initial_detection_cfg, ThresholdingConfig)
+        assert not save_residual
         sorting = threshold(
             output_dir=output_dir,
             recording=recording,
@@ -523,6 +528,7 @@ def initial_detection(
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
             load_simple_features=load_simple_features,
+            save_residual=save_residual,
         )
         assert sorting is not None
     else:
@@ -544,10 +550,11 @@ def subtract(
     overwrite=False,
     residual_filename: str | None = None,
     shuffle: bool = False,
-    show_progress=True,
+    show_progress: bool = True,
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
     load_simple_features: bool = True,
+    save_residual: bool = False,
 ) -> DARTsortSorting | None:
     output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -558,6 +565,8 @@ def subtract(
         subtraction_cfg=subtraction_cfg,
         featurization_cfg=featurization_cfg,
     )
+    if save_residual and residual_filename is None:
+        residual_filename = hdf5_filename.removesuffix(".h5") + "_residual.bin"
     detection_path = run_peeler(
         subtraction_peeler,
         output_directory=output_dir,
@@ -616,6 +625,7 @@ def match(
     whitener: Whitener | None = None,
     load_simple_features: bool = True,
     fit_only: bool = False,
+    save_residual: bool = False,
 ) -> DARTsortSorting | None:
     output_dir = ensure_path(output_dir)
     model_dir = output_dir / model_subdir
@@ -667,6 +677,8 @@ def match(
         template_data=template_data,
         motion=motion,
     )
+    if save_residual and residual_filename is None:
+        residual_filename = hdf5_filename.removesuffix(".h5") + "_residual.bin"
     sorting_path = run_peeler(
         matching_peeler,
         output_directory=output_dir,

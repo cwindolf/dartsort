@@ -1015,6 +1015,7 @@ class DARTsortInternalConfig:
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
+    save_full_final_residual: bool = False
     always_save_detailed_features: bool = False
     save_everything_on_error: bool = False
 
@@ -1492,6 +1493,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         save_intermediate_labels=cfg.save_intermediates,
         save_intermediate_features=cfg.save_intermediates,
         save_final_features=cfg.save_final_features,
+        save_full_final_residual=cfg.save_full_final_residual,
         save_everything_on_error=cfg.save_everything_on_error,
         link_from=cfg.link_from,
         link_step=cfg.link_step,

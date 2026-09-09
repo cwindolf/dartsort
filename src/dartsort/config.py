@@ -254,6 +254,7 @@ class DeveloperConfig(DARTsortUserConfig):
     refinement_strategy: str = "tmm"
     recluster_after_matching: bool = False
     fit_matching_models_only: bool = False
+    save_full_final_residual: bool = False
 
     # general peeling
     n_waveforms_fit: int = 40_000

@@ -301,10 +301,16 @@ def ds_save_features(
     h5_path = ensure_path(sorting.parent_h5_path)
     assert h5_path.exists()
     models_path = h5_path.parent / f"{h5_path.stem}_models"
+    resid_path = h5_path.parent / f"{h5_path.stem}_residual.bin"
 
     targ_h5 = output_dir / h5_path.name
     logger.dartsortdebug(f"Copy intermediate {h5_path=} -> {targ_h5=}.")
     dartcopy2(cfg, h5_path, targ_h5)
+
+    if resid_path.exists():
+        targ_resid = output_dir / resid_path.name
+        logger.dartsortdebug(f"Copy intermediate {resid_path=} -> {targ_resid=}.")
+        dartcopy2(cfg, resid_path, targ_resid)
 
     if models_path.exists():
         targ_models = output_dir / models_path.name
