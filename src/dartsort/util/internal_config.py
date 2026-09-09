@@ -988,6 +988,7 @@ class DARTsortInternalConfig:
     # high level behavior
     detect_only: bool = False
     dredge_only: bool = False
+    fit_matching_models_only: bool = False
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     preprocessing: PreprocessingStrategy = "none"
     preprocessing_dtype: Literal["float16", "float32"] = "float32"
@@ -1480,6 +1481,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         preprocessing_dtype=cfg.preprocessing_dtype,
         detection_type=cfg.detection_type,
         dredge_only=cfg.dredge_only,
+        fit_matching_models_only=cfg.fit_matching_models_only,
         matching_iterations=cfg.matching_iterations,
         recluster_after_matching=cfg.recluster_after_matching,
         work_in_tmpdir=cfg.work_in_tmpdir,

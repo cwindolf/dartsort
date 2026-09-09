@@ -253,6 +253,7 @@ class DeveloperConfig(DARTsortUserConfig):
     cluster_strategy: str = "dpc"
     refinement_strategy: str = "tmm"
     recluster_after_matching: bool = False
+    fit_matching_models_only: bool = False
 
     # general peeling
     n_waveforms_fit: int = 40_000

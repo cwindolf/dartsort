@@ -317,9 +317,28 @@ def ds_save_features(
         dartcopytree(cfg, models_path, targ_models)
 
 
+def ds_save_models(
+    cfg: DARTsortInternalConfig | None,
+    step_name: str,
+    output_dir: Path,
+    work_dir: Path | None = None,
+):
+    if work_dir is None:
+        # nothing to copy
+        return
+    assert work_dir.exists()
+    assert output_dir.exists()
+    models_src = work_dir / f"{step_name}_models"
+    assert models_src.exists()
+    assert models_src.is_dir()
+    models_targ = output_dir / models_src.name
+    logger.dartsortdebug(f"Copy {models_src=} -> {models_targ=}.")
+    dartcopytree(cfg, models_src, models_targ)
+
+
 def ds_handle_delete_intermediate_features(
     cfg: DARTsortInternalConfig,
-    final_sorting: DARTsortSorting,
+    final_sorting: DARTsortSorting | None,
     output_dir: Path,
     work_dir: Path | None = None,
 ):
@@ -330,15 +349,24 @@ def ds_handle_delete_intermediate_features(
         return
 
     # find all non-final h5s, models and delete them
-    assert final_sorting.parent_h5_path is not None
-    final_h5 = ensure_path(final_sorting.parent_h5_path)
-    assert final_h5.exists()
-    assert final_h5.parent == output_dir
+    if final_sorting is not None:
+        assert final_sorting.parent_h5_path is not None
+        final_h5 = ensure_path(final_sorting.parent_h5_path)
+        assert final_h5.exists()
+        assert final_h5.parent == output_dir
+        keep_models = None
+    else:
+        assert cfg.fit_matching_models_only
+        final_h5 = None
+        keep_models = output_dir / f"matching{cfg.matching_iterations}_models"
+        assert keep_models.exists()
+        assert keep_models.is_dir()
 
     for h5_path in output_dir.glob("*.h5"):
         if h5_path == final_h5:
             continue
-        assert h5_path.name != final_h5.name
+        if final_h5 is not None:
+            assert h5_path.name != final_h5.name
 
         h5_path = output_dir / h5_path.name
         models_path = output_dir / f"{h5_path.stem}_models"
@@ -347,7 +375,11 @@ def ds_handle_delete_intermediate_features(
         h5_path.unlink()
         if models_path.exists():
             assert models_path.is_dir()
-            shutil.rmtree(models_path)
+            if models_path == keep_models:
+                logger.dartsortdebug(f"Keep fitted {models_path=}.")
+            else:
+                logger.dartsortdebug(f"Clean up: remove {models_path=}.")
+                shutil.rmtree(models_path)
 
 
 def ds_fast_forward(

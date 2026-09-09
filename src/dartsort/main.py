@@ -62,6 +62,7 @@ from .util.main_util import (
     ds_load,
     ds_save_features,
     ds_save_intermediate_labels,
+    ds_save_models,
     ds_save_motion,
     ds_save_timing,
     ds_will_copy_recording,
@@ -351,9 +352,11 @@ def _dartsort_impl(
             samp_cfg,
             will_refine,
         ) = _matching_step_cfgs(is_final, is_subsampling, cfg)
+        fit_only = cfg.fit_matching_models_only and is_final
 
         # avoid keeping all the previous step's features in memory
-        sorting = sorting.unload()
+        if sorting is not None:
+            sorting = sorting.unload()
         cleanup_and_log_gpu_usage(computation_cfg=cfg.computation_cfg, message="Unload")
 
         logger.dartsortdebug(f"-- Matching {step}")
@@ -377,7 +380,12 @@ def _dartsort_impl(
                 prev_step_name=f"refined{step - 1}",
                 save_cfg=cfg,
                 load_simple_features=will_refine,
+                fit_only=fit_only,
             )
+        if fit_only:
+            ds_save_models(cfg, f"matching{step}", output_dir, work_dir)
+            break
+        assert sorting is not None
         logger.info(f"Matching step {step}: {sorting}")
         ds_save_features(cfg, sorting, output_dir, work_dir, is_final)
 
@@ -405,19 +413,28 @@ def _dartsort_impl(
         )
 
     # finally handle scratch directory and delete intermediate files if requested
+    ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
+    total_timer.stop()
+    ds_save_timing(ret["timing"], output_dir)
+    logger.dartsortdebug(f"Timing: {ret['timing']}")
+
+    # return without handling sorting if we're just fitting models
+    if cfg.fit_matching_models_only:
+        # apologies for returning without a sorting. this use case is niche,
+        # and I'd rather keep the nice return type for users, I think.
+        return ret
+
+    # main exit path: update paths for tmp dir, dump to npz
+    assert sorting is not None
     if work_dir is not None:
+        assert sorting is not None
         orig_h5_path = ensure_path(sorting.parent_h5_path, strict=True)
         final_h5_path = output_dir / orig_h5_path.name
         assert final_h5_path.exists()
         sorting.parent_h5_path = final_h5_path
-    ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
 
     sorting.save(output_dir / "dartsort_sorting.npz")
     ret["sorting"] = sorting
-
-    total_timer.stop()
-    logger.dartsortdebug(f"Timing: {ret['timing']}")
-    ds_save_timing(ret["timing"], output_dir)
 
     return ret
 
@@ -473,10 +490,9 @@ def initial_detection(
             load_simple_features=load_simple_features,
         )
         assert sorting is not None
-        return sorting
     elif cfg.detection_type == "threshold":
         assert isinstance(cfg.initial_detection_cfg, ThresholdingConfig)
-        return threshold(
+        sorting = threshold(
             output_dir=output_dir,
             recording=recording,
             waveform_cfg=cfg.waveform_cfg,
@@ -492,7 +508,7 @@ def initial_detection(
         )
     elif cfg.detection_type == "match":
         assert isinstance(cfg.initial_detection_cfg, MatchingConfig)
-        return match(
+        sorting = match(
             output_dir=output_dir,
             recording=recording,
             waveform_cfg=cfg.waveform_cfg,
@@ -508,8 +524,10 @@ def initial_detection(
             computation_cfg=cfg.computation_cfg,
             load_simple_features=load_simple_features,
         )
+        assert sorting is not None
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
+    return sorting
 
 
 def subtract(
@@ -597,7 +615,8 @@ def match(
     template_denoising_tsvd=None,
     whitener: Whitener | None = None,
     load_simple_features: bool = True,
-) -> DARTsortSorting:
+    fit_only: bool = False,
+) -> DARTsortSorting | None:
     output_dir = ensure_path(output_dir)
     model_dir = output_dir / model_subdir
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -662,10 +681,14 @@ def match(
         skip_resid_snips=skip_resid_snips,
         show_progress=show_progress,
         computation_cfg=computation_cfg,
+        fit_only=fit_only,
     )
 
     del matching_peeler
     cleanup_and_log_gpu_usage(computation_cfg, f"Post match ({hdf5_filename}):")
+
+    if fit_only:
+        return None
 
     assert sorting_path is not None
     sorting = DARTsortSorting.from_peeling_hdf5(
