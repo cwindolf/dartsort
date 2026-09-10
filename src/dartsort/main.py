@@ -827,15 +827,6 @@ def cluster(
     _save_dir=None,
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
-    if features is None:
-        assert clustering_features_cfg is not None
-        features = SimpleMatrixFeatures.from_config(
-            sorting=sorting,
-            motion=motion,
-            clustering_features_cfg=clustering_features_cfg,
-            computation_cfg=computation_cfg,
-        )
-    assert features is not None
     clusterer = get_clusterer(
         clustering_cfg=clustering_cfg,
         refinement_cfgs=refinement_cfgs,
@@ -845,6 +836,14 @@ def cluster(
         initial_name=_save_initial_name,
         refine_labels_fmt=_save_refined_name_fmt,
     )
+    if features is None and clusterer.needs_simple_features():
+        assert clustering_features_cfg is not None
+        features = SimpleMatrixFeatures.from_config(
+            sorting=sorting,
+            motion=motion,
+            clustering_features_cfg=clustering_features_cfg,
+            computation_cfg=computation_cfg,
+        )
     if clusterer.needs_stable_features():
         assert clustering_features_cfg is not None
         stable_features = StableWaveformFeatures.from_config(

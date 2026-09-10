@@ -109,6 +109,7 @@ def get_clusterer(
 
 class Clusterer:
     _needs_stable_features = False
+    _needs_simple_features = True
 
     def __init__(
         self,
@@ -126,6 +127,9 @@ class Clusterer:
         self.save_cfg = save_cfg
         self.save_labels_dir = save_labels_dir
         self.labels_fmt = labels_fmt
+
+    def needs_simple_features(self):
+        return self._needs_simple_features
 
     def needs_stable_features(self):
         return self._needs_stable_features
@@ -188,19 +192,18 @@ class Clusterer:
 
     def cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
         motion: MotionInfo,
     ) -> DARTsortSorting:
         if features is None:
-            pass
-        else:
-            labels = self._cluster(
-                features, stable_features, sorting, recording, motion
-            )
-            sorting = sorting.ephemeral_replace(labels=labels)
+            assert not self.needs_simple_features()
+        if stable_features is None:
+            assert not self.needs_stable_features()
+        labels = self._cluster(features, stable_features, sorting, recording, motion)
+        sorting = sorting.ephemeral_replace(labels=labels)
         if self.labels_fmt and self.save_labels_dir is not None:
             assert "{" not in self.labels_fmt
             assert "}" not in self.labels_fmt
@@ -211,7 +214,7 @@ class Clusterer:
 
     def _cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
@@ -229,9 +232,11 @@ clustering_strategies["none"] = Clusterer
 
 
 class RemoveLabelsClusterer(Clusterer):
+    _needs_simple_features = False
+
     def _cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
@@ -247,12 +252,13 @@ clustering_strategies["remove_labels"] = RemoveLabelsClusterer
 class ChannelSnapClusterer(Clusterer):
     def _cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
         motion: MotionInfo,
     ) -> np.ndarray:
+        assert features is not None
         return cluster_util.closest_registered_channels(
             times_seconds=sorting.times_seconds,
             x=features.x,
@@ -295,12 +301,13 @@ class GridSnapClusterer(Clusterer):
 
     def _cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
         motion: MotionInfo,
     ) -> np.ndarray:
+        assert features is not None
         return cluster_util.grid_snap(
             times_seconds=sorting.times_seconds,
             x=features.x,
@@ -396,12 +403,13 @@ class DensityPeaksClusterer(Clusterer):
 
     def _cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
         motion: MotionInfo,
     ) -> np.ndarray:
+        assert features is not None
         labels, _ = self._cluster_extra(
             features=features,
             stable_features=stable_features,
@@ -588,12 +596,13 @@ class GMMDensityPeaksClusterer(Clusterer):
 
     def _cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
         motion: MotionInfo,
     ) -> np.ndarray:
+        assert features is not None
         res = density.gmm_density_peaks(
             X=features.features,
             channels=sorting.channels,
@@ -663,12 +672,13 @@ class RecursiveHDBSCANClusterer(Clusterer):
 
     def _cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
         motion: MotionInfo,
     ) -> np.ndarray:
+        assert features is not None
         return cluster_util.recursive_hdbscan_clustering(
             features.features,
             min_cluster_size=self.min_cluster_size,
@@ -708,12 +718,13 @@ class ScikitLearnClusterer(Clusterer):
 
     def _cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
         motion: MotionInfo,
     ) -> np.ndarray:
+        assert features is not None
         skcls = getattr(sklearn.cluster, self.sklearn_class_name)
         clus = skcls(**self.sklearn_kwargs)
         return clus.fit_predict(features.features)
@@ -731,12 +742,15 @@ class Refinement(Clusterer):
         self.refinement_cfg = refinement_cfg
         self.sampling_cfg = refinement_cfg.sampling_cfg
 
+    def needs_simple_features(self):
+        return self.clusterer.needs_simple_features() or self._needs_simple_features
+
     def needs_stable_features(self):
         return self.clusterer.needs_stable_features() or self._needs_stable_features
 
     def cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
@@ -750,7 +764,7 @@ class Refinement(Clusterer):
 
     def _refine(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
@@ -761,7 +775,7 @@ class Refinement(Clusterer):
 
     def refine(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
@@ -784,14 +798,14 @@ class TMMRefinement(Refinement):
 
     def _demix(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         motion: MotionInfo,
         skip_final_assign_and_return_mix_data=False,
         tpca: "BaseTemporalPCA | None" = None,
     ):
-
+        assert features is not None
         subsampling, ixs = self.handle_sampling(features)
         ixs = cast(np.ndarray, ixs) if subsampling else None
         res = mixture.tmm_demix(
@@ -813,7 +827,7 @@ class TMMRefinement(Refinement):
 
     def _refine(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
@@ -856,11 +870,12 @@ refinement_strategies["tmm"] = TMMRefinement
 
 
 class PCMergeRefinement(Refinement):
+    _needs_simple_features = False
     _needs_stable_features = True
 
     def _refine(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
@@ -880,15 +895,18 @@ refinement_strategies["pcmerge"] = PCMergeRefinement
 
 
 class AgglomerateRefinement(Refinement):
+    _needs_simple_features = False
+
     def _refine(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
         motion: MotionInfo,
     ):
         assert recording is not None
+        del features, stable_features
         return agglomerate.agglomerate(
             recording=recording,
             sorting=sorting,
@@ -904,9 +922,11 @@ refinement_strategies["agglomerate"] = AgglomerateRefinement
 
 
 class CleanRefinement(Refinement):
+    _needs_simple_features = False
+
     def _refine(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
@@ -925,6 +945,8 @@ refinement_strategies["clean"] = CleanRefinement
 class FilterRefinement(Refinement):
     """Runs various filters as specified in cfg"""
 
+    _needs_simple_features = False
+
     def needs_stable_features(self):
         return super().needs_stable_features() or bool(
             self.refinement_cfg.collision_cleaning_error_threshold is not None
@@ -932,7 +954,7 @@ class FilterRefinement(Refinement):
 
     def _refine(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
@@ -972,7 +994,7 @@ class ForwardBackwardEnsembler(Refinement):
 
     def cluster(
         self,
-        features: SimpleMatrixFeatures,
+        features: SimpleMatrixFeatures | None,
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         recording: BaseRecording | None,
