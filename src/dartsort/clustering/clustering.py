@@ -109,7 +109,7 @@ def get_clusterer(
 
 class Clusterer:
     _needs_stable_features = False
-    _needs_simple_features = True
+    _needs_simple_features = False
 
     def __init__(
         self,
@@ -133,6 +133,9 @@ class Clusterer:
 
     def needs_stable_features(self):
         return self._needs_stable_features
+
+    def __str__(self):
+        return self.__class__.__name__
 
     @classmethod
     def from_config(
@@ -250,6 +253,8 @@ clustering_strategies["remove_labels"] = RemoveLabelsClusterer
 
 
 class ChannelSnapClusterer(Clusterer):
+    _needs_simple_features = True
+
     def _cluster(
         self,
         features: SimpleMatrixFeatures | None,
@@ -272,6 +277,8 @@ clustering_strategies["channel_snap"] = ChannelSnapClusterer
 
 
 class GridSnapClusterer(Clusterer):
+    _needs_simple_features = True
+
     def __init__(self, grid_dx=15.0, grid_dz=15.0, **kwargs):
         super().__init__(**kwargs)
         self.grid_dx = grid_dx
@@ -323,6 +330,8 @@ clustering_strategies["grid_snap"] = GridSnapClusterer
 
 
 class DensityPeaksClusterer(Clusterer):
+    _needs_simple_features = True
+
     def __init__(
         self,
         knn_k=None,
@@ -512,6 +521,8 @@ clustering_strategies["density_peaks_uhdversion"] = DensityPeaksClusterer
 
 
 class GMMDensityPeaksClusterer(Clusterer):
+    _needs_simple_features = True
+
     def __init__(
         self,
         outlier_neighbor_count=10,
@@ -632,6 +643,8 @@ clustering_strategies["gmmdpc"] = GMMDensityPeaksClusterer
 
 
 class RecursiveHDBSCANClusterer(Clusterer):
+    _needs_simple_features = True
+
     def __init__(
         self,
         min_cluster_size=25,
@@ -689,6 +702,8 @@ class RecursiveHDBSCANClusterer(Clusterer):
 
 
 class ScikitLearnClusterer(Clusterer):
+    _needs_simple_features = True
+
     def __init__(self, sklearn_class_name="DBSCAN", sklearn_kwargs=None, **kwargs):
         super().__init__(**kwargs)
         self.sklearn_class_name = sklearn_class_name
@@ -747,6 +762,9 @@ class Refinement(Clusterer):
 
     def needs_stable_features(self):
         return self.clusterer.needs_stable_features() or self._needs_stable_features
+
+    def __str__(self):
+        return f"{self.clusterer!s}, {self.__class__.__name__}"
 
     def cluster(
         self,
@@ -870,7 +888,6 @@ refinement_strategies["tmm"] = TMMRefinement
 
 
 class PCMergeRefinement(Refinement):
-    _needs_simple_features = False
     _needs_stable_features = True
 
     def _refine(
@@ -895,8 +912,6 @@ refinement_strategies["pcmerge"] = PCMergeRefinement
 
 
 class AgglomerateRefinement(Refinement):
-    _needs_simple_features = False
-
     def _refine(
         self,
         features: SimpleMatrixFeatures | None,
@@ -922,8 +937,6 @@ refinement_strategies["agglomerate"] = AgglomerateRefinement
 
 
 class CleanRefinement(Refinement):
-    _needs_simple_features = False
-
     def _refine(
         self,
         features: SimpleMatrixFeatures | None,
@@ -944,8 +957,6 @@ refinement_strategies["clean"] = CleanRefinement
 
 class FilterRefinement(Refinement):
     """Runs various filters as specified in cfg"""
-
-    _needs_simple_features = False
 
     def needs_stable_features(self):
         return super().needs_stable_features() or bool(
@@ -991,6 +1002,8 @@ refinement_strategies["filter"] = FilterRefinement
 
 class ForwardBackwardEnsembler(Refinement):
     """If there are more time chunk ones, make a new ABC with this logic."""
+
+    _needs_simple_features = True
 
     def cluster(
         self,

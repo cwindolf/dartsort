@@ -957,6 +957,14 @@ default_post_refinement_cfg = RefinementConfig(
     refinement_strategy="filter", cc_flag_excess_rate=0.3
 )
 default_post_refinement_cfgs = (default_post_refinement_cfg,)
+default_matching_streaming_classifier_cfg = FeaturizationConfig(
+    compute_input_tpca_projs_regardless=True,
+    save_input_tpca_projs=False,
+    use_gmm_classifier=True,
+    pre_gmm_clustering_cfg=None,
+    gmm_clustering_features_cfg=default_clustering_features_cfg,
+    gmm_refinement_cfg=default_refinement_cfg,
+)
 default_clean_cfg = RefinementConfig(
     refinement_strategy="clean", template_merge_cfg=None
 )

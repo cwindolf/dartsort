@@ -1016,7 +1016,11 @@ class BasePeeler(BModule):
             if feats_pt is None:
                 continue
             state_dict = torch.load(feats_pt, weights_only=True)
-            self.get_pipeline(kind).load_state_dict(state_dict)
+            pipeline = self.get_pipeline(kind)
+            try:
+                pipeline.load_state_dict(state_dict)
+            except RuntimeError as e:
+                raise ValueError(f"Error loading state dict for pipeline {pipeline}") from e
 
     def check_resuming(
         self,
@@ -1174,9 +1178,11 @@ class BasePeeler(BModule):
             h5_spike_datasets = {}
             for ds in self.out_datasets():
                 if ds.name in output_h5:
+                    logger.dartsortdebug(f"{ds} already in {output_h5.name}.")
                     dset = output_h5[ds.name]
                     assert isinstance(dset, h5py.Dataset)
                 elif known_spike_count is None:
+                    logger.dartsortdebug(f"Create chunked {ds} in {output_h5.name}.")
                     dset = output_h5.create_dataset(
                         ds.name,
                         dtype=ds.dtype,
@@ -1185,6 +1191,7 @@ class BasePeeler(BModule):
                         chunks=(chunk_size, *ds.shape_per_spike),
                     )
                 else:
+                    logger.dartsortdebug(f"Create {ds} in {output_h5.name} with known count {known_spike_count}.")
                     dset = output_h5.create_dataset(
                         ds.name,
                         dtype=ds.dtype,

@@ -88,7 +88,12 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def _other_pre_load_state(self, state_dict, prefix):
         extra_state = state_dict[f"{prefix}_extra_state"]
-        self.rank = extra_state["rank"]
+        rank = extra_state["rank"]
+        if self.rank != rank and hasattr(self, "components"):
+            self.b.whitener.resize_((rank,))
+            self.b.components.resize_((rank, *self.b.components.shape[1:]))
+        self.rank = rank
+        self.shape = (self.rank, self.b.channel_index.shape[1])
 
     def fit(
         self,
@@ -165,6 +170,8 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.b.mean.copy_(mean)
         self.b.components.copy_(components)
         self.b.whitener.copy_(whitener)
+        self.rank = components.shape[0]
+        self.shape = (self.rank, self.b.channel_index.shape[1])
         self._needs_fit = False
 
     def needs_fit(self):

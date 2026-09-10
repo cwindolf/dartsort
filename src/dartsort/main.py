@@ -632,6 +632,9 @@ def match(
     computation_cfg = ensure_computation_config(computation_cfg)
 
     if template_data is None and not matching_cfg.precomputed_templates_npz:
+        if (model_dir / template_npz).exists():
+            template_data = TemplateData.from_npz(model_dir / template_npz)
+    if template_data is None and not matching_cfg.precomputed_templates_npz:
         assert sorting is not None
         assert template_cfg.whitening == matching_cfg.whitening
         sorting, template_data = estimate_template_library(
@@ -836,6 +839,7 @@ def cluster(
         initial_name=_save_initial_name,
         refine_labels_fmt=_save_refined_name_fmt,
     )
+    logger.dartsortdebug("Clustering steps: %s", clusterer)
     if features is None and clusterer.needs_simple_features():
         assert clustering_features_cfg is not None
         features = SimpleMatrixFeatures.from_config(

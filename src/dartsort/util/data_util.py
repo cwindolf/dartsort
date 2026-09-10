@@ -1428,7 +1428,7 @@ def sorting_from_spikeinterface(
 
 
 def concatenate_sortings(
-    sortings: Sequence[DARTsortSorting], check_sorted_times: bool = True
+    sortings: Sequence[DARTsortSorting], sort_times: bool = True
 ) -> DARTsortSorting:
     """Concatenate sortings and check that the result is sorted
 
@@ -1460,19 +1460,24 @@ def concatenate_sortings(
     for st in sortings:
         i1 = i0 + len(st)
         feats = st.spike_feature_dict
+        if sort_times:
+            order = np.argsort(feats[fixed_keys[0]], kind="stable")
+        else:
+            order = slice(None)
         for k, v in out.items():
-            v[i0:i1] = feats[k]
+            v[i0:i1] = feats[k][order]
         i0 = i1
     assert i0 == n_total
 
-    if check_sorted_times:
-        nbad = count_not_sorted(out["times_samples"])
+    if sort_times:
+        # just checking chunk boundaries
+        nbad = count_not_sorted(out[fixed_keys[0]])
         if nbad > 0:
             raise ValueError("times_samples were not sorted in concatenate_sortings")
 
     fixed = {k: out.pop(k) for k in fixed_keys}
     if hasattr(sortings[0], "geom"):
-        fixed["geom"] = sortings[0].geom
+        out["geom"] = sortings[0].geom
     sampling_frequency = np.mean([st.sampling_frequency for st in sortings])
 
     return DARTsortSorting(
