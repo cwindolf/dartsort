@@ -599,9 +599,9 @@ class BasePeeler(BModule):
             peel_result["times_seconds"] = torch.asarray(t_s)
         features = {}
         if peel_result["n_spikes"] > 0 and return_waveforms:
-            chunk_start_s = self.recording.sample_index_to_time(chunk_start_samples)
-            chunk_end_s = self.recording.sample_index_to_time(chunk_end_samples)
-            chunk_center_s = (chunk_start_s + chunk_end_s) / 2
+            dt_samples = chunk_end_samples - chunk_start_samples
+            center_samples = chunk_start_samples + dt_samples // 2
+            chunk_center_s = self.recording.sample_index_to_time(center_samples)
             fixed_properties = {k: peel_result[k] for k in self.fixed_property_keys}
             for kind in self.waveform_kinds:
                 features |= self.featurize_waveforms(
