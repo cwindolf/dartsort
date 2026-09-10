@@ -632,6 +632,10 @@ def _qda_job(ij):
         return
 
     dll = _dll(inij, overlap, imask, jmask, p.log_liks)
+    if not dll.size:
+        p.score[i, j] = p.score[j, i] = 0.0
+        p.min_ratio[i, j] = p.min_ratio[j, i] = 0.0
+        return
 
     vmn, vmx = torch.aminmax(torch.asarray(dll))
     vm = max(-vmn, vmx)
