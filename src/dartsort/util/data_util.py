@@ -956,7 +956,12 @@ class DARTsortSorting:
         return self.ephemeral_replace(**new_props)
 
     def remap_gmm_properties(
-        self, remap: np.ndarray, *, new_K: int, in_place: bool, prefixes=("merged", "gmm")
+        self,
+        remap: np.ndarray,
+        *,
+        new_K: int,
+        in_place: bool,
+        prefixes=("merged", "gmm"),
     ) -> dict[str, np.ndarray]:
         """Apply `remap` to GMM candidates, optionally in-place
 
@@ -1422,6 +1427,63 @@ def sorting_from_spikeinterface(
     )
 
 
+def concatenate_sortings(
+    sortings: Sequence[DARTsortSorting], check_sorted_times: bool = True
+) -> DARTsortSorting:
+    """Concatenate sortings and check that the result is sorted
+
+    Another approach here would be to use HDF5 virtual datasets. If one
+    hooked together a bunch of .h5 files that way, it should be loadable
+    with from_peeling_hdf5.
+
+    This returns an hdf5-less sorting object. Its features are "ephemeral".
+    You probably will want to .save() it to a .npz file.
+
+    Parameters
+    ----------
+    sortings: Sequence[DARTsortSorting]
+    check_sorted_times: bool, default=True
+
+    Returns
+    -------
+    concatenated_sorting: DARTsortSorting
+    """
+    n_total = sum(map(len, sortings))
+    out = {
+        k: np.empty_like(v, shape=(n_total, *v.shape[1:]))
+        for k, v in sortings[0].spike_feature_dict.items()
+    }
+    fixed_keys = ("times_samples", "channels", "labels")
+    assert all(k in out for k in fixed_keys)
+
+    i0 = 0
+    for st in sortings:
+        i1 = i0 + len(st)
+        feats = st.spike_feature_dict
+        for k, v in out.items():
+            v[i0:i1] = feats[k]
+        i0 = i1
+    assert i0 == n_total
+
+    if check_sorted_times:
+        nbad = count_not_sorted(out["times_samples"])
+        if nbad > 0:
+            raise ValueError("times_samples were not sorted in concatenate_sortings")
+
+    fixed = {k: out.pop(k) for k in fixed_keys}
+    if hasattr(sortings[0], "geom"):
+        fixed["geom"] = sortings[0].geom
+    sampling_frequency = np.mean([st.sampling_frequency for st in sortings])
+
+    return DARTsortSorting(
+        **fixed,
+        sampling_frequency=sampling_frequency,
+        parent_h5_path=None,
+        persistent_features=None,
+        ephemeral_features=out,
+    )
+
+
 def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:
     """Convert our localization format to SpikeInterface's"""
     # NB: spikeinterface's y is our z. I like theirs better, I'm sorry, it's not my fault.
@@ -1801,45 +1863,6 @@ def time_chunk_sortings(
         subset_sorting_by_time_seconds(sorting, *tt) for tt in chunk_time_ranges_s
     ]
     return chunk_time_ranges_s, chunk_sortings
-
-
-def combine_sortings(sortings, dodge=False):
-    labels = np.full_like(sortings[0].labels, -1)
-    times_samples = sortings[0].times_samples.copy()
-    assert all(s.labels.size == sortings[0].labels.size for s in sortings)
-
-    if dodge:
-        label_to_sorting_index = []
-        label_to_original_label = []
-    else:
-        label_to_sorting_index = None
-        label_to_original_label = None
-
-    next_label = 0
-    for j, sorting in enumerate(sortings):
-        kept = np.flatnonzero(sorting.labels >= 0)
-        assert np.all(labels[kept] < 0)
-        labels[kept] = sorting.labels[kept] + next_label
-        if dodge:
-            assert label_to_sorting_index is not None
-            assert label_to_original_label is not None
-            n_new_labels = 0
-            if kept.size:
-                n_new_labels = 1 + sorting.labels[kept].max()
-                next_label += n_new_labels
-            label_to_sorting_index.append(np.full(n_new_labels, j))
-            label_to_original_label.append(np.arange(n_new_labels))
-        times_samples[kept] = sorting.times_samples[kept]
-
-    sorting = sortings[0].ephemeral_replace(labels=labels, times_samples=times_samples)
-
-    if dodge:
-        assert label_to_sorting_index is not None
-        assert label_to_original_label is not None
-        label_to_sorting_index = np.concatenate(label_to_sorting_index)
-        label_to_original_label = np.concatenate(label_to_original_label)
-        return label_to_sorting_index, label_to_original_label, sorting
-    return sorting
 
 
 # -- timing
