@@ -277,11 +277,9 @@ def get_waveform_mlp(
         # so this is matmul over time, and kernel size is 1 to be separate over chans
         conv = nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)
         layers.append(WaveformOnly(conv))
-        norm = get_norm(n_input_channels, norm_kind)
+        norm = get_channel_norm(n_input_channels, norm_kind)
         if norm is not None:
-            layers.append(
-                WaveformOnly(nn.Sequential(Permute(0, 2, 1), norm, Permute(0, 2, 1)))
-            )
+            layers.append(WaveformOnly(norm))
         layers.append(WaveformOnly(nn.ReLU()))
 
     if separated_mask_input:
@@ -307,9 +305,9 @@ def get_waveform_mlp(
     if return_initial_shape:
         layers.append(nn.Unflatten(-1, (spike_length_samples, n_input_channels)))
     if final_conv_fullheight:
-        norm = get_norm(n_input_channels, norm_kind)
+        norm = get_channel_norm(n_input_channels, norm_kind)
         if norm is not None:
-            layers.append(nn.Sequential(Permute(0, 2, 1), norm, Permute(0, 2, 1)))
+            layers.append(norm)
         layers.append(nn.ReLU())
         conv = nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)
         layers.append(conv)
@@ -375,6 +373,16 @@ def get_norm(n_features, norm_kind=None):
         return nn.LayerNorm(n_features)
     assert norm_kind in ("none", None)
     return None
+
+
+def get_channel_norm(n_input_channels, norm_kind=None):
+    """Normalize over the channel axis of an (n, t, c) waveform batch."""
+    norm = get_norm(n_input_channels, norm_kind)
+    if norm is None:
+        return None
+    if isinstance(norm, nn.LayerNorm):
+        return norm
+    return nn.Sequential(Permute(0, 2, 1), norm, Permute(0, 2, 1))
 
 
 class ResidualForm(nn.Module):
