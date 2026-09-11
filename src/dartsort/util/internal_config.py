@@ -8,7 +8,7 @@ from typing import Literal, Self
 import torch
 
 from .cli_util import argfield, dataclass_from_toml
-from .py_util import cfg_dataclass, ensure_path
+from .py_util import cfg_dataclass, ensure_path, panic
 
 try:
     from importlib.resources import files
@@ -251,11 +251,14 @@ class ClusteringFeaturesConfig:
     motion_aware: bool = True
     use_amplitude: bool = False
     use_signed_amplitude: bool = True
-    log_transform_amplitude: bool = True
+    log_transform_amplitude: bool = False
     amp_log_c: float = 5.0
     amp_scale: float = 3.0
+    amplitude_kind: Literal["peak", "ptp", "rms", "stored"] = "ptp"
     x_scale: float = 1.0
     n_main_channel_pcs: int = 5
+    n_multi_channel_pcs: int = 0
+    multi_channel_pc_radius: float = 50.0
     pc_scale: float = 2.0
     pc_transform: Literal["log", "sqrt", "none"] | None = "none"
     pc_pre_transform_scale: float = 0.5
@@ -473,6 +476,8 @@ class TemplateMergeConfig:
 
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
 ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
+KmeansppSelection = Literal["phi", "marginal"]
+KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
 
 
 @cfg_dataclass
@@ -514,8 +519,8 @@ class RefinementConfig:
     merge_group_size: int = 5
     n_search: int | None = 3
     n_explore: int | None = None
-    train_batch_size: int = 512
-    eval_batch_size: int = 512
+    train_batch_size: int = 2048
+    eval_batch_size: int = 2048
     split_friend_distance: float = 0.8
     split_distance_threshold: float = 1.5
     merge_distance_threshold: float = 1.5
@@ -531,6 +536,12 @@ class RefinementConfig:
     kmeans_tries: int = 10
     kmeans_beta: float = 50.0
     kmeanspp_tries: int = 5
+    kmeanspp_stop_rms: float = 5.0
+    kmeanspp_patience: int = 21
+    kmeanspp_greedy_proposals: int = 1
+    kmeanspp_neighb_overlap: float | None = None
+    kmeanspp_selection: KmeansppSelection = "phi"
+    kmeanspp_stopping: KmeansppStopping = "patience"
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
@@ -543,6 +554,7 @@ class RefinementConfig:
     refit_in_demolition: bool = False
     em_after_demolish: bool = True
     whiten_split: bool = True
+    fix_responsibilities_in_split: bool = True
     scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
     whiten_dist: bool = True
 
@@ -551,22 +563,24 @@ class RefinementConfig:
         linkage="single"
     )
 
-    # other agglomeration parameters
-    glom_max_firing_corr: float | None = -0.1
-    glom_firing_corr_dt: float = 0.5
-    glom_firing_corr_method: Literal["binsqrt"] = "binsqrt"
-    qda_link: Literal["single", "complete"] = "single"
+    # agglomeration: which pairs are allowed to merge
+    glom_force_merge_template_distance: float = 0.3
+    glom_qda_overlap: bool = False
+    glom_qda_bimodality: bool = False
     qda_uni_score: float = 0.95
     qda_threshold: float = 0.35
     qda_min_ratio: float = 0.1
     qda_min_coverage: float = 0.35
     qda_min_iou: float = 0.5
-    qda_force_merge_for_temp_dist_below: float = 0.3
-    spikeinterface_merge_preset: str | Literal["none"] = "none"
-    spikeinterface_merge_max_distance: float = 0.8
-    spikeinterface_merge_min_coentropy: float | None = 0.01
-    spikeinterface_merge_coent_coverage: float = 0.8
-    spikeinterface_merge_coent_iou: float = 0.5
+
+    # agglomeration: refractory violations across a pair
+    glom_violation_ms: float = 1.0
+    glom_jitter_ms: float = 20.0
+    glom_min_violation_evidence: float = 4.6
+    glom_violation_linkage: Literal["average", "complete"] = "average"
+    glom_violation_threshold: float | None = 0.3
+    glom_veto_threshold: float | None = None
+    glom_veto_min_evidence: float = 10.0
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
@@ -583,7 +597,17 @@ class RefinementConfig:
     # bad unit filter params
     gmm_isolation_threshold: float | None = None
     gmm_isolation_neighbor_fraction: float = 0.9
-    collision_cleaning_error_threshold: float | None = 0.3
+    collision_cleaning_error_threshold: float | None = None
+
+    max_cc_flag_rate: float = 1.0
+    cc_flag_entropy_cutoff: float = 2.0
+    cc_flag_excess_rate: float | None = None
+    cc_flag_temporal_radius_samples: int = 7
+    cc_flag_dedup_temporal_radius_samples: int = 7
+    cc_flag_spatial_dedup_radius_um: float | None = 50.0
+    cc_flag_radius_um: float = 200.0
+    cc_flag_chance_jitter_samples: int = 150
+    cc_flag_chance_draws: int = 2
 
     # deduplication control
     dedup_ms: float = 0.25
@@ -612,12 +636,12 @@ class FeaturizationConfig:
     """
 
     skip: bool = False
-    extract_radius: float = 100.0
+    extract_radius: float = 150.0
 
     # -- denoising configuration
     do_nn_denoise: bool = False
     do_tpca_denoise: bool = True
-    do_enforce_decrease: bool | Literal["loc_only"] = "loc_only"
+    do_enforce_decrease: Literal["yes", "no", "loc_only"] = "loc_only"
     # turn off features below
     denoise_only: bool = False
 
@@ -632,15 +656,20 @@ class FeaturizationConfig:
     save_amplitudes: bool = True
     save_amplitude_vectors: bool = False
     save_all_amplitudes: bool = False
+    # per-channel amplitudes of the output waveform, saved even under denoise_only.
+    # in the subtraction pipeline the output waveform is the one removed from the
+    # trace, so these describe what subtraction deposited on each channel.
+    output_amplitude_vectors: Literal["none", "ptp", "peak"] = "none"
     # localization runs on output waveforms
     do_localization: bool = True
     localization_radius: float = 100.0
     # these are saved always if do_localization
     localization_amplitude_type: Literal["peak", "ptp"] = "peak"
     localization_decay_power: int = 1
-    localization_model: Literal["pointsource", "dipole"] = "pointsource"
+    localization_model: Literal["pointsource", "dipole", "gaussian"] = "pointsource"
     nn_localization: bool = True
     additional_com_localization: bool = False
+    singlechan_denoised_amplitudes_and_localizations: bool = False
 
     # -- further info about denoising
     nn_denoiser_class_name: str = "Decollider"
@@ -678,6 +707,8 @@ class FeaturizationConfig:
 
 PeakSign = Literal["pos", "neg", "both"]
 
+WaveformKind = Literal["collisioncleaned", "denoised"]
+
 
 @cfg_dataclass
 class SubtractionConfig:
@@ -705,6 +736,8 @@ class SubtractionConfig:
     max_iter: int = 200
     whiten: bool = True
     threshold_before_whitening: float = 10.0
+    denoise_before_localization: bool = False
+    denoise_before_amplitudes: bool = False
     whiten_cfg: WhiteningConfig | None = WhiteningConfig(strategy="prewhiten_postapply")
 
     # how will waveforms be denoised before subtraction?
@@ -794,8 +827,6 @@ class MatchingConfig:
     always_keep_ptp: float = 10.0
     min_template_snr: float = 0.0
     min_template_count: int = 10
-    max_cc_flag_rate: float = 0.4
-    cc_flag_entropy_cutoff: float = 2.0
     depth_order: bool = True
     template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig()
     template_realignment_cfg: TemplateRealignmentConfig = TemplateRealignmentConfig()
@@ -920,12 +951,25 @@ default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 default_agglomerate_cfg = RefinementConfig(
     refinement_strategy="agglomerate",
     template_merge_cfg=TemplateMergeConfig(
-        merge_distance_threshold=0.6, linkage="single"
+        merge_distance_threshold=0.6, linkage="complete"
     ),
-    spikeinterface_merge_preset="none",
 )
-default_post_refinement_cfg = RefinementConfig(refinement_strategy="filter")
+default_post_refinement_cfg = RefinementConfig(
+    refinement_strategy="filter", cc_flag_excess_rate=0.3
+)
 default_post_refinement_cfgs = (default_post_refinement_cfg,)
+default_matching_streaming_classifier_cfg = FeaturizationConfig(
+    compute_input_tpca_projs_regardless=True,
+    save_input_tpca_projs=False,
+    use_gmm_classifier=True,
+    pre_gmm_clustering_cfg=None,
+    gmm_clustering_features_cfg=default_clustering_features_cfg,
+    gmm_refinement_cfg=default_refinement_cfg,
+)
+default_clean_cfg = RefinementConfig(
+    refinement_strategy="clean", template_merge_cfg=None
+)
+default_final_refinement_cfgs = (default_agglomerate_cfg, default_clean_cfg)
 
 
 @cfg_dataclass
@@ -945,7 +989,8 @@ class DARTsortInternalConfig:
     pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     refinement_cfg: RefinementConfig = default_refinement_cfg
     post_refinement_cfgs: Sequence[RefinementConfig] = default_post_refinement_cfgs
-    agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
+    final_refinement_cfgs: Sequence[RefinementConfig] = default_final_refinement_cfgs
+    clean_cfg: RefinementConfig | None = default_clean_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
     computation_cfg: ComputationConfig = default_computation_cfg
@@ -953,6 +998,7 @@ class DARTsortInternalConfig:
     # high level behavior
     detect_only: bool = False
     dredge_only: bool = False
+    fit_matching_models_only: bool = False
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     preprocessing: PreprocessingStrategy = "none"
     preprocessing_dtype: Literal["float16", "float32"] = "float32"
@@ -979,6 +1025,7 @@ class DARTsortInternalConfig:
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
+    save_full_final_residual: bool = False
     always_save_detailed_features: bool = False
     save_everything_on_error: bool = False
 
@@ -1047,6 +1094,10 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
         save_collidedness=save_collidedness,
         tpca_from_templates=cfg.tpca_from_templates,
+        singlechan_denoised_amplitudes_and_localizations=cfg.singlechan_denoised_amplitudes_and_localizations,
+        do_enforce_decrease=cfg.do_enforce_decrease,
+        save_amplitude_vectors=cfg.save_amplitude_vectors,
+        localization_model=cfg.localization_model,
     )
     if cfg.template_interp_kind == "tps":
         temp_interp_params = tps_interp_clampna_extrap_params
@@ -1090,6 +1141,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             input_waveforms_name="raw",
             output_waveforms_name="subtracted",
             save_output_waveforms=cfg.save_subtracted_waveforms,
+            output_amplitude_vectors=cfg.subtracted_amplitude_vectors,
             nn_denoiser_class_name=cfg.nn_denoiser_class_name,
             nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
             nn_denoiser_extra_kwargs=cfg.nn_denoiser_extra_kwargs,
@@ -1109,8 +1161,12 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             first_denoiser_noise_snips=cfg.nn_denoiser_noise_waveforms,
             first_denoiser_spatial_dedup_radius=cfg.first_denoiser_spatial_dedup_radius,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
+            save_iteration=cfg.save_subtraction_iteration,
+            save_residnorm_decrease=cfg.save_residnorm_decrease,
             temporal_dedup_radius_samples=cfg.temporal_dedup_radius_samples,
             positive_temporal_dedup_radius_samples=cfg.positive_temporal_dedup_radius_samples,
+            denoise_before_localization=cfg.denoise_before_localization,
+            denoise_before_amplitudes=cfg.denoise_before_amplitudes,
             whiten=cfg.whiten_in_subtraction,
             whiten_cfg=whiten_cfg,
         )
@@ -1161,10 +1217,10 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
         sigma_local=cfg.density_bandwidth,
-        sigma_regional=5 * cfg.density_bandwidth,
+        sigma_regional=cfg.density_regional,
         n_neighbors_search=cfg.n_neighbors_search or cfg.min_cluster_size,
-        outlier_radius=5 * cfg.density_bandwidth,
-        radius_search=5 * cfg.density_bandwidth,
+        outlier_radius=cfg.density_regional,
+        radius_search=cfg.density_regional,
         min_cluster_size=cfg.min_cluster_size,
         use_hellinger=cfg.use_hellinger,
         component_overlap=cfg.component_overlap,
@@ -1196,13 +1252,17 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     clustering_features_cfg = ClusteringFeaturesConfig(
         use_amplitude=cfg.initial_amp_feat,
         use_signed_amplitude=cfg.initial_signed_amp_feat,
-        n_main_channel_pcs=cfg.initial_pc_feats,
+        n_main_channel_pcs=cfg.initial_pc_feats
+        * int(cfg.initial_pc_kind in ("single", "mixed")),
+        n_multi_channel_pcs=cfg.initial_pc_feats
+        * int(cfg.initial_pc_kind in ("multi", "mixed")),
         pc_transform=cfg.initial_pc_transform,
         pc_scale=cfg.initial_pc_scale,
         pc_pre_transform_scale=cfg.initial_pc_pre_scale,
         motion_aware=cfg.motion_aware_clustering,
         interp_params=interp_params,
         feature_rank=cfg.temporal_pca_rank,
+        amplitude_kind=cfg.clustering_amplitude_kind,
     )
     sb = 1.0 + cfg.amplitude_scaling_boundary
     refinement_cfg = RefinementConfig(
@@ -1229,6 +1289,15 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         robust_strategy=cfg.robust_strategy,
         robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
         robust_fixed_power=cfg.robust_fixed_power,
+        kmeanspp_stop_rms=cfg.kmeanspp_stop_rms,
+        kmeanspp_tries=cfg.kmeanspp_tries,
+        kmeanspp_patience=cfg.kmeanspp_patience,
+        kmeanspp_greedy_proposals=cfg.kmeanspp_greedy_proposals,
+        kmeanspp_neighb_overlap=cfg.kmeanspp_neighb_overlap,
+        kmeanspp_selection=cfg.kmeanspp_selection,
+        kmeanspp_stopping=cfg.kmeanspp_stopping,
+        train_batch_size=cfg.gmm_batch_size,
+        eval_batch_size=cfg.gmm_batch_size,
         robust_df=cfg.robust_df,
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,
@@ -1312,75 +1381,83 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         tmpdir_parent=cfg.tmpdir_parent,
     )
 
-    # final aggregation
-    if cfg.agg_kind == "none":
-        agg_cfg = RefinementConfig(
-            refinement_strategy="agglomerate",
-            template_merge_cfg=None,
-            qda_force_merge_for_temp_dist_below=0.0,
-            dedup_ms=cfg.deduplication_ms,
-            spikeinterface_merge_preset="none",
-            spikeinterface_merge_max_distance=0.0,
-        )
-    elif cfg.agg_kind == "template_distance":
-        agg_whiten_cfg = WhiteningConfig(
-            strategy=cfg.agg_template_whiten_strategy,
-            estimator=cfg.whiten_estimator,
-            radius=cfg.subtraction_radius_um,
-            interp_params=temp_interp_params,
-        )
-        agg_tmcfg = TemplateMergeConfig(
+    agg_whiten_cfg = WhiteningConfig(
+        strategy=cfg.agg_template_whiten_strategy,
+        estimator=cfg.whiten_estimator,
+        radius=cfg.subtraction_radius_um,
+        interp_params=temp_interp_params,
+    )
+    agg_cfg = RefinementConfig(
+        refinement_strategy="agglomerate",
+        template_merge_cfg=TemplateMergeConfig(
             linkage=cfg.agg_template_linkage,
-            merge_distance_threshold=cfg.agg_no_qda_template_distance,
+            merge_distance_threshold=cfg.agg_max_template_distance,
             waveform_cfg=waveform_cfg,
             whitening=agg_whiten_cfg,
             template_cfg=replace(template_cfg, whitening=agg_whiten_cfg),
-        )
-        agg_cfg = RefinementConfig(
-            refinement_strategy="agglomerate",
-            template_merge_cfg=agg_tmcfg,
-            qda_threshold=0.0,
-            dedup_ms=cfg.deduplication_ms,
-            spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
-            spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
-        )
-    elif cfg.agg_kind == "qda":
-        agg_whiten_cfg = WhiteningConfig(
-            strategy=cfg.agg_template_whiten_strategy,
-            estimator=cfg.whiten_estimator,
-            radius=cfg.subtraction_radius_um,
-            interp_params=temp_interp_params,
-        )
-        agg_tmcfg = TemplateMergeConfig(
-            linkage=cfg.agg_qda_linkage,
-            merge_distance_threshold=cfg.agg_qda_max_template_distance,
-            waveform_cfg=waveform_cfg,
-            whitening=agg_whiten_cfg,
-            template_cfg=replace(template_cfg, whitening=agg_whiten_cfg),
-        )
-        agg_cfg = RefinementConfig(
-            refinement_strategy="agglomerate",
-            template_merge_cfg=agg_tmcfg,
-            qda_force_merge_for_temp_dist_below=cfg.agg_no_qda_template_distance,
-            dedup_ms=cfg.deduplication_ms,
-            spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
-            spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
-        )
+        ),
+        glom_force_merge_template_distance=cfg.agg_force_merge_template_distance,
+        glom_qda_overlap=cfg.agg_qda_overlap,
+        glom_qda_bimodality=cfg.agg_qda_bimodality,
+        glom_violation_ms=cfg.agg_violation_ms,
+        glom_jitter_ms=cfg.agg_jitter_ms,
+        glom_min_violation_evidence=cfg.agg_min_violation_evidence,
+        glom_violation_linkage=cfg.agg_violation_linkage,
+        glom_violation_threshold=cfg.agg_violation_threshold,
+        glom_veto_threshold=cfg.agg_veto_threshold,
+        glom_veto_min_evidence=cfg.agg_veto_min_evidence,
+    )
+
+    clean_cfg = RefinementConfig(
+        refinement_strategy="clean",
+        template_merge_cfg=None,
+        dedup_ms=cfg.deduplication_ms,
+    )
+
+    final_refinement_cfgs: tuple[RefinementConfig, ...]
+    if cfg.postprocessing == "agglomerate_and_clean":
+        final_refinement_cfgs = (agg_cfg, clean_cfg)
+    elif cfg.postprocessing == "agglomerate":
+        final_refinement_cfgs = (agg_cfg,)
+    elif cfg.postprocessing == "clean":
+        final_refinement_cfgs = (clean_cfg,)
     else:
-        raise ValueError(f"Unknown {cfg.agg_kind=}.")
+        panic(cfg.postprocessing)
 
     post_refinement_cfgs: list[RefinementConfig] = []
     if cfg.post_refinement_merge:
         assert pre_refinement_cfg is not None
         post_refinement_cfgs.append(pre_refinement_cfg)
-    if cfg.gmm_isolation_threshold or cfg.collision_cleaning_error_threshold:
-        post_refinement_cfgs.append(
-            RefinementConfig(
-                refinement_strategy="filter",
-                gmm_isolation_threshold=cfg.gmm_isolation_threshold,
-                collision_cleaning_error_threshold=cfg.collision_cleaning_error_threshold,
-            )
+    cc_flag_active = (
+        cfg.max_cc_flag_rate < 1.0 or cfg.cc_flag_excess_rate is not None
+    ) and isinstance(initial_detection_cfg, SubtractionConfig)
+    if (
+        cfg.gmm_isolation_threshold
+        or cfg.collision_cleaning_error_threshold
+        or cc_flag_active
+    ):
+        filter_cfg = RefinementConfig(
+            refinement_strategy="filter",
+            gmm_isolation_threshold=cfg.gmm_isolation_threshold,
+            collision_cleaning_error_threshold=cfg.collision_cleaning_error_threshold,
         )
+        if cc_flag_active:
+            filter_cfg = replace(
+                filter_cfg,
+                max_cc_flag_rate=cfg.max_cc_flag_rate,
+                cc_flag_entropy_cutoff=cfg.cc_flag_entropy_cutoff,
+                cc_flag_excess_rate=cfg.cc_flag_excess_rate,
+                cc_flag_chance_jitter_samples=cfg.cc_flag_chance_jitter_samples,
+                cc_flag_chance_draws=cfg.cc_flag_chance_draws,
+                cc_flag_temporal_radius_samples=(
+                    cfg.cc_flag_temporal_radius_samples
+                    or initial_detection_cfg.temporal_dedup_radius_samples
+                ),
+                cc_flag_dedup_temporal_radius_samples=initial_detection_cfg.temporal_dedup_radius_samples,
+                cc_flag_spatial_dedup_radius_um=initial_detection_cfg.spatial_dedup_radius_um,
+                cc_flag_radius_um=initial_detection_cfg.subtract_radius_um,
+            )
+        post_refinement_cfgs.append(filter_cfg)
 
     return DARTsortInternalConfig(
         waveform_cfg=waveform_cfg,
@@ -1392,7 +1469,8 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
         post_refinement_cfgs=tuple(post_refinement_cfgs),
-        agglomerate_cfg=agg_cfg,
+        final_refinement_cfgs=final_refinement_cfgs,
+        clean_cfg=clean_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,
         clustering_features_cfg=clustering_features_cfg,
@@ -1402,6 +1480,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         preprocessing_dtype=cfg.preprocessing_dtype,
         detection_type=cfg.detection_type,
         dredge_only=cfg.dredge_only,
+        fit_matching_models_only=cfg.fit_matching_models_only,
         matching_iterations=cfg.matching_iterations,
         recluster_after_matching=cfg.recluster_after_matching,
         work_in_tmpdir=cfg.work_in_tmpdir,
@@ -1412,6 +1491,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         save_intermediate_labels=cfg.save_intermediates,
         save_intermediate_features=cfg.save_intermediates,
         save_final_features=cfg.save_final_features,
+        save_full_final_residual=cfg.save_full_final_residual,
         save_everything_on_error=cfg.save_everything_on_error,
         link_from=cfg.link_from,
         link_step=cfg.link_step,
@@ -1429,7 +1509,7 @@ unshifted_raw_template_cfg = TemplateConfig(
 )
 waveforms_only_featurization_cfg = FeaturizationConfig(
     do_tpca_denoise=False,
-    do_enforce_decrease=False,
+    do_enforce_decrease="no",
     save_input_tpca_projs=False,
     save_amplitudes=False,
     do_localization=False,

@@ -100,8 +100,14 @@ class BufGetter:
         raise AttributeError(f"BufGetter didn't find {key=}.")
 
 
-def cleanup_and_log_gpu_usage(computation_cfg: "ComputationConfig", message=""):
-    dev = computation_cfg.actual_device()
+def cleanup_and_log_gpu_usage(
+    computation_cfg: "ComputationConfig | None",
+    message="",
+    dev: torch.device | None = None,
+):
+    if dev is None:
+        assert computation_cfg is not None
+        dev = computation_cfg.actual_device()
     gc.collect()
 
     if dev.type != "cuda":

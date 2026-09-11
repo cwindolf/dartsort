@@ -93,7 +93,7 @@ def test_all_transformers():
     # one long pipeline, and try running its fit and forward
     h = dense_layout()
     geom = np.c_[h["x"], h["y"]]
-    channel_index = make_channel_index(geom, 100)
+    channel_index = make_channel_index(geom, 150)
     rg = np.random.default_rng(0)
     n_spikes = 1001
     spike_length_samples = 121

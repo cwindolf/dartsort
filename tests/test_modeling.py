@@ -10,7 +10,7 @@ from dartsort.util.internal_config import ClusteringFeaturesConfig, RefinementCo
 from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
 from dartsort.util.motion import MotionInfo
-from dartsort.util.spiketorch import spawn_torch_rg
+from dartsort.util.spiketorch import get_relative_index, spawn_torch_rg
 from dartsort.util.testing_util import mixture_testing_util
 
 logger = get_logger(__name__)
@@ -200,8 +200,8 @@ def test_truncated_mixture(
                     min_channel_count=tmm.p.min_channel_count,
                 )
                 assert kmeans_responsibliities is not None
-                split_model, _, _, any_discarded, _, _ = (
-                    mixture.TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
+                split_model, _, _, any_discarded, _, _, _ = (
+                    mixture.TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
                         data=split_data,
                         responsibilities=kmeans_responsibliities,
                         p=tmm.p,
@@ -488,6 +488,141 @@ def test_tree_groups(K, dist_kind, max_group_size, max_distance, link):
         min_dist = dist[*torch.triu_indices(*dist.shape, offset=1)].amin()
         if min_dist <= max_distance:
             assert max(g.numel() for g in groups) > 1
+
+
+# -- kmeans++ initialization
+
+
+def test_neighb_relative_index():
+    nc = 5
+    neighborhoods = torch.tensor([[0, 1, 2], [2, 3, 4], [1, 4, nc]])
+    rel_inds = mixture._neighb_relative_index(neighborhoods, nc)
+
+    # channel 2 is neighborhood 1's first channel and neighborhood 0's third
+    assert rel_inds[1, 2] == 0
+    assert rel_inds[0, 2] == 2
+    # unobserved channels, and the pad channel, get the invalid position
+    assert rel_inds[0, 3] == 3
+    assert rel_inds[2, nc] == 3
+
+    for a in range(len(neighborhoods)):
+        for b in range(len(neighborhoods)):
+            # get_relative_index reads its pad sentinel off shape[0], so hand it
+            # one row per channel. they are all the same, so take the first back.
+            expected = get_relative_index(
+                neighborhoods[b][None].expand(nc, -1).contiguous(),
+                neighborhoods[a][None].expand(nc, -1).contiguous(),
+            )[0]
+            assert torch.equal(rel_inds[b][neighborhoods[a]], expected)
+
+
+def test_index_spikes_by_neighborhood():
+    ids = torch.tensor([2, 0, 2, 1, 2, 0])
+    order, indptr, counts = mixture._sort_to_compressed_neighborhood_sparse(ids, 4)
+
+    assert counts.tolist() == [2, 1, 3, 0]
+    assert indptr.tolist() == [0, 2, 3, 6, 6]
+    for j in range(4):
+        members = order[indptr[j] : indptr[j + 1]]
+        assert members.tolist() == (ids == j).nonzero()[:, 0].tolist()
+
+    got = mixture._neighborhood_members_ordered(order, indptr, counts, torch.tensor([2, 0]))
+    assert got.tolist() == [0, 2, 4, 1, 5]
+    empty = mixture._neighborhood_members_ordered(order, indptr, counts, torch.tensor([3]))
+    assert empty.numel() == 0
+
+
+def _reference_overlap_distsq(X, neighborhoods, neighborhood_ids, feat_rank, i, j):
+    ci = neighborhoods[neighborhood_ids[i]].tolist()
+    cj = neighborhoods[neighborhood_ids[j]].tolist()
+    shared = sorted(set(ci) & set(cj))
+    if not shared:
+        return torch.inf
+    xi = X[i].view(feat_rank, -1)[:, [ci.index(c) for c in shared]]
+    xj = X[j].view(feat_rank, -1)[:, [cj.index(c) for c in shared]]
+    return ((xi - xj) ** 2).sum().item() / (feat_rank * len(shared))
+
+
+def test_truncated_kmeanspp_step():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    gen = spawn_torch_rg(SEED, device=device)
+    nc, width, feat_rank, n = 8, 4, 2, 64
+
+    # sliding window neighbs
+    starts = torch.arange(nc - width + 1, device=device)
+    neighborhoods = starts[:, None] + torch.arange(width, device=device)[None, :]
+    n_neighb = neighborhoods.shape[0]
+    ids = torch.arange(n, device=device) % n_neighb
+    X = torch.randn(n, feat_rank * width, device=device, generator=gen)
+
+    rel_inds = mixture._neighb_relative_index(neighborhoods, nc)
+    obs = (rel_inds < width).to(X)
+    visible = (obs @ obs.T) > 0
+    order, indptr, counts = mixture._sort_to_compressed_neighborhood_sparse(ids, n_neighb)
+
+    centroids = (0, n_neighb)
+    distsq = X.new_full((n,), torch.inf)
+    for c in centroids:
+        ix, d = mixture._truncated_kmeanspp_propose(
+            X=X,
+            centroid_ix=torch.tensor(c, device=device),
+            Xneighbixs=ids,
+            neighborhoods=neighborhoods,
+            neighb_rel_inds=rel_inds,
+            visible=visible,
+            order=order,
+            indptr=indptr,
+            counts=counts,
+            feat_rank=feat_rank,
+        )
+        if d is not None:
+            mixture._truncated_kmeanspp_commit_(distsq, ix, d)
+
+    assert distsq.isfinite().any()
+    assert distsq.isinf().any()
+
+
+@pytest.mark.parametrize("stopping", ["patience", "dpmeanspp"])
+@pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
+def test_truncated_kmeanspp(mini_simulations, sim_name, stopping):
+    sim = mini_simulations[sim_name]
+    sorting = sim["sorting"]
+    gt_labels = sorting.labels
+    unlabeled = sorting.ephemeral_replace(labels=np.full_like(gt_labels, -1))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    refinement_cfg = RefinementConfig(kmeanspp_stop_rms=3.0, kmeanspp_stopping=stopping)
+    _, _, train_data, _, _, _, train_ixs, _ = mixture.get_truncated_datasets(
+        sorting=unlabeled,
+        motion=sim["motion"],
+        clustering_features_cfg=ClusteringFeaturesConfig(),
+        refinement_cfg=refinement_cfg,
+        device=device,
+        rg=0,
+    )
+    labels = train_data.candidates[:, 0].numpy(force=True)
+    train_ixs = train_ixs.numpy(force=True)
+
+    assert labels.shape == train_ixs.shape
+    assert (labels >= 0).all()
+    assert np.array_equal(np.unique(labels), np.arange(labels.max() + 1))
+
+    # check good precision
+    gt = gt_labels[train_ixs]
+    match, precs, sizes = [], [], []
+    for k in np.unique(labels):
+        in_k = gt[(labels == k) & (gt >= 0)]
+        if not in_k.size:
+            continue
+        units, counts = np.unique(in_k, return_counts=True)
+        match.append(units[counts.argmax()])
+        precs.append(counts.max() / counts.sum())
+        sizes.append(in_k.size)
+    precs, sizes = np.array(precs), np.array(sizes)
+
+    # good prec, good coverage
+    assert (precs * sizes).sum() / sizes.sum() > 0.85
+    assert np.unique(match).size >= 0.9 * np.unique(gt[gt >= 0]).size
 
 
 # fmt: off

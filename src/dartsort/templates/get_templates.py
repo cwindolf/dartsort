@@ -198,11 +198,11 @@ def get_templates(
     if pitch_shifts is None and motion.drifting:
         try:
             spike_depths_um = getattr(sorting, localizations_dataset_name)[:, 2]
-        except AttributeError:
+        except AttributeError as e:
             raise ValueError(
                 "Sorting must contain localizations in the attribute "
                 f"{localizations_dataset_name=} when computing registered templates."
-            )
+            ) from e
         spike_times_s = getattr(sorting, times_s_dataset_name)
         _, pitch_shifts = motion.pitch_shifts(
             times_s=spike_times_s, depths_um=spike_depths_um
@@ -533,7 +533,6 @@ def _template_process_init(
     units_per_job,
     dtype,
 ):
-    global _template_process_context
 
     rank = rank_queue.get()
     if device is None:
@@ -581,7 +580,7 @@ def _template_job(unit_ids):
     in_units = np.empty(n_spikes_grab, dtype=in_units_full.dtype)
     labels = np.empty(n_spikes_grab, dtype=labels_full.dtype)
     offset = 0
-    for u, c in zip(uids, counts):
+    for u, c in zip(uids, counts, strict=True):
         if c > p.spikes_per_unit:
             in_unit = p.rg.choice(
                 in_units_full[labels_full == u],
@@ -681,7 +680,7 @@ def _template_job(unit_ids):
                 )
             counts.append(in_unit.size)
     snrs_by_chan = np.array(
-        [ptp(rt, 0) * np.sqrt(c) for rt, c in zip(raw_templates, counts)]
+        [ptp(rt, 0) * np.sqrt(c) for rt, c in zip(raw_templates, counts, strict=True)]
     )
     counts_by_chan = np.array(counts)
     if counts_by_chan.ndim == 1:

@@ -1,12 +1,10 @@
 import gc
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
 import torch
-from scipy.sparse import coo_array
-from scipy.spatial import KDTree
 from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
 
@@ -14,7 +12,6 @@ from ..util.data_util import DARTsortSorting, apply_label_remapping_in_place
 from ..util.internal_config import (
     ComputationConfig,
     FeaturizationConfig,
-    SubtractionConfig,
     TemplateConfig,
     TemplateMergeConfig,
     TemplateRealignmentConfig,
@@ -42,8 +39,6 @@ def estimate_template_library(
     min_template_ptp: float = 0.0,
     always_keep_ptp: float = 0.0,
     min_template_count: int = 0,
-    max_cc_flag_rate: float = 1.0,
-    cc_flag_entropy_cutoff: float = 0.0,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     template_cfg: TemplateConfig = default_template_cfg,
     realign_cfg: TemplateRealignmentConfig | None = None,
@@ -53,7 +48,6 @@ def estimate_template_library(
     computation_cfg: ComputationConfig | None = None,
     fit_featurization_tsvd: bool = False,
     featurization_cfg: FeaturizationConfig | None = None,
-    detection_cfg: Any | None = None,
     depth_order: bool = False,
     template_npz_path=None,
 ) -> tuple[DARTsortSorting, TemplateData]:
@@ -107,10 +101,7 @@ def estimate_template_library(
         min_template_count=min_template_count,
         min_template_snr=min_template_snr,
         min_template_ptp=min_template_ptp,
-        max_cc_flag_rate=max_cc_flag_rate,
         always_keep_ptp=always_keep_ptp,
-        cc_flag_entropy_cutoff=cc_flag_entropy_cutoff,
-        detection_cfg=detection_cfg,
         template_cfg=template_cfg,
     )
 
@@ -274,10 +265,7 @@ def mask_out_units(
     min_template_count: int,
     min_template_snr: float,
     min_template_ptp: float,
-    max_cc_flag_rate: float,
     always_keep_ptp: float | None,
-    cc_flag_entropy_cutoff: float,
-    detection_cfg,
     template_cfg,
 ):
     mask = None
@@ -302,17 +290,6 @@ def mask_out_units(
         assert templates0 is not None
         amp = ptp(templates0.templates).max(1)
         mask |= amp >= always_keep_ptp
-
-    if max_cc_flag_rate < 1.0:
-        m = cc_flag_criterion(
-            sorting,
-            detection_cfg,
-            max_cc_flag_rate,
-            cc_flag_entropy_cutoff,
-            amplitudes_dataset_name=template_cfg.amplitudes_dataset_name,
-        )
-        if m is not None:
-            mask = np.logical_and(mask, m) if mask is not None else m.copy()
 
     if mask is None:
         return sorting, templates0
@@ -453,6 +430,7 @@ def _handle_merge(
             computation_cfg=computation_cfg,
             waveform_cfg=waveform_cfg,
             refinement_cfg=None,
+            in_place=False,
         )
         new_unit_ids = agg.merge_mapping
         sorting = agg.agglomerated_sorting
@@ -606,99 +584,3 @@ def filter_by_unit_mask(
     sorting.labels[chuck] = -1
 
     return sorting.flatten()
-
-
-def flag_possible_cc_error_spikes(
-    sorting: DARTsortSorting,
-    subtraction_cfg: SubtractionConfig,
-    amplitudes_dataset_name="denoised_ptp_amplitudes",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    times = sorting.times_samples
-    channels = sorting.channels
-    amps = getattr(sorting, amplitudes_dataset_name)
-    xy = sorting.geom[channels]
-    n = len(times)
-
-    # rescale units so that the max allowed temporal and spatial dists are 10
-    times = times / subtraction_cfg.temporal_dedup_radius_samples
-    xy_subtract = xy / subtraction_cfg.subtract_radius_um
-    kdt_subtract = KDTree(np.c_[times, xy_subtract])
-
-    # get all possible neighbors
-    sdm = kdt_subtract.sparse_distance_matrix(
-        kdt_subtract, max_distance=1.0, p=np.inf, output_type="ndarray"
-    )
-    # this is more an adjacency matrix. 0s will be discarded later.
-    v = np.ones(sdm["i"].shape, dtype=np.float32)
-    coo = coo_array((v, (sdm["i"], sdm["j"])), shape=(n, n), dtype=v.dtype)
-
-    # remove the exclusions by marking their distance as large
-    if subtraction_cfg.spatial_dedup_radius_um:
-        xy_dedup = xy / subtraction_cfg.spatial_dedup_radius_um
-        kdt_dedup = KDTree(np.c_[times, xy_dedup])
-        sdm_dedup = kdt_dedup.sparse_distance_matrix(
-            kdt_dedup, max_distance=1.0, p=np.inf, output_type="ndarray"
-        )
-        del kdt_dedup, xy_dedup
-        v = np.ones(sdm_dedup["i"].shape, dtype=np.float32)
-        coo_dedup = coo_array(
-            (v, (sdm_dedup["i"], sdm_dedup["j"])), shape=(n, n), dtype=v.dtype
-        )
-        coo = coo - coo_dedup
-        coo = coo.tocoo()
-
-        # dedup neighbors are removed
-        coo.sum_duplicates()
-        coo.eliminate_zeros()
-
-    # apply higher amplitude criterion
-    bigger = np.flatnonzero(amps[coo.coords[0]] > amps[coo.coords[1]])
-    coo.data[bigger] = 0.0
-    coo.eliminate_zeros()
-
-    # i am suspicious if i have any neighbors. obviously many spikes do.
-    # it's just that a unit consisting entirely of such spikes is suspicious.
-    flagged = np.zeros(len(times), dtype=bool)
-    ii, jj = coo.coords
-    flagged[ii] = True
-
-    return flagged, ii, jj
-
-
-def cc_flag_criterion(
-    sorting: DARTsortSorting,
-    detection_cfg: Any | None = None,
-    max_cc_flag_rate=1.0,
-    cc_flag_entropy_cutoff=0.0,
-    amplitudes_dataset_name="denoised_ptp_amplitudes",
-) -> np.ndarray | None:
-    if max_cc_flag_rate == 1.0:
-        return None
-    if not isinstance(detection_cfg, SubtractionConfig):
-        # this step applied only at subtraction to clean up nn error units
-        return None
-
-    flagged, ii, jj = flag_possible_cc_error_spikes(
-        sorting=sorting,
-        subtraction_cfg=detection_cfg,
-        amplitudes_dataset_name=amplitudes_dataset_name,
-    )
-    assert sorting.labels is not None
-    li = sorting.labels[ii]
-    lj = sorting.labels[jj]
-
-    rate = np.zeros(sorting.unit_ids.shape)
-    entropy = np.zeros_like(rate)
-    for j, u in enumerate(sorting.unit_ids):
-        inu = np.flatnonzero(sorting.labels == u)
-        rate[j] = flagged[inu].mean()
-        _, friend_count = np.unique(lj[li == u], return_counts=True)
-        friend_p = friend_count / friend_count.sum()
-        entropy[j] = -(np.log(friend_p) * friend_p).sum()
-
-    bad = (rate > max_cc_flag_rate) & (entropy < cc_flag_entropy_cutoff)
-    logger.dartsortdebug(
-        f"CCG peak criterion flagged {bad.sum().item()} "
-        f"units ({sorting.unit_ids[np.flatnonzero(bad)].tolist()})."
-    )
-    return np.logical_not(bad)

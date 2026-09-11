@@ -6,6 +6,7 @@ import torch
 from sklearn.decomposition import PCA, TruncatedSVD
 
 from ..util.internal_config import WaveformConfig, default_waveform_cfg
+from ..util.py_util import panic
 from ..util.spiketorch import svd_lowrank_helper
 from ..util.waveform_util import (
     channel_subset_by_radius,
@@ -36,7 +37,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         whiten=False,
         centered=False,
         fit_radius=None,
-        random_state=0,
+        random_seed=0,
         name=None,
         name_prefix="",
         temporal_slice: slice | None = None,
@@ -69,7 +70,7 @@ class BaseTemporalPCA(BaseWaveformModule):
 
         # fit control
         self.fit_radius = fit_radius
-        self.random_state = random_state
+        self.random_seed = random_seed
         self.n_oversamples = n_oversamples
         self.niter = niter
         self.fit_dtype = fit_dtype
@@ -87,7 +88,12 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def _other_pre_load_state(self, state_dict, prefix):
         extra_state = state_dict[f"{prefix}_extra_state"]
-        self.rank = extra_state["rank"]
+        rank = extra_state["rank"]
+        if self.rank != rank and hasattr(self, "components"):
+            self.b.whitener.resize_((rank,))
+            self.b.components.resize_((rank, *self.b.components.shape[1:]))
+        self.rank = rank
+        self.shape = (self.rank, self.b.channel_index.shape[1])
 
     def fit(
         self,
@@ -98,13 +104,13 @@ class BaseTemporalPCA(BaseWaveformModule):
         channels,
         **spike_data,
     ):
-        weights = spike_data.get("weights", None)
-        time_shifts = spike_data.get("time_shifts", None)
+        weights = spike_data.get("weights")
+        time_shifts = spike_data.get("time_shifts")
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
         del spike_data
-        rg = np.random.default_rng(self.random_state)
+        rg = np.random.default_rng(self.random_seed)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
             weights = weights.astype(np.float64)
@@ -148,20 +154,24 @@ class BaseTemporalPCA(BaseWaveformModule):
         else:
             M = None
 
-        _, components, _, whitener = svd_lowrank_helper(
-            x=waveforms_fit,
-            rank=self.rank,
-            n_oversamples=self.n_oversamples,
-            fit_dtype=self.fit_dtype,
-            niter=self.niter,
-            M=M,
-            with_loadings=False,
-            device=self.b.channel_index.device,
-        )
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(self.random_seed)
+            _, components, _, whitener = svd_lowrank_helper(
+                x=waveforms_fit,
+                rank=self.rank,
+                n_oversamples=self.n_oversamples,
+                fit_dtype=self.fit_dtype,
+                niter=self.niter,
+                M=M,
+                with_loadings=False,
+                device=self.b.channel_index.device,
+            )
 
         self.b.mean.copy_(mean)
         self.b.components.copy_(components)
         self.b.whitener.copy_(whitener)
+        self.rank = components.shape[0]
+        self.shape = (self.rank, self.b.channel_index.shape[1])
         self._needs_fit = False
 
     def needs_fit(self):
@@ -307,7 +317,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         rank = min(trim_rank_to, self.rank) if trim_rank_to else self.rank
         pca = PCA(
             n_components=rank,
-            random_state=self.random_state,
+            random_state=self.random_seed,
             whiten=self.whiten,
         )
         pca.mean_ = self.b.mean.numpy(force=True)
@@ -333,8 +343,8 @@ class BaseTemporalPCA(BaseWaveformModule):
         elif isinstance(pca, TruncatedSVD):
             whiten = False
         else:
-            assert False
-        rank = cast(int, getattr(pca, "n_components"))
+            panic(type(pca))
+        rank = cast(int, pca.n_components)
         if trim_rank_to:
             rank = min(rank, trim_rank_to)
         self = cls(
@@ -447,7 +457,7 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         dev = waveforms.device
         channels_in_probe, waveforms_in_probe = get_channels_in_probe(
-            waveforms, channels.to(device=dev), self.channel_index.to(device=dev)
+            waveforms, channels.to(device=dev), self.b.channel_index.to(device=dev)
         )
         waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
         return set_channels_in_probe(waveforms_in_probe, waveforms, channels_in_probe)

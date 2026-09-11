@@ -1,6 +1,7 @@
 import math
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, cast
+from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,6 +13,7 @@ from tqdm.auto import tqdm
 
 from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
 from ..clustering.mixture import (
+    MixtureModelAndDatasets,
     NeighborhoodLUT,
     Scores,
     StreamingSpikeData,
@@ -165,7 +167,8 @@ class MixtureVisData:
         self, unit_id: int, count=128
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         inu_train, chans = self.train_inds_and_chans(unit_id, count=count)
-        features = self.train_data.x[inu_train]
+        features = self.train_data.dense_slice(torch.asarray(inu_train)).x()
+        assert features is not None
         waveforms = self.reconstruct_flat(features)
         features = features.numpy(force=True)
         return inu_train, chans, features, waveforms
@@ -976,20 +979,27 @@ class SplitView(MixtureComponentPlot):
         bail_color="k",
         vis_radius=50.0,
         dist_cmap="plasma",
+        manual_group=None,
+        keep_original_components=False,
+        fix_responsibilities=None,
     ):
         self.colors = np.array(colors)
         self.bail_color = bail_color
         self.vis_radius = vis_radius
         self.dist_cmap = plt.get_cmap(dist_cmap)
+        self.manual_group = manual_group
+        self.keep_original_components = keep_original_components
+        self.fix_responsibilities = fix_responsibilities
 
     def compute(
         self, mix_data: MixtureVisData, unit_id: int, split_res=None, debug_info=None
     ):
         # my group...
-        if mix_data.tmm.p.split_friend_distance:
-            _, friends = mix_data.friends(
-                unit_id, count=mix_data.tmm.p.max_group_size, me_last=False
-            )
+        if self.manual_group is not None:
+            group = torch.tensor(self.manual_group)
+        elif mix_data.tmm.p.split_friend_distance:
+            groupsize = max(1, mix_data.tmm.p.split_k - 1) - 1
+            _, friends = mix_data.friends(unit_id, count=groupsize, me_last=False)
             friends = torch.as_tensor(friends)
             D = mix_data.inf_diag_unit_distance_matrix[friends][:, friends].clone()
             D.fill_diagonal_(0.0)
@@ -1012,6 +1022,8 @@ class SplitView(MixtureComponentPlot):
                 train_labels=torch.asarray(mix_data.train_labels),
                 eval_labels=mix_data.eval_labels,
                 debug=True,
+                keep_original_components=self.keep_original_components,
+                fix_responsibilities=self.fix_responsibilities,
             )
         else:
             if split_res is not None:
@@ -1024,7 +1036,7 @@ class SplitView(MixtureComponentPlot):
             orig_labels = None
 
         if debug_info.split_data is not None:
-            n_spikes = debug_info.split_data.x.shape[0]
+            n_spikes = debug_info.split_data.N
         else:
             n_spikes = 0
 
@@ -1053,9 +1065,9 @@ class SplitView(MixtureComponentPlot):
 
         # compute amplitudes
         if debug_info.split_data is not None:
-            x = debug_info.split_data.x.view(
-                n_spikes, -1, mix_data.tmm.neighb_cov.max_nc_obs
-            )
+            x = debug_info.split_data.x()
+            assert x is not None
+            x = x.view(n_spikes, -1, mix_data.tmm.neighb_cov.max_nc_obs)
             t = mix_data.train_times[debug_info.split_data.indices.cpu()]
             amps = x.square().sum(dim=1).amax(dim=1).sqrt_().numpy(force=True)
         else:
@@ -1421,6 +1433,13 @@ def fit_mixture_for_vis(
         run_merge(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
         mix_data.tmm.em(mix_data.train_data)
 
+    return mixture_vis_data(mix_data=mix_data, sorting=sorting, motion=motion)
+
+
+def mixture_vis_data(
+    *, mix_data: MixtureModelAndDatasets, sorting: DARTsortSorting, motion
+) -> MixtureVisData:
+    assert mix_data.full_data is not None
     train_scores = mix_data.tmm.soft_assign(
         data=mix_data.train_data,
         needs_bootstrap=False,
@@ -1631,9 +1650,7 @@ def _summary_init(*args):
 
 
 def _summary_job(unit_id):
-    global _summary_job_context
     assert _summary_job_context is not None
-    tmp_out = None
     try:
         ext = _summary_job_context.image_ext
         tmp_out = _summary_job_context.save_folder / f"tmp_unit{unit_id:04d}.{ext}"
@@ -1752,7 +1769,7 @@ def vis_split_interpolation(
         whiten=whiten,
     )
 
-    n_spikes = split_data.x.shape[0]
+    n_spikes = split_data.N
     assert kmeans_x is not None
     assert kmeans_x.shape[0] == n_spikes
     assert kmeans_chans is not None
@@ -1783,8 +1800,13 @@ def vis_split_interpolation(
     # original observed waveforms
     orig_wfs = []
     orig_chans = []
+    if whiten:
+        orig_x = split_data.whitenedx
+    else:
+        orig_x = split_data.x()
+        assert orig_x is not None
     for vix in vis_ix:
-        f = (split_data.whitenedx if whiten else split_data.x)[vix]
+        f = orig_x[vix]
         f = mix_data.reconstruct_flat(f)
         orig_wfs.append(f)
         orig_chans.append(
@@ -1880,7 +1902,9 @@ def vis_obs_interpolation(
             params=ip,
         )
 
-    features = {"actual": mix_data.train_data.x[trix]}
+    actual_x = mix_data.train_data.dense_slice(trix).x()
+    assert actual_x is not None
+    features = {"actual": actual_x}
     origf = mix_data.sorting.slice_feature_by_name(
         "collisioncleaned_tpca_features", fix
     )

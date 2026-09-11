@@ -22,9 +22,12 @@ from spikeinterface.core.sparsity import estimate_sparsity
 
 from ..detect import detect_and_deduplicate
 from .internal_config import (
+    ComputationConfig,
+    InterpolationParams,
     TemplateConfig,
     TemplateMergeConfig,
     WaveformConfig,
+    WaveformKind,
     default_clustering_features_cfg,
     default_waveform_cfg,
 )
@@ -355,9 +358,6 @@ class DARTsortSorting:
 
         if template_data is not None:
             td_ext = ComputeTemplates(analyzer)
-            assert np.array_equal(
-                template_data.unit_ids, np.arange(len(template_data.unit_ids))
-            )
             s_before = template_data.trough_offset_samples
             s_after = template_data.spike_length_samples - s_before
             ms_per_sample = 1000.0 / self.sampling_frequency
@@ -946,44 +946,55 @@ class DARTsortSorting:
             remap = flatten_remapping(old_unique)
             apply_label_remapping_in_place(new_labels, remap)
 
-        keys = ("merged_candidates", "gmm_candidates")
-        if not include_gmm_properties or not any(self.has_dataset(k) for k in keys):
+        if not include_gmm_properties:
             return self.ephemeral_replace(labels=new_labels)
 
-        new_props = dict(labels=new_labels)
-        for k in keys:
-            if in_place and self.has_dataset_on_disk_not_loaded(k):
+        new_props: dict[str, np.ndarray] = dict(labels=new_labels)
+        new_props.update(
+            self.remap_gmm_properties(remap, new_K=new_K, in_place=in_place)
+        )
+        return self.ephemeral_replace(**new_props)
+
+    def remap_gmm_properties(
+        self,
+        remap: np.ndarray,
+        *,
+        new_K: int,
+        in_place: bool,
+        prefixes=("merged", "gmm"),
+    ) -> dict[str, np.ndarray]:
+        """Apply `remap` to GMM candidates, optionally in-place
+
+        Candidates not in [0, new_K) -- eg "ghost" units, which are not
+        top candidates but still exist in the lower ranks -- have their
+        probability added to the noise component.
+        """
+        for prefix in prefixes:
+            cand_key = f"{prefix}_candidates"
+            if in_place and self.has_dataset_on_disk_not_loaded(cand_key):
                 assert self.parent_h5_path is not None
-                _gmm_remap_on_disk(self.parent_h5_path, remap, prefix=k.split("_")[0])
-                break
-            if not self.has_dataset(k):
+                _gmm_remap_on_disk(self.parent_h5_path, remap, prefix=prefix)
+                return {}
+            if not self.has_dataset(cand_key):
                 continue
-            candidates = getattr(self, k)
-            assert candidates is not None
 
-            new_candidates = candidates if in_place else candidates.copy()
-            apply_label_remapping_in_place(new_candidates, remap, allow_over=True)
-
-            # now, "ghost" units (not top candidates but still existing
-            # in the lower ranks) can have some probability mass that
-            # needs to be deleted.
-            resp_key = k.replace("candidates", "responsibilities")
-            resps = getattr(self, resp_key)
-            loglik_key = k.replace("candidates", "log_liks")
-            logliks = getattr(self, loglik_key)
+            resp_key = f"{prefix}_responsibilities"
+            loglik_key = f"{prefix}_log_liks"
+            candidates = cast(np.ndarray, getattr(self, cand_key))
+            resps = cast(np.ndarray, getattr(self, resp_key))
+            logliks = cast(np.ndarray, getattr(self, loglik_key))
             if not in_place:
+                candidates = candidates.copy()
                 resps = resps.copy()
                 logliks = logliks.copy()
-            vacuum_neg_candidate_prob(new_K, new_candidates, resps, logliks)
 
-            new_props[k] = new_candidates
-            new_props[resp_key] = resps
-            new_props[loglik_key] = logliks
+            apply_label_remapping_in_place(candidates, remap, allow_over=True)
+            vacuum_neg_candidate_prob(new_K, candidates, resps, logliks)
 
             # if "merged" were present, then labels don't match "gmm"
-            break
+            return {cand_key: candidates, resp_key: resps, loglik_key: logliks}
 
-        return self.ephemeral_replace(**new_props)
+        return {}
 
     def __str__(self):
         name = self.__class__.__name__
@@ -1142,7 +1153,13 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
             labels_npy = f.parent / f"{labels_stem}.npy"
 
         if not labels_npy.exists():
-            raise ValueError(f"{labels_npy} does not exist.")
+            parent = f if f.is_dir() else f.parent
+            glb = list(parent.glob(f"*{labels_stem}*.npy"))
+            if len(glb) < 1:
+                raise ValueError(f"{labels_npy} not found.")
+            elif len(glb) > 1:
+                raise ValueError(f"Ambiguous {labels_stem=} matched {labels_npy}.")
+            labels_npy = glb[0]
         labels = np.load(labels_npy)
         if not labels.shape == st.channels.shape:
             raise ValueError(
@@ -1216,17 +1233,43 @@ def _get_featurization_loading_meta(sorting):
     return geom, channel_index, model_dir
 
 
-def get_featurization_pipeline(sorting, featurization_pipeline_pt=None, motion=None):
+def featurization_pipeline_path(
+    model_dir: Path, waveform_kind: WaveformKind = "collisioncleaned"
+) -> Path | None:
+    pt = model_dir / f"{waveform_kind}_featurization_pipeline.pt"
+    if pt.exists():
+        return pt
+    unprefixed = model_dir / "featurization_pipeline.pt"
+    if waveform_kind == "collisioncleaned" and unprefixed.exists():
+        return unprefixed
+    return None
+
+
+def _ensure_featurization_pipeline_pt(
+    featurization_pipeline_pt, model_dir: Path, waveform_kind: WaveformKind
+) -> Path:
+    if featurization_pipeline_pt is None:
+        featurization_pipeline_pt = featurization_pipeline_path(
+            model_dir, waveform_kind
+        )
+    if featurization_pipeline_pt is None or not featurization_pipeline_pt.exists():
+        raise ValueError(f"No {waveform_kind} pipeline in {model_dir}.")
+    return featurization_pipeline_pt
+
+
+def get_featurization_pipeline(
+    sorting,
+    featurization_pipeline_pt=None,
+    motion=None,
+    waveform_kind: WaveformKind = "collisioncleaned",
+):
     """Look for the pipeline in the usual place."""
     from dartsort.transform import WaveformPipeline
 
     geom, _channel_index, model_dir = _get_featurization_loading_meta(sorting)
-
-    if featurization_pipeline_pt is None:
-        featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
-
-    if not featurization_pipeline_pt.exists():
-        raise ValueError(f"No file at {featurization_pipeline_pt=}")
+    featurization_pipeline_pt = _ensure_featurization_pipeline_pt(
+        featurization_pipeline_pt, model_dir, waveform_kind
+    )
 
     pipeline = WaveformPipeline.from_state_dict_pt(
         geom, featurization_pipeline_pt, motion
@@ -1234,13 +1277,19 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None, motion=N
     return pipeline
 
 
-def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=None):
+def get_tpca(
+    sorting,
+    name_prefix="collisioncleaned",
+    featurization_pipeline_pt=None,
+    waveform_kind: WaveformKind = "collisioncleaned",
+):
     """Look for the TemporalPCAFeaturizer in the usual place."""
     from ..transform import transformers_by_class_name
 
     geom, channel_index, model_dir = _get_featurization_loading_meta(sorting)
-    if featurization_pipeline_pt is None:
-        featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
+    featurization_pipeline_pt = _ensure_featurization_pipeline_pt(
+        featurization_pipeline_pt, model_dir, waveform_kind
+    )
 
     d = torch.load(featurization_pipeline_pt, weights_only=True)
     kw = d["_extra_state"]["class_names_and_kwargs"]
@@ -1378,6 +1427,68 @@ def sorting_from_spikeinterface(
     )
 
 
+def concatenate_sortings(
+    sortings: Sequence[DARTsortSorting], sort_times: bool = True
+) -> DARTsortSorting:
+    """Concatenate sortings and check that the result is sorted
+
+    Another approach here would be to use HDF5 virtual datasets. If one
+    hooked together a bunch of .h5 files that way, it should be loadable
+    with from_peeling_hdf5.
+
+    This returns an hdf5-less sorting object. Its features are "ephemeral".
+    You probably will want to .save() it to a .npz file.
+
+    Parameters
+    ----------
+    sortings: Sequence[DARTsortSorting]
+    check_sorted_times: bool, default=True
+
+    Returns
+    -------
+    concatenated_sorting: DARTsortSorting
+    """
+    n_total = sum(map(len, sortings))
+    out = {
+        k: np.empty_like(v, shape=(n_total, *v.shape[1:]))
+        for k, v in sortings[0].spike_feature_dict.items()
+    }
+    fixed_keys = ("times_samples", "channels", "labels")
+    assert all(k in out for k in fixed_keys)
+
+    i0 = 0
+    for st in sortings:
+        i1 = i0 + len(st)
+        feats = st.spike_feature_dict
+        if sort_times:
+            order = np.argsort(feats[fixed_keys[0]], kind="stable")
+        else:
+            order = slice(None)
+        for k, v in out.items():
+            v[i0:i1] = feats[k][order]
+        i0 = i1
+    assert i0 == n_total
+
+    if sort_times:
+        # just checking chunk boundaries
+        nbad = count_not_sorted(out[fixed_keys[0]])
+        if nbad > 0:
+            raise ValueError("times_samples were not sorted in concatenate_sortings")
+
+    fixed = {k: out.pop(k) for k in fixed_keys}
+    if hasattr(sortings[0], "geom"):
+        out["geom"] = sortings[0].geom
+    sampling_frequency = np.mean([st.sampling_frequency for st in sortings])
+
+    return DARTsortSorting(
+        **fixed,
+        sampling_frequency=sampling_frequency,
+        parent_h5_path=None,
+        persistent_features=None,
+        ephemeral_features=out,
+    )
+
+
 def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:
     """Convert our localization format to SpikeInterface's"""
     # NB: spikeinterface's y is our z. I like theirs better, I'm sorry, it's not my fault.
@@ -1440,75 +1551,25 @@ def sorting_isis(sorting: DARTsortSorting):
     return isis_ms
 
 
-def merged_responsibilities(
-    sorting: DARTsortSorting,
-    responsibilities_key="gmm_responsibilities",
-    candidates_key="gmm_candidates",
-):
-    labels = sorting.labels
-    assert labels is not None, "0"
-
-    candidates = cast(np.ndarray, getattr(sorting, candidates_key))
-    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
-    if responsibilities.shape[1] > 1:
-        assert (responsibilities[:, 0] >= responsibilities[:, 1:-1].max(1)).all(), "1"
-
-    notnoise = responsibilities[:, 0] >= responsibilities[:, -1]
-    clabels = np.where(notnoise, candidates[:, 0], -1)
-
-    lvalid = labels >= 0
-    cvalid = clabels >= 0
-    assert np.array_equal(lvalid, cvalid), "2"
-
-    Klabel = labels.max() + 1
-    Kcand = candidates.max() + 1
-    lc, ctol = candidates_to_labels(clabels, labels, Klabel, Kcand)
-
-    # replace candidates -1 with invalid entry, will also become invalid in ctol
-    c = np.where(candidates < 0, Kcand, candidates)
-    # remap to merged ids
-    c = ctol[c]
-
-    # now deduplicate... this can be faster but fine for now.
-    luniq, lcount = np.unique(lc[:, 0], return_counts=True)
-    luniq_check = np.unique(labels)
-    luniq_check = luniq_check[luniq_check >= 0]
-    assert np.array_equal(luniq_check, luniq), "3"
-    mergedl = luniq[lcount > 1]
-    mergedr = responsibilities[:, : candidates.shape[1]].copy()
-    for ll in mergedl:
-        eql = c == ll
-        six, cix = np.nonzero(eql)
-        sixu, sixfirst, sixflat = np.unique(six, return_index=True, return_inverse=True)
-
-        # sum weight for each spike
-        wsum = np.zeros(sixu.shape)
-        np.add.at(wsum, sixflat, responsibilities[six, cix])
-
-        # delete old
-        c[six, cix] = Kcand
-        mergedr[six, cix] = 0.0
-
-        # write new into first ixs
-        c[sixu, cix[sixfirst]] = ll
-        mergedr[sixu, cix[sixfirst]] = wsum
-
-    return dict(
-        K=Klabel, Kcand=Kcand, merged_responsibilities=mergedr, merged_candidates=c
-    )
+def gmm_score_prefix(
+    sorting: DARTsortSorting, prefixes: Sequence[str] = ("merged", "gmm")
+) -> str:
+    """The prefix of the soft assignment arrays attached to this sorting."""
+    for prefix in prefixes:
+        if getattr(sorting, f"{prefix}_candidates", None) is not None:
+            return prefix
+    raise AttributeError("No scores attached to sorting.")
 
 
-def get_gmm_scores(sorting: DARTsortSorting, prefixes=("merged", "gmm")) -> "Scores":
+def get_gmm_scores(
+    sorting: DARTsortSorting, prefixes: Sequence[str] = ("merged", "gmm")
+) -> "Scores":
     from ..clustering.mixture import Scores
 
-    for prefix in prefixes:
-        cand = getattr(sorting, f"{prefix}_candidates", None)
-        log_liks = getattr(sorting, f"{prefix}_log_liks", None)
-        resp = getattr(sorting, f"{prefix}_responsibilities", None)
-        if cand is not None:
-            break
-    else:
-        raise AttributeError("No scores attached to sorting.")
+    prefix = gmm_score_prefix(sorting, prefixes)
+    cand = getattr(sorting, f"{prefix}_candidates", None)
+    log_liks = getattr(sorting, f"{prefix}_log_liks", None)
+    resp = getattr(sorting, f"{prefix}_responsibilities", None)
 
     assert cand is not None
     assert log_liks is not None
@@ -1526,9 +1587,8 @@ def get_gmm_scores(sorting: DARTsortSorting, prefixes=("merged", "gmm")) -> "Sco
 
 def explode_soft_assignment_sorting(
     sorting: DARTsortSorting,
-    responsibilities_key="merged_responsibilities",
-    candidates_key="merged_candidates",
-    needs_merge: bool = False,
+    responsibilities_key: str | None = None,
+    candidates_key: str | None = None,
 ) -> DARTsortSorting:
     """Convert a hard-assigned sorting to a soft-assigned one
 
@@ -1539,22 +1599,17 @@ def explode_soft_assignment_sorting(
     """
     from .spiketorch import entropy
 
+    if responsibilities_key is None or candidates_key is None:
+        prefix = gmm_score_prefix(sorting)
+        responsibilities_key = responsibilities_key or f"{prefix}_responsibilities"
+        candidates_key = candidates_key or f"{prefix}_candidates"
+
     t_s = sorting.times_seconds
 
-    if needs_merge:
-        mgr = merged_responsibilities(
-            sorting,
-            responsibilities_key=responsibilities_key,
-            candidates_key=candidates_key,
-        )
-        mergedr = mgr["merged_responsibilities"]
-        c = mgr["merged_candidates"]
-        Klabel = mgr["K"]
-    else:
-        mergedr = getattr(sorting, responsibilities_key)
-        c = getattr(sorting, candidates_key)
-        mergedr = mergedr[:, : c.shape[1]]
-        Klabel = c.max() + 1
+    c = cast(np.ndarray, getattr(sorting, candidates_key))
+    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
+    mergedr = responsibilities[:, : c.shape[1]]
+    Klabel = c.max() + 1
 
     h = entropy(torch.asarray(mergedr), reduce_mean=False).numpy()
 
@@ -1570,7 +1625,6 @@ def explode_soft_assignment_sorting(
     times_samples = sorting.times_samples[spike_ix]
 
     # store weight as a feature
-    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
     feats = dict(
         soft_assignment_weight=mergedr[spike_ix, candidate_ix],
         times_seconds=t_s[spike_ix],
@@ -1585,20 +1639,6 @@ def explode_soft_assignment_sorting(
         sampling_frequency=sorting.sampling_frequency,
         ephemeral_features=feats,
     )
-
-
-def candidates_to_labels(clabels, labels, Klabel, Kcand):
-    # issue: we usually merge GMM components into new labels
-    # so, need to figure out the merge and remap, and there will be
-    # duplicates to handle
-    kept = np.flatnonzero(np.logical_and(labels >= 0, clabels >= 0))
-    lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
-    lc = lc[(lc >= 0).all(axis=1)]
-    # each candidate only appears once -- it is a merge.
-    assert np.all(np.unique(lc[:, 1], return_counts=True)[1] == 1), "ctol"
-    ctol = np.full((Kcand + 1,), fill_value=Klabel)
-    ctol[lc[:, 1]] = lc[:, 0]
-    return lc, ctol
 
 
 def check_recording(
@@ -1830,45 +1870,6 @@ def time_chunk_sortings(
     return chunk_time_ranges_s, chunk_sortings
 
 
-def combine_sortings(sortings, dodge=False):
-    labels = np.full_like(sortings[0].labels, -1)
-    times_samples = sortings[0].times_samples.copy()
-    assert all(s.labels.size == sortings[0].labels.size for s in sortings)
-
-    if dodge:
-        label_to_sorting_index = []
-        label_to_original_label = []
-    else:
-        label_to_sorting_index = None
-        label_to_original_label = None
-
-    next_label = 0
-    for j, sorting in enumerate(sortings):
-        kept = np.flatnonzero(sorting.labels >= 0)
-        assert np.all(labels[kept] < 0)
-        labels[kept] = sorting.labels[kept] + next_label
-        if dodge:
-            assert label_to_sorting_index is not None
-            assert label_to_original_label is not None
-            n_new_labels = 0
-            if kept.size:
-                n_new_labels = 1 + sorting.labels[kept].max()
-                next_label += n_new_labels
-            label_to_sorting_index.append(np.full(n_new_labels, j))
-            label_to_original_label.append(np.arange(n_new_labels))
-        times_samples[kept] = sorting.times_samples[kept]
-
-    sorting = sortings[0].ephemeral_replace(labels=labels, times_samples=times_samples)
-
-    if dodge:
-        assert label_to_sorting_index is not None
-        assert label_to_original_label is not None
-        label_to_sorting_index = np.concatenate(label_to_sorting_index)
-        label_to_original_label = np.concatenate(label_to_original_label)
-        return label_to_sorting_index, label_to_original_label, sorting
-    return sorting
-
-
 # -- timing
 
 
@@ -1997,6 +1998,127 @@ def yield_masked_chunks(
         offset += nsrc
 
 
+# -- misc
+
+
+def reconstruct_amplitude_vectors(
+    sorting: DARTsortSorting,
+    tpca_dataset="collisioncleaned_tpca_features",
+    out_dataset="amplitude_vectors",
+    kind="ptp",
+    show_progress: bool = True,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+):
+    from .spiketorch import ptp
+
+    pca = get_tpca(sorting=sorting)
+    with h5py.File(sorting.parent_h5_path, "r+") as h5:
+        ind = h5[tpca_dataset]
+        outd = h5.require_dataset(
+            out_dataset, shape=(ind.shape[0], ind.shape[2]), dtype=ind.dtype
+        )
+        for sli, x in yield_chunks(
+            ind, show_progress=show_progress, desc_prefix=out_dataset
+        ):
+            x = torch.as_tensor(x)
+            y = pca.force_reconstruct(x)
+            if kind == "peak":
+                z = y.abs().amax(dim=1)
+            elif kind == "ptp":
+                z = ptp(y, dim=1)
+            else:
+                panic(kind)
+            outd[sli] = z
+
+
+def get_tpca_norms(
+    sorting: DARTsortSorting,
+    tpca_dataset="collisioncleaned_tpca_features",
+    out_dataset: str | None = "collisioncleaned_tpca_rms",
+    show_progress: bool = False,
+):
+    with h5py.File(sorting.parent_h5_path, "r+") as h5:
+        ind = h5[tpca_dataset]
+        if out_dataset is not None:
+            outd = h5.create_dataset(
+                out_dataset, shape=(ind.shape[0],), dtype=ind.dtype
+            )
+        else:
+            outd = np.empty(shape=(ind.shape[0],), dtype=ind.dtype)
+        for sli, x in yield_chunks(
+            ind, show_progress=show_progress, desc_prefix=out_dataset
+        ):
+            x = torch.asarray(x)
+            nna = x[:, 0, :].isfinite().sum(1)
+            ms = x.square_().sum(1).nan_to_num_().sum(1).div_(nna)
+            outd[sli] = ms.sqrt_()
+    return outd
+
+
+def interpolate_main_channel_amplitudes(
+    sorting: DARTsortSorting,
+    motion: "MotionInfo",
+    amplitude_vectors_dataset="amplitude_vectors",
+    out_dataset="motion_corrected_amplitudes",
+    interp_params: InterpolationParams | None = None,
+    motion_depth_mode: Literal["channel", "localization"] = "channel",
+    computation_cfg: ComputationConfig | None = None,
+    show_progress: bool = True,
+):
+    from .drift_util import get_stable_channels
+    from .interpolation_util import StableFeaturesInterpolator, pad_geom
+    from .multiprocessing_util import handle_negative_jobs
+    from .waveform_util import single_channel_index
+
+    computation_cfg = ensure_computation_config(computation_cfg)
+    if interp_params is None:
+        interp_params = default_clustering_features_cfg.interp_params
+    device = computation_cfg.actual_device()
+
+    shifts, n_pitches_shift = motion.pitch_shifts(
+        sorting=sorting, motion_depth_mode=motion_depth_mode
+    )
+    mainchan_ci = single_channel_index(len(motion.geom))
+    _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
+    target_channels, *_ = get_stable_channels(
+        motion=motion,
+        channels=sorting.channels,
+        channel_index=mainchan_ci,
+        n_pitches_shift=n_pitches_shift,
+        workers=workers,
+    )
+    target_channels = torch.as_tensor(target_channels)
+    assert target_channels.shape == (len(sorting), 1)  # just one channel here
+    channels = torch.as_tensor(sorting.channels)
+
+    with h5py.File(sorting.parent_h5_path, "r+") as h5:
+        ind = h5[amplitude_vectors_dataset]
+        outd = h5.create_dataset(out_dataset, shape=(ind.shape[0],), dtype=ind.dtype)
+        dtype = torch.from_numpy(np.empty((), dtype=ind.dtype)).dtype
+        erp = StableFeaturesInterpolator(
+            source_geom=pad_geom(motion.geom, dtype=dtype, device=device),
+            target_geom=pad_geom(motion.rgeom, dtype=dtype, device=device),
+            channel_index=torch.as_tensor(
+                cast(h5py.Dataset, h5["channel_index"])[:], device=device
+            ),
+            params=interp_params,
+        )
+        shifts = torch.as_tensor(shifts, dtype=dtype)
+        for sli, x in yield_chunks(
+            ind, show_progress=show_progress, desc_prefix=out_dataset
+        ):
+            # kernel interpolation wants a feature dim, so add a singleton one
+            x = torch.asarray(x, device=device, dtype=dtype)[:, None]
+            y = erp.interp(
+                features=x,
+                source_main_channels=channels[sli].to(device),
+                target_channels=target_channels[sli],
+                source_shifts=shifts[sli].to(device),
+                allow_destroy=True,
+            )
+            outd[sli] = y[:, 0, 0].numpy(force=True)
+
+
 # -- residual
 
 
@@ -2044,7 +2166,7 @@ def subsample_waveforms(
     random_state: int | np.random.Generator = 0,
     n_waveforms_fit=10_000,
     voltages_dataset_name="collisioncleaned_voltages",
-    waveforms_dataset_name="collisioncleaned_waveforms",
+    waveforms_dataset_name: str | Sequence[str] = "collisioncleaned_waveforms",
     fit_max_reweighting=4.0,
     log_voltages=True,
     subsample_by_weighting=False,
@@ -2052,8 +2174,16 @@ def subsample_waveforms(
     replace=True,
     h5=None,
     device: torch.device | str = "cpu",
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """Subsample waveform datasets, returning them keyed by dataset name.
+
+    Multiple dataset names may be passed, in which case they are all read at the
+    same subsampled indices, so that they correspond to each other and to the
+    returned fixed properties.
+    """
     random_state = np.random.default_rng(random_state)
+    if isinstance(waveforms_dataset_name, str):
+        waveforms_dataset_name = [waveforms_dataset_name]
 
     need_open = h5 is None
     if need_open and hdf5_filename is not None:
@@ -2068,9 +2198,8 @@ def subsample_waveforms(
         n_wf = channels.shape[0]
         if not n_wf:
             emptyi = torch.tensor([], dtype=torch.long)
-            wfshape = h5[waveforms_dataset_name].shape
-            emptywf = torch.zeros(wfshape)
-            return emptywf, dict(channels=emptyi)
+            empty = {k: torch.zeros(h5[k].shape) for k in waveforms_dataset_name}
+            return empty, dict(channels=emptyi)
         weights = fit_reweighting(
             h5=h5,
             log_voltages=log_voltages,
@@ -2086,9 +2215,10 @@ def subsample_waveforms(
             )
             if not replace:
                 choices.sort()
-                waveforms = batched_h5_read(
-                    h5[waveforms_dataset_name], choices, show_progress=True
-                )
+                waveforms = {
+                    k: batched_h5_read(h5[k], choices, show_progress=True)
+                    for k in waveforms_dataset_name
+                }
                 if weights is not None:
                     weights = weights[choices]
                 fixed_properties = {
@@ -2096,10 +2226,10 @@ def subsample_waveforms(
                 }
             else:
                 uchoices, ichoices = np.unique(choices, return_inverse=True)
-                waveforms = batched_h5_read(
-                    h5[waveforms_dataset_name], uchoices, show_progress=True
-                )
-                waveforms = waveforms[ichoices]
+                waveforms = {
+                    k: batched_h5_read(h5[k], uchoices, show_progress=True)[ichoices]
+                    for k in waveforms_dataset_name
+                }
                 if weights is not None:
                     weights = weights[uchoices[ichoices]]
                 fixed_properties = {
@@ -2107,7 +2237,7 @@ def subsample_waveforms(
                 }
                 fixed_properties = {k: v[ichoices] for k, v in fixed_properties.items()}
         else:
-            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            waveforms = {k: h5[k][:] for k in waveforms_dataset_name}
             fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
     finally:
         if need_open:
@@ -2115,14 +2245,15 @@ def subsample_waveforms(
         del h5
 
     device = torch.device(device)
-    waveformsr = torch.as_tensor(waveforms)
+    waveformsr = {k: torch.as_tensor(v) for k, v in waveforms.items()}
+    n = len(next(iter(waveformsr.values())))
     fixed_properties = {
         k: torch.as_tensor(v, device=device) for k, v in fixed_properties.items()
     }
     if subsample_by_weighting and weights is not None:
         fixed_properties["weights"] = torch.as_tensor(weights, device=device)
     elif subsample_by_weighting:
-        fixed_properties["weights"] = torch.ones(waveforms.shape[0], device=device)
+        fixed_properties["weights"] = torch.ones(n, device=device)
 
     return waveformsr, fixed_properties
 

@@ -79,7 +79,7 @@ def localize_hdf5(
             rank_queue_empty=True,
             cls="ProcessPoolExecutor",
         )
-        with Executor(
+        with Executor(  # noqa: SIM117
             max_workers=n_jobs,
             mp_context=context,
             initializer=_h5_localize_init,
@@ -255,11 +255,14 @@ def _h5_localize_job(start_ix):
             model=p.localization_model,
             logbarrier=p.logbarrier,
         )
+    x = locs["x"].numpy(force=True)
+    y = locs.get("y")
+    alpha = locs.get("alpha")
     xyza_batch = np.c_[
-        locs["x"].numpy(force=True),
-        locs["y"].numpy(force=True),
+        x,
+        np.zeros_like(x) if y is None else y.numpy(force=True),
         locs["z_abs"].numpy(force=True),
-        locs["alpha"].numpy(force=True),
+        np.zeros_like(x) if alpha is None else alpha.numpy(force=True),
     ]
     return start_ix, end_ix, xyza_batch
 

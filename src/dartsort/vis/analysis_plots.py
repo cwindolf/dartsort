@@ -585,6 +585,7 @@ def plot_denoiser_scores(
     if dn is None:
         dn, geom, channel_index = try_get_denoising_pipeline(load_denoiser_from_sorting)
     assert dn is not None
+    dn.eval()
     assert channel_index is not None
     assert geom is not None
     volt_ci = make_channel_index(geom, radius=volt_rad)

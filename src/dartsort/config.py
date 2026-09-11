@@ -6,6 +6,8 @@ from pydantic import Field
 from .util.internal_config import (
     InterpKernel,
     InterpMethod,
+    KmeansppSelection,
+    KmeansppStopping,
     MixtureStep,
     PreprocessingStrategy,
     RealignStrategy,
@@ -96,7 +98,9 @@ class DARTsortUserConfig:
     work_in_tmpdir: bool = False
     """If True, dartsort will store all temporary data in a scratch directory in tmpdir_parent or TMPDIR."""
 
-    copy_recording_to_tmpdir: Literal["yes", "no", "if_preprocessing"] = "if_preprocessing"
+    copy_recording_to_tmpdir: Literal["yes", "no", "if_preprocessing"] = (
+        "if_preprocessing"
+    )
     """Save a copy of the preprocessed recording to a tmpdir?"""
 
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
@@ -174,7 +178,7 @@ class DARTsortUserConfig:
     ignored. But also all of the secondary channels of the big one,
     which is important."""
 
-    featurization_radius_um: Annotated[float, Field(gt=0)] = 100.0
+    featurization_radius_um: Annotated[float, Field(gt=0)] = 150.0
     """Radius around detection channel or template peak channel used
     to extract spike features for clustering."""
 
@@ -204,18 +208,12 @@ class DARTsortUserConfig:
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
     """Upsampling of templates during matching to allow for temporal aliasing of waveforms."""
 
-    # -- final merge step
-    #TODO name this more prominently, clarify flags for dedup ms, decouple dedup and agg
-    agg_kind: Literal["none", "template_distance", "qda"] = "qda"
-    """Final distance or GMM-based merge type."""
-
-    spikeinterface_merge_preset: str | Literal["none"] = "none"
-    """Call out to SpikeInterface's auto_merge() for a final merge using timing / RP information.
-    Setting this is slightly different' from calling auto_merge() externally, since the internal
-    version will make use of dartsort's templates and template distances.
-    dartsort extends auto_merge() with some additional presets: dartsort_slay_xc_ccg,
-    dartsort_slay_xc, dartsort_slay_ccg. These are conservative presets; see and cite
-    Koukuntla et al., 2025 for the SLAY score criterion."""
+    # -- final postprocessing
+    postprocessing: Literal["agglomerate_and_clean", "agglomerate", "clean"] = (
+        "agglomerate_and_clean"
+    )
+    """Which steps run after the last matching iteration. Agglomeration merges
+    oversplit units; cleaning deduplicates and orders units by depth."""
 
     # -- motion estimation parameters
     rigid: bool = False
@@ -237,6 +235,10 @@ class DARTsortUserConfig:
     max_dist_from_median_um: float = 250.0
     """Motion bins farther than this from the local median will be replaced by interpolation."""
     median_neighborhood_bins: int = 51
+
+    # -- pipeline control parameters for specific use cases
+    fit_matching_models_only: bool = False
+    save_full_final_residual: bool = False
 
 
 @cfg_dataclass
@@ -268,11 +270,17 @@ class DeveloperConfig(DARTsortUserConfig):
     use_nn_in_subtraction: bool = True
     whiten_in_subtraction: bool = True
     threshold_before_whitening: float = 10.0
+    denoise_before_localization: bool = False
+    denoise_before_amplitudes: bool = False
+    singlechan_denoised_amplitudes_and_localizations: bool = False
+    save_amplitude_vectors: bool = False
+    localization_model: Literal["pointsource", "dipole"] = "pointsource"
+    do_enforce_decrease: Literal["yes", "no", "loc_only"] = "loc_only"
+    clustering_amplitude_kind: Literal["peak", "ptp", "rms"] = "ptp"
     shave_score: float = 10.0
     temporal_dedup_radius_samples: int = 7
     subtract_global_dedup: bool = True
     positive_temporal_dedup_radius_samples: int = 41
-    spikeinterface_merge_max_distance: float = 0.8
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
@@ -319,6 +327,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_transform: Literal["log", "sqrt", "none"] = "none"
     initial_pc_scale: float = 2.0
     initial_pc_pre_scale: float = 0.5
+    initial_pc_kind: Literal["single", "multi", "mixed"] = "single"
     motion_aware_clustering: bool = True
     clustering_max_spikes: Annotated[int, Field(gt=0)] = 1024 * 1000
     pre_refinement_merge: bool = True
@@ -327,15 +336,29 @@ class DeveloperConfig(DARTsortUserConfig):
     pre_refinement_merge_threshold: float = 0.1
     use_hellinger: bool = True
     density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
+    density_regional: Annotated[float, Field(gt=0)] = 25.0
     component_overlap: float = 0.95
     hellinger_strong: float = 0.0
     hellinger_weak: float = 0.0
     dpc_mop: bool = True
     n_neighbors_search: int | None = 50
+    kmeanspp_stop_rms: float = 5.0
+    kmeanspp_tries: int = 5
+    kmeanspp_patience: int = 21
+    kmeanspp_greedy_proposals: int = 1
+    kmeanspp_neighb_overlap: float | None = None
+    kmeanspp_selection: KmeansppSelection = "phi"
+    kmeanspp_stopping: KmeansppStopping = "patience"
 
     # filters
     gmm_isolation_threshold: float | None = None
-    collision_cleaning_error_threshold: float | None = 0.3
+    collision_cleaning_error_threshold: float | None = None
+    max_cc_flag_rate: float = 1.0
+    cc_flag_entropy_cutoff: float = 2.0
+    cc_flag_excess_rate: float | None = 0.3
+    cc_flag_chance_jitter_samples: int = 150
+    cc_flag_chance_draws: int = 2
+    cc_flag_temporal_radius_samples: int | None = None
 
     # gaussian mixture high level
     initial_rank: int | None = None
@@ -356,6 +379,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_n_candidates: int = 5
     gmm_n_search: int | None = 3
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5
+    gmm_batch_size: int = 2048
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     cov_kind: str = "factorizednoise"
@@ -371,14 +395,25 @@ class DeveloperConfig(DARTsortUserConfig):
     tpca_from_templates: bool = True
 
     # agglomeration
-    agg_qda_max_template_distance: float = 0.6
-    agg_no_qda_template_distance: float = 0.3
-    agg_qda_linkage: Literal["single", "complete"] = "single"
+    agg_max_template_distance: float = 0.6
+    agg_force_merge_template_distance: float = 0.3
+    agg_qda_overlap: bool = False
+    agg_qda_bimodality: bool = False
+    agg_violation_ms: float = 1.0
+    agg_jitter_ms: float = 20.0
+    agg_min_violation_evidence: float = 4.6
+    agg_violation_linkage: Literal["average", "complete"] = "average"
+    agg_violation_threshold: float | None = 0.3
+    agg_veto_threshold: float | None = None
+    agg_veto_min_evidence: float = 10.0
     agg_template_linkage: Literal["single", "complete"] = "complete"
     agg_template_whiten_strategy: WhiteningStrategy = "none"
 
     # store extra intermediates@
     save_subtracted_waveforms: bool = False
+    subtracted_amplitude_vectors: Literal["none", "ptp", "peak"] = "none"
+    save_subtraction_iteration: bool = False
+    save_residnorm_decrease: bool = False
     save_collisioncleaned_waveforms: bool = False
     always_save_detailed_features: bool = False
     precomputed_templates_npz: str | None = None

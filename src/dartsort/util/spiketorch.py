@@ -155,15 +155,20 @@ def entropy(Q: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     return H.neg_()
 
 
-@torch_compile
 def ecl(
-    resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0, reduce_mean: bool = True
+    resps: Tensor | None,
+    log_liks: Tensor,
+    cl_alpha: float = 1.0,
+    reduce_mean: bool = True,
 ) -> Tensor:
-    h = entropy(resps, dim=1, reduce_mean=reduce_mean)
-    log_lik = log_liks.logsumexp(dim=1)
+    crit = log_liks.logsumexp(dim=1)
     if reduce_mean:
-        log_lik = log_lik.mean()
-    crit = log_lik - cl_alpha * h
+        crit = crit.mean()
+    if cl_alpha > 0:
+        if resps is None:
+            resps = log_liks.softmax(dim=1).nan_to_num_()
+        h = entropy(resps, dim=1, reduce_mean=reduce_mean)
+        crit = crit - cl_alpha * h
     return crit
 
 

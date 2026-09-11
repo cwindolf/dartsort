@@ -250,7 +250,7 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
                 "subtraction.h5",
                 "motion.pkl",
                 "motionthreshold.h5",
-                "subtraction_models/featurization_pipeline.pt",
+                "subtraction_models/*featurization_pipeline.pt",
             ]
         )
     if link_refined0:
@@ -301,10 +301,16 @@ def ds_save_features(
     h5_path = ensure_path(sorting.parent_h5_path)
     assert h5_path.exists()
     models_path = h5_path.parent / f"{h5_path.stem}_models"
+    resid_path = h5_path.parent / f"{h5_path.stem}_residual.bin"
 
     targ_h5 = output_dir / h5_path.name
     logger.dartsortdebug(f"Copy intermediate {h5_path=} -> {targ_h5=}.")
     dartcopy2(cfg, h5_path, targ_h5)
+
+    if resid_path.exists():
+        targ_resid = output_dir / resid_path.name
+        logger.dartsortdebug(f"Copy intermediate {resid_path=} -> {targ_resid=}.")
+        dartcopy2(cfg, resid_path, targ_resid)
 
     if models_path.exists():
         targ_models = output_dir / models_path.name
@@ -317,9 +323,28 @@ def ds_save_features(
         dartcopytree(cfg, models_path, targ_models)
 
 
+def ds_save_models(
+    cfg: DARTsortInternalConfig | None,
+    step_name: str,
+    output_dir: Path,
+    work_dir: Path | None = None,
+):
+    if work_dir is None:
+        # nothing to copy
+        return
+    assert work_dir.exists()
+    assert output_dir.exists()
+    models_src = work_dir / f"{step_name}_models"
+    assert models_src.exists()
+    assert models_src.is_dir()
+    models_targ = output_dir / models_src.name
+    logger.dartsortdebug(f"Copy {models_src=} -> {models_targ=}.")
+    dartcopytree(cfg, models_src, models_targ)
+
+
 def ds_handle_delete_intermediate_features(
     cfg: DARTsortInternalConfig,
-    final_sorting: DARTsortSorting,
+    final_sorting: DARTsortSorting | None,
     output_dir: Path,
     work_dir: Path | None = None,
 ):
@@ -330,15 +355,24 @@ def ds_handle_delete_intermediate_features(
         return
 
     # find all non-final h5s, models and delete them
-    assert final_sorting.parent_h5_path is not None
-    final_h5 = ensure_path(final_sorting.parent_h5_path)
-    assert final_h5.exists()
-    assert final_h5.parent == output_dir
+    if final_sorting is not None:
+        assert final_sorting.parent_h5_path is not None
+        final_h5 = ensure_path(final_sorting.parent_h5_path)
+        assert final_h5.exists()
+        assert final_h5.parent == output_dir
+        keep_models = None
+    else:
+        assert cfg.fit_matching_models_only
+        final_h5 = None
+        keep_models = output_dir / f"matching{cfg.matching_iterations}_models"
+        assert keep_models.exists()
+        assert keep_models.is_dir()
 
     for h5_path in output_dir.glob("*.h5"):
         if h5_path == final_h5:
             continue
-        assert h5_path.name != final_h5.name
+        if final_h5 is not None:
+            assert h5_path.name != final_h5.name
 
         h5_path = output_dir / h5_path.name
         models_path = output_dir / f"{h5_path.stem}_models"
@@ -347,7 +381,11 @@ def ds_handle_delete_intermediate_features(
         h5_path.unlink()
         if models_path.exists():
             assert models_path.is_dir()
-            shutil.rmtree(models_path)
+            if models_path == keep_models:
+                logger.dartsortdebug(f"Keep fitted {models_path=}.")
+            else:
+                logger.dartsortdebug(f"Clean up: remove {models_path=}.")
+                shutil.rmtree(models_path)
 
 
 def ds_fast_forward(
@@ -434,24 +472,23 @@ def _matching_step_cfgs(
     Sequence[RefinementConfig | None],
     FeaturizationConfig,
     FitSamplingConfig,
-    bool,
 ]:
     clus_cfg = cfg.clustering_cfg if cfg.recluster_after_matching else None
     gmm_as_classifier = (
         is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "tmm"
     )
+    ref_cfgs: list[RefinementConfig | None]
     if gmm_as_classifier:
         gmm_clus_cfg = clus_cfg
         clus_cfg = None
-        ref_cfgs = [cfg.agglomerate_cfg]
-        will_refine = (
-            cfg.agglomerate_cfg is not None
-            and cfg.agglomerate_cfg.template_merge_cfg is not None
-        )
+        ref_cfgs = list(cfg.final_refinement_cfgs)
     else:
         gmm_clus_cfg = None
-        ref_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg, cfg.agglomerate_cfg]
-        will_refine = True
+        ref_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg]
+        if is_final:
+            ref_cfgs.extend(cfg.final_refinement_cfgs)
+        else:
+            ref_cfgs.extend(cfg.post_refinement_cfgs)
     clfeat_cfg = cfg.clustering_features_cfg
 
     if gmm_as_classifier and ref_cfgs:
@@ -472,7 +509,11 @@ def _matching_step_cfgs(
         samp_cfg = cfg.refinement_cfg.sampling_cfg
         assert clus_cfg is None
         if not still_need_projs_saved:
-            clfeat_cfg = replace(cfg.clustering_features_cfg, n_main_channel_pcs=0)
+            clfeat_cfg = replace(
+                cfg.clustering_features_cfg,
+                n_main_channel_pcs=0,
+                n_multi_channel_pcs=0,
+            )
     else:
         feat_cfg = cfg.featurization_cfg
         samp_cfg = cfg.peeler_sampling_cfg
@@ -480,11 +521,12 @@ def _matching_step_cfgs(
     # in the common case where we're just agglomerating at the end,
     # skip the whole clustering features business
     if clus_cfg is None and all(
-        rc is None or rc.refinement_strategy == "agglomerate" for rc in ref_cfgs
+        rc is None or rc.refinement_strategy in ("agglomerate", "clean")
+        for rc in ref_cfgs
     ):
         clfeat_cfg = replace(clfeat_cfg, skip=True)
 
-    return clus_cfg, clfeat_cfg, ref_cfgs, feat_cfg, samp_cfg, will_refine
+    return clus_cfg, clfeat_cfg, ref_cfgs, feat_cfg, samp_cfg
 
 
 def ds_save_timing(timings: dict[str, float], output_dir: Path):

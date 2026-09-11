@@ -66,7 +66,7 @@ def generate_simulation(
     sampling_frequency=30000.0,
     refractory_ms=1.0,
     globally_refractory=False,
-    extract_radius=100.0,
+    extract_radius=150.0,
     recording_dtype="float16",
     features_dtype="float32",
     featurization_cfg=default_sim_featurization_cfg,

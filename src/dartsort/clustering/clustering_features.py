@@ -6,7 +6,13 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..util.data_util import DARTsortSorting
+from ..util.data_util import (
+    DARTsortSorting,
+    featurization_pipeline_path,
+    get_tpca,
+    get_tpca_norms,
+    try_get_model_dir,
+)
 from ..util.drift_util import get_stable_channels
 from ..util.internal_config import (
     ClusteringFeaturesConfig,
@@ -22,8 +28,9 @@ from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
-from ..util.py_util import databag
-from ..util.waveform_util import single_channel_index
+from ..util.py_util import databag, panic
+from ..util.spiketorch import ptp, svd_lowrank_helper
+from ..util.waveform_util import make_channel_index, single_channel_index
 from . import cluster_util
 
 logger = get_logger(__name__)
@@ -101,6 +108,21 @@ class SimpleMatrixFeatures:
 
         features = []
 
+        need_main_channel_feats = bool(clustering_features_cfg.n_main_channel_pcs)
+        need_main_channel_feats |= (
+            clustering_features_cfg.motion_aware
+            and clustering_features_cfg.amplitude_kind in ("peak", "ptp")
+        )
+        if need_main_channel_feats:
+            main_channel_feats = _interpolate_main_channel_features(
+                sorting=sorting,
+                motion=motion,
+                clustering_features_cfg=clustering_features_cfg,
+                computation_cfg=computation_cfg,
+            )
+        else:
+            main_channel_feats = None
+
         if clustering_features_cfg.use_z:
             assert z is not None
             assert z_reg is not None
@@ -113,90 +135,83 @@ class SimpleMatrixFeatures:
             assert x is not None
             features.append(x[:, None] * clustering_features_cfg.x_scale)
 
-        amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
-        if clustering_features_cfg.use_amplitude:
-            assert amp is not None
+        if clustering_features_cfg.amplitude_kind == "stored":
+            amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
+            assert isinstance(amp, np.ndarray)
+        elif clustering_features_cfg.amplitude_kind in ("peak", "ptp"):
+            amp = None
+            if main_channel_feats is not None:
+                amp = _reconstruct_main_channel_amplitudes(
+                    sorting=sorting,
+                    main_channel_feats=main_channel_feats,
+                    clustering_features_cfg=clustering_features_cfg,
+                )
+            if amp is None:
+                amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
+                assert isinstance(amp, np.ndarray)
+        elif clustering_features_cfg.amplitude_kind == "rms":
+            amp = get_tpca_norms(
+                sorting,
+                tpca_dataset=clustering_features_cfg.pca_dataset_name,
+                out_dataset=None,
+            )
+            assert isinstance(amp, np.ndarray)
+        else:
+            panic(clustering_features_cfg.amplitude_kind)
+
+        v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
+        if (
+            clustering_features_cfg.use_amplitude
+            or clustering_features_cfg.use_signed_amplitude
+        ):
             check_numbers("amp", amp, raise_for_numerics=raise_on_na)
             if clustering_features_cfg.log_transform_amplitude:
                 ampft = cast(np.ndarray, clustering_features_cfg.amp_log_c + amp)
                 np.log(ampft, out=ampft)
             else:
                 ampft = amp.copy()
+
+            if clustering_features_cfg.use_signed_amplitude:
+                if v is not None:
+                    ampft *= np.sign(v)
+
             ampft *= clustering_features_cfg.amp_scale
             check_numbers("ampft", ampft, raise_for_numerics=raise_on_na)
             features.append(ampft[:, None])
 
-        v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
-        if v is None:
-            samp = amp.copy()
-        else:
-            samp = amp * np.sign(v)
-
-        if clustering_features_cfg.use_signed_amplitude:
-            samp *= clustering_features_cfg.amp_scale
-            features.append(samp[:, None])
-
-        do_pcs = bool(clustering_features_cfg.n_main_channel_pcs)
-        if do_pcs and not clustering_features_cfg.motion_aware:
-            pcs = cluster_util.get_main_channel_pcs(
-                sorting,
-                rank=clustering_features_cfg.n_main_channel_pcs,
-                dataset_name=clustering_features_cfg.pca_dataset_name,
-            )
-            check_numbers("No motion pcs", pcs, raise_for_numerics=raise_on_na)
-        elif do_pcs and clustering_features_cfg.motion_aware:
-            shifts, n_pitches_shift = motion.pitch_shifts(
+        if clustering_features_cfg.n_main_channel_pcs:
+            pcs = _compute_main_channel_pcs(
                 sorting=sorting,
-                motion_depth_mode=clustering_features_cfg.motion_depth_mode,
+                main_channel_feats=main_channel_feats,
+                clustering_features_cfg=clustering_features_cfg,
+                raise_on_na=raise_on_na,
             )
-            mainchan_ci = single_channel_index(len(motion.geom))
-            _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
-            schan, *_ = get_stable_channels(
-                motion=motion,
-                channels=sorting.channels,
-                channel_index=mainchan_ci,
-                n_pitches_shift=n_pitches_shift,
-                workers=workers,
-            )
-            assert sorting.parent_h5_path is not None
-            with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-                _erp, pcs = interpolate_by_chunk(
-                    mask=None,
-                    dataset=h5[clustering_features_cfg.pca_dataset_name],
-                    geom=motion.geom,
-                    channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
-                    channels=sorting.channels,
-                    shifts=shifts,
-                    registered_geom=motion.rgeom,
-                    target_channels=schan,
-                    params=clustering_features_cfg.interp_params,
-                    trim_to_rank=clustering_features_cfg.n_main_channel_pcs,
-                    show_progress=False,
-                )
-                assert pcs.shape[2] == 1  # just one channel here
-                pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
-            check_numbers("h5 interp pcs", pcs, raise_for_numerics=raise_on_na)
-        else:
-            pcs = None
-
-        if do_pcs:
             assert pcs is not None
-            pctf = clustering_features_cfg.pc_transform
-            if pctf == "log":
-                pcs = signed_log1p(
-                    pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+            features.append(
+                _transform_pcs(
+                    pcs,
+                    clustering_features_cfg=clustering_features_cfg,
+                    raise_on_na=raise_on_na,
                 )
-            elif pctf == "sqrt":
-                pcs = signed_sqrt_transform(
-                    pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+            )
+
+        if clustering_features_cfg.n_multi_channel_pcs:
+            pcs = _compute_multi_channel_pcs(
+                sorting=sorting,
+                motion=motion,
+                clustering_features_cfg=clustering_features_cfg,
+                computation_cfg=computation_cfg,
+                raise_on_na=raise_on_na,
+            )
+            assert pcs is not None
+            features.append(
+                _transform_pcs(
+                    pcs,
+                    clustering_features_cfg=clustering_features_cfg,
+                    raise_on_na=raise_on_na,
+                    name="multi-channel pcs",
                 )
-            else:
-                assert pctf in ("none", None)
-            pcs *= clustering_features_cfg.pc_scale
-            check_numbers(f"{pctf} pcs", pcs, raise_for_numerics=raise_on_na)
-            if torch.is_tensor(pcs):
-                pcs = pcs.numpy(force=True)
-            features.append(pcs)
+            )
 
         n = t_s.shape[0]
         if len(features):
@@ -206,6 +221,10 @@ class SimpleMatrixFeatures:
         keep = np.atleast_1d(np.isfinite(features).all(axis=1))
         if keep.all():
             keep = None
+        if v is not None:
+            samp = amp * v
+        else:
+            samp = amp
         return cls(
             n=n,
             features=features,
@@ -234,8 +253,8 @@ class StableWaveformFeatures:
         *,
         sorting: DARTsortSorting,
         motion: MotionInfo,
-        clustering_features_cfg: ClusteringFeaturesConfig,
-        computation_cfg: ComputationConfig | None,
+        clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
+        computation_cfg: ComputationConfig | None = None,
     ) -> Self:
         computation_cfg = ensure_computation_config(computation_cfg)
         shifts, n_pitches_shift = motion.pitch_shifts(
@@ -304,6 +323,276 @@ class StableWaveformFeatures:
 # -- helpers
 
 
+def _interpolate_main_channel_features(
+    *,
+    sorting: DARTsortSorting,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    motion: MotionInfo,
+    computation_cfg: ComputationConfig,
+) -> Tensor | None:
+    """Full rank main channel TPCA features, interpolated to the registered main chan.
+
+    Returns a (n_spikes, rank) tensor, or None if the features aren't available.
+    """
+    if sorting.parent_h5_path is None or not sorting.has_dataset(
+        clustering_features_cfg.pca_dataset_name
+    ):
+        logger.warning(
+            f"Motion aware clustering features, but no "
+            f"{clustering_features_cfg.pca_dataset_name} to interpolate."
+        )
+        return None
+
+    shifts, n_pitches_shift = motion.pitch_shifts(
+        sorting=sorting,
+        motion_depth_mode=clustering_features_cfg.motion_depth_mode,
+    )
+    mainchan_ci = single_channel_index(len(motion.geom))
+    _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
+    schan, *_ = get_stable_channels(
+        motion=motion,
+        channels=sorting.channels,
+        channel_index=mainchan_ci,
+        n_pitches_shift=n_pitches_shift,
+        workers=workers,
+    )
+    assert sorting.parent_h5_path is not None
+    with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+        _erp, feats = interpolate_by_chunk(
+            mask=None,
+            dataset=h5[clustering_features_cfg.pca_dataset_name],
+            geom=motion.geom,
+            channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
+            channels=sorting.channels,
+            shifts=shifts,
+            registered_geom=motion.rgeom,
+            target_channels=schan,
+            params=clustering_features_cfg.interp_params,
+            show_progress=False,
+        )
+    assert feats.shape[2] == 1  # just one channel here
+    return feats[:, :, 0]
+
+
+def _reconstruct_main_channel_amplitudes(
+    *,
+    sorting: DARTsortSorting,
+    main_channel_feats: Tensor,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+) -> np.ndarray | None:
+    model_dir = try_get_model_dir(sorting)
+    if model_dir is None or featurization_pipeline_path(model_dir) is None:
+        logger.warning(
+            "No featurization pipeline saved yet, so falling back to "
+            f"{clustering_features_cfg.amplitudes_dataset_name} rather than "
+            "reconstructing drift-corrected amplitudes."
+        )
+        return None
+
+    name_prefix = clustering_features_cfg.pca_dataset_name.removesuffix(
+        "_tpca_features"
+    )
+    tpca = get_tpca(sorting, name_prefix=name_prefix)
+    assert not tpca.centered
+    waveforms = tpca.force_reconstruct(main_channel_feats[:, :, None])
+
+    kind = clustering_features_cfg.amplitude_kind
+    if kind == "peak":
+        amps = waveforms.abs().amax(dim=1)
+    elif kind == "ptp":
+        amps = ptp(waveforms, dim=1)
+    else:
+        panic(kind)
+    return amps[:, 0].numpy(force=True)
+
+
+def _compute_main_channel_pcs(
+    *,
+    sorting: DARTsortSorting,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    main_channel_feats: Tensor | None,
+    raise_on_na: bool,
+):
+    rank = clustering_features_cfg.n_main_channel_pcs
+    if not rank:
+        return None
+
+    if main_channel_feats is None:
+        pcs = cluster_util.get_main_channel_pcs(
+            sorting,
+            rank=rank,
+            dataset_name=clustering_features_cfg.pca_dataset_name,
+        )
+        check_numbers("No motion pcs", pcs, raise_for_numerics=raise_on_na)
+    else:
+        pcs = main_channel_feats[:, :rank].clone()
+        check_numbers("h5 interp pcs", pcs, raise_for_numerics=raise_on_na)
+    return pcs
+
+
+def _compute_multi_channel_pcs(
+    *,
+    sorting: DARTsortSorting,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    motion: MotionInfo,
+    computation_cfg: ComputationConfig,
+    raise_on_na: bool,
+):
+    n_pcs = clustering_features_cfg.n_multi_channel_pcs
+    if not n_pcs:
+        return None
+
+    feats, neighborhoods, neighborhood_ids, n_target_channels = _multi_channel_features(
+        sorting=sorting,
+        clustering_features_cfg=clustering_features_cfg,
+        motion=motion,
+        computation_cfg=computation_cfg,
+    )
+    pcs = _multi_channel_embedding(
+        feats=feats,
+        neighborhoods=neighborhoods,
+        neighborhood_ids=neighborhood_ids,
+        n_target_channels=n_target_channels,
+        n_pcs=n_pcs,
+    )
+    check_numbers("multi channel pcs", pcs, raise_for_numerics=raise_on_na)
+    return pcs
+
+
+def _multi_channel_features(
+    *,
+    sorting: DARTsortSorting,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    motion: MotionInfo,
+    computation_cfg: ComputationConfig,
+) -> tuple[Tensor, np.ndarray, np.ndarray, int]:
+    geom = motion.geom
+    multi_ci = make_channel_index(geom, clustering_features_cfg.multi_channel_pc_radius)
+    n_spikes = len(sorting)
+
+    if clustering_features_cfg.motion_aware:
+        shifts, n_pitches_shift = motion.pitch_shifts(
+            sorting=sorting,
+            motion_depth_mode=clustering_features_cfg.motion_depth_mode,
+        )
+        target_geom = motion.rgeom
+        _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
+        target_channels, neighborhoods, neighborhood_ids, *_ = get_stable_channels(
+            motion=motion,
+            channels=sorting.channels,
+            channel_index=multi_ci,
+            n_pitches_shift=n_pitches_shift,
+            workers=workers,
+        )
+    else:
+        shifts = np.zeros(n_spikes, dtype=np.float32)
+        target_geom = geom
+        neighborhoods, chan_to_neighborhood_id = np.unique(
+            multi_ci, axis=0, return_inverse=True
+        )
+        neighborhood_ids = chan_to_neighborhood_id[sorting.channels]
+        target_channels = neighborhoods[neighborhood_ids]
+
+    assert sorting.parent_h5_path is not None
+    with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+        _erp, feats = interpolate_by_chunk(
+            mask=None,
+            dataset=h5[clustering_features_cfg.pca_dataset_name],
+            geom=geom,
+            channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
+            channels=sorting.channels,
+            shifts=shifts,
+            registered_geom=target_geom,
+            target_channels=target_channels,
+            params=clustering_features_cfg.interp_params,
+            trim_to_rank=clustering_features_cfg.feature_rank,
+            show_progress=False,
+        )
+
+    feats = torch.asarray(feats)
+    return feats, neighborhoods, neighborhood_ids, len(target_geom)
+
+
+def _multi_channel_embedding(
+    *,
+    feats: Tensor,
+    neighborhoods: np.ndarray,
+    neighborhood_ids: np.ndarray | Tensor,
+    n_target_channels: int,
+    n_pcs: int,
+) -> Tensor:
+    n_spikes, rank, n_chans = feats.shape
+    dim = rank * n_chans
+    assert dim >= n_pcs, f"{n_pcs=} {dim=}."
+    feats_flat = feats.view(n_spikes, dim)
+
+    neighborhood_ids = torch.asarray(neighborhood_ids)
+    obs_mask = torch.asarray(neighborhoods) < n_target_channels
+    neighb_is_full = obs_mask.all(dim=1)
+    spike_is_full = neighb_is_full[neighborhood_ids]
+
+    if spike_is_full.all():
+        fit_feats = feats_flat
+    elif neighb_is_full.any():
+        fit_feats = feats_flat[spike_is_full]
+    else:
+        logger.warning("No full neighborhoods??")
+        fit_feats = torch.nan_to_num(feats_flat)
+    logger.dartsortdebug(
+        f"mcPCA: rank {n_pcs} fit to {fit_feats.shape=} ({feats.shape=})."
+    )
+    _, components, *_ = svd_lowrank_helper(fit_feats, rank=n_pcs)
+    del fit_feats
+
+    pcs = feats_flat @ components.T
+    basis = components.T.reshape(rank, n_chans, n_pcs).double()
+    order = torch.argsort(neighborhood_ids)
+    starts = torch.zeros(len(neighborhoods) + 1, dtype=torch.long)
+    torch.cumsum(
+        torch.bincount(neighborhood_ids, minlength=len(neighborhoods)),
+        dim=0,
+        out=starts[1:],
+    )
+    for j in neighb_is_full.logical_not().nonzero(as_tuple=True)[0]:
+        in_neighb = order[starts[j] : starts[j + 1]]
+        if not in_neighb.numel():
+            continue
+        obs = obs_mask[j]
+        # (rank * n_obs, n_pcs)
+        w = basis[:, obs].reshape(-1, n_pcs)
+        # (n_in_neighb, rank * n_obs)
+        x = feats[in_neighb][:, :, obs].reshape(in_neighb.numel(), -1).double()
+        # inv(w'w) w' x' for each spike
+        pcs[in_neighb] = torch.linalg.solve(w.T @ w, (x @ w).T).T.to(pcs)
+
+    return pcs
+
+
+def _transform_pcs(
+    pcs,
+    *,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    raise_on_na: bool,
+    name: str = "pcs",
+) -> np.ndarray:
+    pctf = clustering_features_cfg.pc_transform
+    if pctf == "log":
+        pcs = signed_log1p(
+            pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+        )
+    elif pctf == "sqrt":
+        pcs = signed_sqrt_transform(
+            pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+        )
+    else:
+        assert pctf in ("none", None)
+    pcs *= clustering_features_cfg.pc_scale
+    check_numbers(f"{pctf} {name}", pcs, raise_for_numerics=raise_on_na)
+    if torch.is_tensor(pcs):
+        pcs = pcs.numpy(force=True)
+    return pcs
+
+
 def signed_log1p(x, pre_scale=1.0):
     """sgn(x) * log(1+|x|*pre_scale)"""
     x = torch.asarray(x)
@@ -328,7 +617,7 @@ def signed_sqrt_transform(x, pre_scale=1.0):
     return xx
 
 
-def check_numbers(name: str, x: np.ndarray, raise_for_numerics=False):
+def check_numbers(name: str, x: np.ndarray | torch.Tensor, raise_for_numerics=False):
     if isinstance(x, torch.Tensor):
         x = x.numpy(force=True)
     if x.ndim > 1:

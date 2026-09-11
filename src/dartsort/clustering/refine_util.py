@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from KDEpy import FFTKDE
 from KDEpy.bw_selection import improved_sheather_jones
+from scipy.spatial import KDTree
 from scipy.stats import norm
 from spikeinterface.core.baserecording import BaseRecording
 
@@ -141,23 +142,202 @@ def pc_merge(
 @databag
 class CCErrorResult:
     sorting: data_util.DARTsortSorting
+
+    kept: np.ndarray | None = None
+    """Which of the input units survived, indexed before the output was flattened."""
+
     errors: np.ndarray | None = None
+    flag_scores: "CCFlagScores | None" = None
+
+
+def flag_possible_cc_error_spikes(
+    sorting: data_util.DARTsortSorting,
+    temporal_radius_samples: int,
+    radius_um: float,
+    spatial_dedup_radius_um: float | None,
+    dedup_temporal_radius_samples: int | None = None,
+    amplitudes_dataset_name: str = "denoised_ptp_amplitudes",
+    time_shifts_dataset_name: str = "time_shifts",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # both zones describe detection-time events, before realignment moved the times
+    times = sorting.times_samples
+    if sorting.has_dataset(time_shifts_dataset_name):
+        times = times - np.asarray(getattr(sorting, time_shifts_dataset_name))
+    channels = sorting.channels
+    amps = getattr(sorting, amplitudes_dataset_name)
+    xy = sorting.geom[channels]
+    n = len(times)
+    if dedup_temporal_radius_samples is None:
+        dedup_temporal_radius_samples = temporal_radius_samples
+    assert temporal_radius_samples > 0
+    assert radius_um > 0
+    assert dedup_temporal_radius_samples > 0
+    assert amps.shape == (n,)
+    assert xy.shape == (n, 2)
+
+    assert dedup_temporal_radius_samples <= temporal_radius_samples
+    if spatial_dedup_radius_um:
+        assert spatial_dedup_radius_um <= radius_um
+
+    # cylinders! spatial l2, max with time
+    kdt = KDTree(np.c_[times / temporal_radius_samples, xy / radius_um])
+    sdm = kdt.sparse_distance_matrix(
+        kdt, max_distance=1.0, p=np.inf, output_type="ndarray"
+    )
+    ii = sdm["i"]
+    jj = sdm["j"]
+
+    dt = np.abs(times[ii] - times[jj])
+    dxy = np.linalg.norm(xy[ii] - xy[jj], axis=1)
+
+    in_candidate = (dt <= temporal_radius_samples) & (dxy <= radius_um)
+    if spatial_dedup_radius_um:
+        in_dedup = (dt <= dedup_temporal_radius_samples) & (
+            dxy <= spatial_dedup_radius_um
+        )
+    else:
+        in_dedup = np.zeros(ii.shape, dtype=bool)
+
+    partner_at_least_as_large = amps[ii] <= amps[jj]
+    keep = in_candidate & ~in_dedup & partner_at_least_as_large & (ii != jj)
+    ii = ii[keep]
+    jj = jj[keep]
+
+    flagged = np.zeros(n, dtype=bool)
+    flagged[ii] = True
+
+    return flagged, ii, jj
+
+
+@databag
+class CCFlagScores:
+    rate: np.ndarray
+    entropy: np.ndarray
+    partner_fraction: np.ndarray
+    chance_rate: np.ndarray | None = None
+    excess_rate: np.ndarray | None = None
+
+
+def cc_flag_scores(
+    sorting: data_util.DARTsortSorting,
+    n_units: int,
+    temporal_radius_samples: int,
+    radius_um: float,
+    spatial_dedup_radius_um: float | None,
+    dedup_temporal_radius_samples: int | None = None,
+    chance_jitter_samples: int = 0,
+    chance_draws: int = 0,
+    seed: int = 0,
+    amplitudes_dataset_name: str = "denoised_ptp_amplitudes",
+) -> CCFlagScores:
+    rate, entropy, partner_fraction = _cc_flag_rate(
+        sorting=sorting,
+        n_units=n_units,
+        temporal_radius_samples=temporal_radius_samples,
+        radius_um=radius_um,
+        spatial_dedup_radius_um=spatial_dedup_radius_um,
+        dedup_temporal_radius_samples=dedup_temporal_radius_samples,
+        amplitudes_dataset_name=amplitudes_dataset_name,
+    )
+
+    if not (chance_jitter_samples and chance_draws):
+        return CCFlagScores(
+            rate=rate, entropy=entropy, partner_fraction=partner_fraction
+        )
+
+    assert chance_jitter_samples > temporal_radius_samples
+    assert chance_draws > 0
+
+    # correct for chance
+    rg = np.random.default_rng(seed)
+    times = sorting.times_samples
+    chance = np.zeros(n_units)
+    for _ in range(chance_draws):
+        jittered = rg.integers(
+            -chance_jitter_samples, chance_jitter_samples + 1, size=times.size
+        )
+        jittered += times
+        jittered.sort()
+        chance += _cc_flag_rate(
+            sorting=sorting.ephemeral_replace(times_samples=jittered),
+            n_units=n_units,
+            temporal_radius_samples=temporal_radius_samples,
+            radius_um=radius_um,
+            spatial_dedup_radius_um=spatial_dedup_radius_um,
+            dedup_temporal_radius_samples=dedup_temporal_radius_samples,
+            amplitudes_dataset_name=amplitudes_dataset_name,
+        )[0]
+    chance /= chance_draws
+
+    return CCFlagScores(
+        rate=rate,
+        entropy=entropy,
+        partner_fraction=partner_fraction,
+        chance_rate=chance,
+        excess_rate=rate - chance,
+    )
+
+
+def _cc_flag_rate(
+    sorting: data_util.DARTsortSorting,
+    n_units: int,
+    temporal_radius_samples: int,
+    radius_um: float,
+    spatial_dedup_radius_um: float | None,
+    dedup_temporal_radius_samples: int | None,
+    amplitudes_dataset_name: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    flagged, ii, jj = flag_possible_cc_error_spikes(
+        sorting=sorting,
+        temporal_radius_samples=temporal_radius_samples,
+        radius_um=radius_um,
+        spatial_dedup_radius_um=spatial_dedup_radius_um,
+        dedup_temporal_radius_samples=dedup_temporal_radius_samples,
+        amplitudes_dataset_name=amplitudes_dataset_name,
+    )
+    assert sorting.labels is not None
+    assert sorting.labels.max() < n_units
+    li = sorting.labels[ii]
+    lj = sorting.labels[jj]
+
+    rate = np.zeros(n_units)
+    entropy = np.full(n_units, np.inf)
+    partner_fraction = np.zeros(n_units)
+    for u in range(n_units):
+        inu = np.flatnonzero(sorting.labels == u)
+        if not inu.size:
+            continue
+        rate[u] = flagged[inu].mean()
+        friends = lj[li == u]
+        friends = friends[friends >= 0]
+        if not friends.size:
+            continue
+        _, friend_count = np.unique(friends, return_counts=True)
+        friend_p = friend_count / friend_count.sum()
+        entropy[u] = -(np.log(friend_p) * friend_p).sum()
+        partner_fraction[u] = friend_p.max()
+
+    return rate, entropy, partner_fraction
 
 
 def collision_cleaning_error_filter(
     *,
-    recording: BaseRecording,
+    recording: BaseRecording | None,
     sorting: data_util.DARTsortSorting,
-    stable_features: StableWaveformFeatures,
+    stable_features: StableWaveformFeatures | None,
     refinement_cfg: RefinementConfig,
     motion: MotionInfo,
     computation_cfg: ComputationConfig | None = None,
 ) -> CCErrorResult:
-    if refinement_cfg.collision_cleaning_error_threshold is None:
+    use_error = refinement_cfg.collision_cleaning_error_threshold is not None
+    use_flag = (
+        refinement_cfg.max_cc_flag_rate < 1.0
+        or refinement_cfg.cc_flag_excess_rate is not None
+    )
+    if not (use_error or use_flag):
         return CCErrorResult(sorting=sorting)
 
     from ..clustering.mixture import drop_units_and_update_scores
-    from ..templates.templates import TemplateConfig, TemplateData
     from ..util.data_util import get_gmm_scores
 
     # remove blank labels just in case
@@ -167,60 +347,55 @@ def collision_cleaning_error_filter(
     if not nu0:
         return CCErrorResult(sorting=sorting)
 
-    # subset the sorting to count per unit
-    subset_sorting = data_util.subsample_to_max_count(
-        sorting, max_spikes=refinement_cfg.pc_merge_spikes_per_unit
-    )
-    assert subset_sorting.labels is not None
-
-    # average feature
-    kept = np.flatnonzero(subset_sorting.labels >= 0)
-    x = stable_features.features[kept]
-    xlabels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
-    n_reg_chans = motion.rgeom.shape[0]
-    means, counts = spiketorch.average_by_label(
-        x, xlabels, stable_features.channels[kept], n_reg_chans
-    )
-    weights = counts / counts.amax(dim=1, keepdim=True)
-
-    # median
-    tpca = data_util.get_tpca(sorting)
-    wf_cfg = tpca.waveform_cfg
-    if tpca.temporal_slice is not None:
-        wf_cfg = wf_cfg.relative_cfg(tpca.temporal_slice, recording.sampling_frequency)
-    templates = TemplateData.from_config(
-        recording=recording,
-        sorting=sorting,
-        template_cfg=TemplateConfig(
-            denoising_method="svd",
-            reduction="median",
-            denoising_rank=tpca.rank,
-        ),
-        tsvd=tpca.to_sklearn(),
-        motion=motion,
-        waveform_cfg=wf_cfg,
-        computation_cfg=computation_cfg,
-    )
-    templates = means.new_tensor(templates.templates)
-    templates = tpca.force_embed(templates)
-
-    # check difference
-    x = means * weights[:, None]
-    K = x.shape[0]
-    x = x.view(K, -1)
-    y = (templates * weights[:, None]).view(K, -1)
-    xnorm = torch.linalg.vector_norm(x, dim=1)
-    ynorm = torch.linalg.vector_norm(y, dim=1)
-    dist = torch.linalg.vector_norm(x - y, dim=1).div_((xnorm * ynorm).sqrt_())
-    dist = dist.numpy(force=True)
-
-    # discard bad units
     keep_mask = np.ones(nu0, dtype=np.bool)
-    bad_ids = np.flatnonzero(dist > refinement_cfg.collision_cleaning_error_threshold)
-    logger.dartsortdebug(
-        f"Collision-cleaning error filter drops {bad_ids.size} / {nu0} units."
-    )
-    keep_mask[bad_ids] = False
+
+    dist = None
+    if use_error:
+        assert recording is not None
+        assert stable_features is not None
+        dist = collision_cleaning_errors(
+            recording=recording,
+            sorting=sorting,
+            stable_features=stable_features,
+            refinement_cfg=refinement_cfg,
+            motion=motion,
+            computation_cfg=computation_cfg,
+        )
+        error_bad = dist > refinement_cfg.collision_cleaning_error_threshold
+        logger.dartsortdebug(
+            f"Collision-cleaning error filter dropped {error_bad.sum()} / {nu0} units."
+        )
+        keep_mask &= np.logical_not(error_bad)
+
+    flag_scores = None
+    if use_flag:
+        need_chance = refinement_cfg.cc_flag_excess_rate is not None
+        flag_scores = cc_flag_scores(
+            sorting=sorting,
+            n_units=nu0,
+            temporal_radius_samples=refinement_cfg.cc_flag_temporal_radius_samples,
+            radius_um=refinement_cfg.cc_flag_radius_um,
+            spatial_dedup_radius_um=refinement_cfg.cc_flag_spatial_dedup_radius_um,
+            dedup_temporal_radius_samples=refinement_cfg.cc_flag_dedup_temporal_radius_samples,
+            chance_jitter_samples=(
+                refinement_cfg.cc_flag_chance_jitter_samples if need_chance else 0
+            ),
+            chance_draws=refinement_cfg.cc_flag_chance_draws if need_chance else 0,
+        )
+
+        flag_bad = np.zeros(nu0, dtype=np.bool)
+        if refinement_cfg.max_cc_flag_rate < 1.0:
+            flag_bad |= (flag_scores.rate > refinement_cfg.max_cc_flag_rate) & (
+                flag_scores.entropy < refinement_cfg.cc_flag_entropy_cutoff
+            )
+        if refinement_cfg.cc_flag_excess_rate is not None:
+            assert flag_scores.excess_rate is not None
+            flag_bad |= flag_scores.excess_rate > refinement_cfg.cc_flag_excess_rate
+
+        logger.dartsortdebug(f"CC flag criterion dropped {flag_bad.sum()} / {nu0} units.")
+        keep_mask &= np.logical_not(flag_bad)
+
+    bad_ids = np.flatnonzero(np.logical_not(keep_mask))
     spike_keep_mask = keep_mask[sorting.labels]
     new_labels = np.where(spike_keep_mask, sorting.labels, -1)
 
@@ -253,7 +428,76 @@ def collision_cleaning_error_filter(
 
     sorting = sorting.ephemeral_replace(**new_props)
     sorting = sorting.flatten(include_gmm_properties=True)
-    return CCErrorResult(sorting=sorting, errors=dist)
+    return CCErrorResult(
+        sorting=sorting, kept=keep_mask, errors=dist, flag_scores=flag_scores
+    )
+
+
+def collision_cleaning_errors(
+    *,
+    recording: BaseRecording,
+    sorting: data_util.DARTsortSorting,
+    stable_features: StableWaveformFeatures,
+    refinement_cfg: RefinementConfig,
+    motion: MotionInfo,
+    computation_cfg: ComputationConfig | None = None,
+) -> np.ndarray:
+    from ..templates.templates import TemplateConfig, TemplateData
+
+    assert sorting.labels is not None
+
+    # subset the sorting to count per unit
+    subset_sorting = data_util.subsample_to_max_count(
+        sorting, max_spikes=refinement_cfg.pc_merge_spikes_per_unit
+    )
+    assert subset_sorting.labels is not None
+
+    # average feature
+    kept = np.flatnonzero(subset_sorting.labels >= 0)
+    x = stable_features.features[kept]
+    xlabels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
+    n_reg_chans = motion.rgeom.shape[0]
+    means, counts = spiketorch.average_by_label(
+        x, xlabels, stable_features.channels[kept], n_reg_chans
+    )
+    weights = counts / counts.amax(dim=1, keepdim=True)
+
+    # median
+    tpca = data_util.get_tpca(sorting)
+    wf_cfg = tpca.waveform_cfg
+    if tpca.temporal_slice is not None:
+        wf_cfg = wf_cfg.relative_cfg(tpca.temporal_slice, recording.sampling_frequency)
+    template_data = TemplateData.from_config(
+        recording=recording,
+        sorting=sorting,
+        template_cfg=TemplateConfig(
+            denoising_method="svd",
+            reduction="median",
+            denoising_rank=tpca.rank,
+        ),
+        tsvd=tpca.to_sklearn(),
+        motion=motion,
+        waveform_cfg=wf_cfg,
+        computation_cfg=computation_cfg,
+    )
+    # the template engine flattens its sorting, so rows are indexed by unit_ids
+    unit_ids = np.asarray(template_data.unit_ids)
+    assert unit_ids.shape[0] == template_data.templates.shape[0]
+    assert unit_ids.max() < means.shape[0]
+    templates = means.new_zeros(means.shape[0], *template_data.templates.shape[1:])
+    templates[unit_ids] = means.new_tensor(template_data.templates)
+    templates = tpca.force_embed(templates)
+    assert templates.shape == means.shape
+
+    # check difference
+    x = means * weights[:, None]
+    K = x.shape[0]
+    x = x.view(K, -1)
+    y = (templates * weights[:, None]).view(K, -1)
+    xnorm = torch.linalg.vector_norm(x, dim=1)
+    ynorm = torch.linalg.vector_norm(y, dim=1)
+    dist = torch.linalg.vector_norm(x - y, dim=1).div_((xnorm * ynorm).sqrt_())
+    return dist.numpy(force=True)
 
 
 @databag

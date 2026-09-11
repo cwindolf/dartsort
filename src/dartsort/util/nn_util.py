@@ -277,11 +277,9 @@ def get_waveform_mlp(
         # so this is matmul over time, and kernel size is 1 to be separate over chans
         conv = nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)
         layers.append(WaveformOnly(conv))
-        norm = get_norm(n_input_channels, norm_kind)
+        norm = get_channel_norm(n_input_channels, norm_kind)
         if norm is not None:
-            layers.append(
-                WaveformOnly(nn.Sequential(Permute(0, 2, 1), norm, Permute(0, 2, 1)))
-            )
+            layers.append(WaveformOnly(norm))
         layers.append(WaveformOnly(nn.ReLU()))
 
     if separated_mask_input:
@@ -307,9 +305,9 @@ def get_waveform_mlp(
     if return_initial_shape:
         layers.append(nn.Unflatten(-1, (spike_length_samples, n_input_channels)))
     if final_conv_fullheight:
-        norm = get_norm(n_input_channels, norm_kind)
+        norm = get_channel_norm(n_input_channels, norm_kind)
         if norm is not None:
-            layers.append(nn.Sequential(Permute(0, 2, 1), norm, Permute(0, 2, 1)))
+            layers.append(norm)
         layers.append(nn.ReLU())
         conv = nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)
         layers.append(conv)
@@ -328,6 +326,46 @@ def get_waveform_mlp(
     return net
 
 
+class MaskedSetPooling(nn.Module):
+    def forward(self, inputs):
+        embeddings, mask = inputs
+        mask = mask.unsqueeze(-1)
+        keep = mask > 0
+        denom = mask.sum(1).clamp(min=1.0)
+        mean = embeddings.mul(mask).sum(1).div(denom)
+        amax = embeddings.masked_fill(keep.logical_not(), -torch.inf).amax(1)
+        amax = torch.where(keep.any(1), amax, torch.zeros_like(amax))
+        return torch.cat((mean, amax), dim=1)
+
+
+def get_waveform_deepsets_model(
+    n_channel_features,
+    channel_hidden_dims,
+    readout_hidden_dims,
+    output_dim,
+    embed_dim=128,
+    norm_kind="layernorm",
+    nonlinearity="ReLU",
+):
+    # batchnorm would normalize over the channel axis here
+    assert norm_kind in ("layernorm", "none", None)
+    channel_encoder = get_mlp(
+        n_channel_features,
+        channel_hidden_dims,
+        embed_dim,
+        norm_kind=norm_kind,
+        nonlinearity=nonlinearity,
+    )
+    readout = get_mlp(
+        2 * embed_dim,
+        readout_hidden_dims,
+        output_dim,
+        norm_kind=norm_kind,
+        nonlinearity=nonlinearity,
+    )
+    return nn.Sequential(WaveformOnly(channel_encoder), MaskedSetPooling(), readout)
+
+
 def get_norm(n_features, norm_kind=None):
     if norm_kind == "batchnorm":
         return nn.BatchNorm1d(n_features)
@@ -335,6 +373,16 @@ def get_norm(n_features, norm_kind=None):
         return nn.LayerNorm(n_features)
     assert norm_kind in ("none", None)
     return None
+
+
+def get_channel_norm(n_input_channels, norm_kind=None):
+    """Normalize over the channel axis of an (n, t, c) waveform batch."""
+    norm = get_norm(n_input_channels, norm_kind)
+    if norm is None:
+        return None
+    if isinstance(norm, nn.LayerNorm):
+        return norm
+    return nn.Sequential(Permute(0, 2, 1), norm, Permute(0, 2, 1))
 
 
 class ResidualForm(nn.Module):
@@ -444,6 +492,7 @@ if hasattr(torch.serialization, "add_safe_globals"):
             ResidualForm,
             WaveformOnlyResidualForm,
             ChannelwiseDropout,
+            MaskedSetPooling,
             Cat,
             Permute,
             WaveformOnly,

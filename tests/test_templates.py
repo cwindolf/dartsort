@@ -103,9 +103,9 @@ def test_refractory_templates(
     )
     realign_cfg = TemplateRealignmentConfig(
         realign_peaks=bool(realign_peaks),
-        realign_strategy=realign_peaks if realign_peaks else "mainchan_trough_factor",
+        realign_strategy=realign_peaks or "mainchan_trough_factor",
     )
-    st, td = estimate_template_library(
+    _, td = estimate_template_library(
         recording=sim["recording"],
         sorting=sim["sorting"],
         motion=sim["motion"],
@@ -161,9 +161,7 @@ def test_refractory_templates_algorithm_agreement(
         )
         realign_cfg = TemplateRealignmentConfig(
             realign_peaks=bool(realign_peaks),
-            realign_strategy=realign_peaks
-            if realign_peaks
-            else "mainchan_trough_factor",
+            realign_strategy=realign_peaks or "mainchan_trough_factor",
         )
         _, td = estimate_template_library(
             recording=sim["recording"],
@@ -180,7 +178,7 @@ def test_refractory_templates_algorithm_agreement(
 
     td0, *rest = tds
 
-    for alg, tdb in zip(algorithms[1:], rest):
+    for _alg, tdb in zip(algorithms[1:], rest, strict=False):
         np.testing.assert_array_equal(td0.unit_ids, tdb.unit_ids)
         np.testing.assert_array_equal(td0.spike_counts, tdb.spike_counts)
         np.testing.assert_array_equal(
@@ -236,7 +234,7 @@ def test_drifting_refractory_templates(refractory_simulations):
         elif tcfg.template_interp_params.kernel == "thinplate":
             np.testing.assert_allclose(temps[sl], td.templates[sl], atol=7.0)
         else:
-            assert False
+            raise AssertionError(tcfg.algorithm)
 
         sl = slice(None)
         if tcfg.algorithm == "unitextract":
@@ -246,7 +244,7 @@ def test_drifting_refractory_templates(refractory_simulations):
         elif tcfg.template_interp_params.kernel == "thinplate":
             np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
         else:
-            assert False
+            raise AssertionError(tcfg.algorithm)
 
 
 @pytest.mark.parametrize("denoising_method", ("none",))
@@ -518,7 +516,7 @@ def test_pconv(tmp_path, unit_ids):
             ixa, pconvs, which_b = pconvdb.query(torch.arange(5), torch.arange(5))
             ixb = torch.arange(5)[which_b]
             pairs = set()
-            for ii, jj, pc in zip(ixa, ixb, pconvs):
+            for ii, jj, pc in zip(ixa, ixb, pconvs, strict=True):
                 ii = ii.item()
                 jj = jj.item()
                 pairs.add((ii, jj))
@@ -580,7 +578,7 @@ def test_pconv(tmp_path, unit_ids):
                 continue
 
             pairs = set()
-            for ii, jj, pc in zip(ixa, ixb, pconvs):
+            for ii, jj, pc in zip(ixa, ixb, pconvs, strict=True):
                 ii = ii.item()
                 jj = jj.item()
                 pairs.add((ii, jj))
@@ -597,4 +595,4 @@ def test_pconv(tmp_path, unit_ids):
                 # 0 falls off the edge
                 assert pairs == (set(overlaps.keys()) - {(0, 0)})
             else:
-                assert False
+                raise AssertionError(shifta)

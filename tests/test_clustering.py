@@ -56,6 +56,16 @@ refinement_kwargs = [
 refinement_kwargs = [dict(refinement_strategy="tmm", signal_rank=0), *refinement_kwargs]
 refinement_kwargs = [refkw | rk for rk in refinement_kwargs]
 
+# refinement runs on the sorting's own labels, except in the last case, which
+# throws them away first so that the tmm has to initialize itself with kmeans++
+refinement_cases = [(None, rk) for rk in refinement_kwargs]
+refinement_cases.append(
+    (
+        clukw | dict(cluster_strategy="remove_labels"),
+        refkw | dict(refinement_strategy="tmm"),
+    )
+)
+
 # only some methods are good enough to actually test the outcome
 eval_clustering_kwargs = [
     dict(cluster_strategy="none"),  # ground truth
@@ -117,8 +127,8 @@ def test_clustering(simulations, sim_name, featkw, cluskw):
 
 
 @pytest.mark.parametrize("sim_name", ["drifty_szmini", "driftn_szmini"])
-@pytest.mark.parametrize("refkw", refinement_kwargs)
-def test_refinement(simulations, sim_name, refkw):
+@pytest.mark.parametrize("cluskw,refkw", refinement_cases)
+def test_refinement(simulations, sim_name, cluskw, refkw):
     sim = simulations[sim_name]
     recording = sim["recording"]
     sorting = sim["sorting"]
@@ -131,7 +141,8 @@ def test_refinement(simulations, sim_name, refkw):
         computation_cfg=None,
     )
     clusterer = get_clusterer(
-        clustering_cfg=None, refinement_cfgs=[RefinementConfig(**refkw)]
+        clustering_cfg=None if cluskw is None else ClusteringConfig(**cluskw),
+        refinement_cfgs=[RefinementConfig(**refkw)],
     )
     if clusterer.needs_stable_features():
         stable_features = StableWaveformFeatures.from_config(

@@ -1,6 +1,7 @@
 """Neural-net based substitute for template matching."""
 
 import gc
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,7 +10,13 @@ import numpy as np
 import torch
 from spikeinterface.core import BaseRecording
 
-from ..transform import Voltage, Waveform, WaveformPipeline, WaveformWhitener
+from ..transform import (
+    Voltage,
+    Waveform,
+    WaveformPipeline,
+    WaveformWhitener,
+    split_featurization_cfg_for_denoised_features,
+)
 from ..util import job_util
 from ..util.data_util import SpikeDataset, subsample_waveforms
 from ..util.internal_config import (
@@ -18,6 +25,7 @@ from ..util.internal_config import (
     SubtractionConfig,
     ThresholdingConfig,
     WaveformConfig,
+    WaveformKind,
     default_peeling_fit_sampling_cfg,
     default_subtraction_cfg,
     default_waveform_cfg,
@@ -40,7 +48,8 @@ class SubtractionPeeler(BasePeeler):
         recording: BaseRecording,
         channel_index: np.ndarray | torch.Tensor,
         subtraction_denoising_pipeline: WaveformPipeline,
-        featurization_pipeline: WaveformPipeline | None,
+        featurization_pipeline: WaveformPipeline | None = None,
+        featurization_pipelines: Mapping[WaveformKind, WaveformPipeline] | None = None,
         p: SubtractionConfig = default_subtraction_cfg,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
@@ -61,6 +70,7 @@ class SubtractionPeeler(BasePeeler):
             recording=recording,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
+            featurization_pipelines=featurization_pipelines,
             chunk_length_samples=p.chunk_length_samples,
             chunk_margin_samples=self.next_margin(2 * spike_length_samples),
             fit_sampling_cfg=fit_sampling_cfg,
@@ -225,13 +235,22 @@ class SubtractionPeeler(BasePeeler):
             waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
-        featurization_pipeline = WaveformPipeline.from_config(
-            geom=geom,
-            channel_index=channel_index,
-            featurization_cfg=featurization_cfg,
-            waveform_cfg=waveform_cfg,
-            sampling_frequency=recording.sampling_frequency,
+
+        featurization_cfgs = split_featurization_cfg_for_denoised_features(
+            featurization_cfg,
+            localization=subtraction_cfg.denoise_before_localization,
+            amplitudes=subtraction_cfg.denoise_before_amplitudes,
         )
+        featurization_pipelines = {
+            kind: WaveformPipeline.from_config(
+                geom=geom,
+                channel_index=channel_index,
+                featurization_cfg=cfg,
+                waveform_cfg=waveform_cfg,
+                sampling_frequency=recording.sampling_frequency,
+            )
+            for kind, cfg in featurization_cfgs.items()
+        }
         save_collidedness = (
             featurization_cfg.save_collidedness and not featurization_cfg.skip
         )
@@ -240,7 +259,7 @@ class SubtractionPeeler(BasePeeler):
             recording=recording,
             channel_index=channel_index,
             subtraction_denoising_pipeline=subtraction_denoising_pipeline,
-            featurization_pipeline=featurization_pipeline,
+            featurization_pipelines=featurization_pipelines,
             p=subtraction_cfg,
             waveform_cfg=waveform_cfg,
             fit_sampling_cfg=sampling_cfg,
@@ -259,7 +278,9 @@ class SubtractionPeeler(BasePeeler):
         return_residual=False,
         return_waveforms=True,
     ):
-        del return_waveforms  # always done here
+        return_denoised = (
+            return_waveforms and "denoised" in self.featurization_pipelines
+        )
 
         extract_index = None if self.extract_subtract_same else self.b.channel_index
         traces = traces.to(self.dtype)
@@ -295,6 +316,7 @@ class SubtractionPeeler(BasePeeler):
             compute_collidedness=self.save_collidedness,
             local_whiteners=self.b.local_whiteners,
             whitening_kernel=self.b.whitening_kernel,
+            return_denoised_waveforms=return_denoised,
         )
 
         # add in chunk_start_samples
@@ -306,6 +328,9 @@ class SubtractionPeeler(BasePeeler):
             channels=subtraction_result.channels,
             collisioncleaned_waveforms=subtraction_result.collisioncleaned_waveforms,
         )
+        if return_denoised:
+            assert subtraction_result.denoised_waveforms is not None
+            peel_result["denoised_waveforms"] = subtraction_result.denoised_waveforms
         peel_result.update(subtraction_result.features)
         if return_residual:
             peel_result["residual"] = subtraction_result.residual
@@ -429,8 +454,8 @@ class SubtractionPeeler(BasePeeler):
         self.subtraction_denoising_pipeline = WaveformPipeline(ifeats + already_fitted)
 
         # and we don't need any features for this
-        orig_featurization_pipeline = self.featurization_pipeline
-        self.featurization_pipeline = WaveformPipeline([])
+        orig_featurization_pipelines = self.featurization_pipelines
+        self.featurization_pipelines = torch.nn.ModuleDict()
 
         # run mini subtraction
         if tmp_dir is None:
@@ -447,7 +472,7 @@ class SubtractionPeeler(BasePeeler):
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
-                waveforms, fixed_properties = subsample_waveforms(
+                waveform_dict, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling_cfg.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
@@ -457,6 +482,7 @@ class SubtractionPeeler(BasePeeler):
                     waveforms_dataset_name="subtract_fit_waveforms",
                     device="cpu" if which == "denoisers" else device,
                 )
+                waveforms = waveform_dict["subtract_fit_waveforms"]
                 if not len(waveforms):
                     raise ValueError(
                         "Found no spikes when trying to fit subtraction models. "
@@ -496,7 +522,7 @@ class SubtractionPeeler(BasePeeler):
                     orig_denoise = orig_denoise.to("cpu")
             finally:
                 self.subtraction_denoising_pipeline = orig_denoise
-                self.featurization_pipeline = orig_featurization_pipeline
+                self.featurization_pipelines = orig_featurization_pipelines
                 self.to("cpu")
                 if temp_hdf5_filename.exists():
                     temp_hdf5_filename.unlink()

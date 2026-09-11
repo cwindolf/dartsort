@@ -304,7 +304,7 @@ def rbf_kernel_sqrt(geom, bandwidth=15.0, dtype="float32"):
 
 # collidedness special cased in sims
 default_sim_featurization_cfg = FeaturizationConfig(
-    do_enforce_decrease=False, additional_com_localization=True, save_collidedness=False
+    do_enforce_decrease="no", additional_com_localization=True, save_collidedness=False
 )
 
 
@@ -312,7 +312,8 @@ def add_features(h5_path, recording, featurization_cfg, computation_cfg):
     with h5py.File(h5_path, "r+", locking=False) as h5:
         geom = cast(h5py.Dataset, h5["geom"])[:]
         channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
-        waveforms, fixed_properties = subsample_waveforms(h5=h5)
+        waveform_dict, fixed_properties = subsample_waveforms(h5=h5)
+        waveforms = waveform_dict["collisioncleaned_waveforms"]
         if not len(waveforms):
             return
         featurization_cfg = replace(featurization_cfg, do_localization=len(geom) > 1)
@@ -425,7 +426,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         amp_jitter_family: Literal["gamma", "uniform", "normal"] = "normal",
         temporal_jitter: int = 1,
         temporal_jitter_family: Literal["uniform", "by_unit"] = "uniform",
-        extract_radius: float = 100.0,
+        extract_radius: float = 150.0,
         random_seed: np.random.Generator | int = 0,
         features_dtype="float32",
         compute_collision_waveforms=False,

@@ -83,7 +83,12 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         else:
             # can skip locations
             self.clustering_features_cfg = replace(
-                self.clustering_features_cfg, use_x=False, use_z=False
+                self.clustering_features_cfg,
+                use_x=False,
+                use_z=False,
+                n_main_channel_pcs=0,
+                n_multi_channel_pcs=0,
+                amplitude_kind="stored",
             )
         self.pca_ds: str = pca_ds
         self.loc_ds: str = loc_ds

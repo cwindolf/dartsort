@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from scipy.interpolate import CubicSpline
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist, squareform
+from torch import Tensor
 
 from .logging_util import progrange
 
@@ -190,7 +191,7 @@ def make_channel_index(
     radius: float,
     *,
     to_torch: Literal[True],
-    p: int | float = 2,
+    p: float = 2,
     pad_val: int | None = None,
 ) -> torch.LongTensor: ...
 
@@ -201,7 +202,7 @@ def make_channel_index(
     radius: float,
     *,
     to_torch: Literal[False],
-    p: int | float = 2,
+    p: float = 2,
     pad_val: int | None = None,
 ) -> np.ndarray: ...
 
@@ -212,7 +213,7 @@ def make_channel_index(
     radius: float,
     *,
     to_torch: bool = False,
-    p: int | float = 2,
+    p: float = 2,
     pad_val: int | None = None,
 ) -> np.ndarray | torch.Tensor: ...
 
@@ -222,7 +223,7 @@ def make_channel_index(
     radius: float,
     *,
     to_torch: bool = False,
-    p: int | float = 2,
+    p: float = 2,
     pad_val: int | None = None,
 ) -> np.ndarray | torch.Tensor:
     """
@@ -416,7 +417,9 @@ def single_channel_index(n_channels, to_torch=False):
 # fitting models.
 
 
-def get_channels_in_probe(waveforms, max_channels, channel_index):
+def get_channels_in_probe(
+    waveforms: Tensor, max_channels: Tensor, channel_index: Tensor
+):
     n, _t, c = waveforms.shape
     assert max_channels.shape == (n,)
     assert channel_index.ndim == 2 and channel_index.shape[1] == c
@@ -519,7 +522,8 @@ def get_channel_index_mask(geom, channel_index, radius=None, n_channels_subset=N
     """Get a boolean mask showing if channels are inside a radial/linear subset
 
     Subsetting is controlled by a radius or by a number of channels. Radius
-    takes priority.
+    takes priority. The mask is relative to the neighborhood's channel (i.e., the
+    row index).
     """
     assert geom.ndim == channel_index.ndim == 2
     assert geom.shape[0] == channel_index.shape[0]
@@ -551,13 +555,18 @@ def get_channel_index_mask(geom, channel_index, radius=None, n_channels_subset=N
     return subset
 
 
-def mask_to_relative(channel_index_mask):
+def mask_to_relative(channel_index_mask: np.ndarray | torch.Tensor):
+    """row-wise nonzero to convert a channel index mask to a relative indexing helper structure
+
+    Masked-out entries are replaced with channel_index_mask.shape[1]; kept
+    entries are replaced by their relative index in the original channel neighborhood.
+    """
     assert channel_index_mask.ndim == 2
-    max_sub_chans = channel_index_mask.sum(axis=1).max()
+    max_sub_chans = int(channel_index_mask.sum(1).max().item())
     original_max_neighbs = channel_index_mask.shape[1]
     n_channels_tot = channel_index_mask.shape[0]
 
-    is_tensor = torch.is_tensor(channel_index_mask)
+    is_tensor = isinstance(channel_index_mask, torch.Tensor)
     if is_tensor:
         rel_sub_channel_index = torch.full(
             (n_channels_tot, max_sub_chans),
@@ -688,6 +697,7 @@ def get_channel_subset(
 
 
 def relative_channel_subset_index(channel_index_full, channel_index_new, to_torch=True):
+    """What indices to grab when going from a bigger channel index to a smaller one?"""
     mask = channel_subset_mask(channel_index_full, channel_index_new, to_torch=True)
     rel_sub_channel_index = mask_to_relative(mask)
     return rel_sub_channel_index
@@ -696,6 +706,11 @@ def relative_channel_subset_index(channel_index_full, channel_index_new, to_torc
 def get_relative_subset(
     waveforms, max_channels, rel_sub_channel_index, fill_value=torch.nan
 ):
+    """Reindex from a bigger channel index to a smaller one
+
+    Cooperates with relative_channel_subset_index, which should be used to get
+    rel_sub_channel_index.
+    """
     waveforms = F.pad(waveforms, (0, 1), value=fill_value)
     index = rel_sub_channel_index[max_channels]
     if waveforms.ndim == 3:
@@ -707,7 +722,7 @@ def get_relative_subset(
 
 def grab_main_channels(waveforms, main_channels, channel_index, keepdim=False):
     nc = len(channel_index)
-    _, relative_positions = np.nonzero((channel_index == np.arange(nc)[:, None]))
+    _, relative_positions = np.nonzero(channel_index == np.arange(nc)[:, None])
     assert relative_positions.shape == (nc,)
     inds = relative_positions[main_channels]
     res = np.take_along_axis(waveforms, inds[:, None, None], axis=2)

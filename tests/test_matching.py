@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 nofeatcfg = dartsort.FeaturizationConfig(
     do_nn_denoise=False,
     do_tpca_denoise=False,
-    do_enforce_decrease=False,
+    do_enforce_decrease="no",
     denoise_only=True,
 )
 

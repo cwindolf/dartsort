@@ -55,10 +55,14 @@ from .util import (
 from .util.data_util import (
     DARTsortSorting,
     check_recording,
+    concatenate_sortings,
     get_featurization_pipeline,
     get_tpca,
     load,
     load_stored_tsvd,
+    sorting_from_spikeinterface,
+    try_get_denoising_pipeline,
+    try_get_model_dir,
 )
 from .util.drift_util import registered_geometry
 from .util.internal_config import *

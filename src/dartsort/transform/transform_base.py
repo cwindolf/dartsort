@@ -133,7 +133,7 @@ class BaseWaveformModule(BModule):
 
     def _pre_load_state(self, state_dict, prefix, *args, **kwargs):
         # wish torch would strip the prefix for us?
-        extra_state_keys = [k for k in state_dict.keys() if k.endswith("_extra_state")]
+        extra_state_keys = [k for k in state_dict if k.endswith("_extra_state")]
 
         all_submodule_keys = []
         if self.submodule_names:
@@ -260,8 +260,10 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
         name_prefix=None,
         waveform_cfg=None,
         sampling_frequency=30_000.0,
+        class_names_and_kwargs=None,
     ):
-        del geom, channel_index
+        from .pipeline import WaveformPipeline
+
         t = []
         if pipeline is not None:
             t = [t for t in pipeline if t.is_featurizer]
@@ -270,7 +272,16 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
             if name is None:
                 name = f"passthrough_{t[0].name}"
         super().__init__(name=name, name_prefix=name_prefix)
+        if pipeline is None and class_names_and_kwargs is not None:
+            pipeline = WaveformPipeline.from_class_names_and_kwargs(
+                geom=geom,
+                channel_index=channel_index,
+                class_names_and_kwargs=class_names_and_kwargs,
+                waveform_cfg=waveform_cfg,
+                sampling_frequency=sampling_frequency,
+            )
         self.pipeline = pipeline
+        self.class_names_and_kwargs = class_names_and_kwargs
 
     def needs_precompute(self):
         if self.pipeline is None:
@@ -287,16 +298,37 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
             return False
         return self.pipeline.needs_fit()
 
-    def fit(self, recording, waveforms, **spike_data):
+    def fit(
+        self,
+        recording: BaseRecording,
+        waveforms: torch.Tensor,
+        *,
+        hdf5_filename: Path | None = None,
+        computation_cfg: ComputationConfig,
+        channels: torch.Tensor,
+        pipeline: "WaveformPipeline | None" = None,
+        **spike_data: torch.Tensor,
+    ):
+        del pipeline
         if self.pipeline is None:
             return
-        self.pipeline.fit(recording, waveforms, **spike_data)
+        self.pipeline.fit(
+            recording=recording,
+            waveforms=waveforms,
+            hdf5_filename=hdf5_filename,
+            computation_cfg=computation_cfg,
+            channels=channels,
+            **spike_data,
+        )
 
     def forward(self, waveforms, **spike_data):
         if self.pipeline is None:
             return waveforms, {}
         pipeline_waveforms, pipeline_features = self.pipeline(waveforms, **spike_data)
-        del pipeline_waveforms  # passthrough!
+        # I am a passthrough and I do not modify waveforms
+        del pipeline_waveforms
+        if "waveforms" in pipeline_features:
+            del pipeline_features["waveforms"]
         return waveforms, pipeline_features
 
     def spike_datasets(self, force_save=False):

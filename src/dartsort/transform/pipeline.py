@@ -1,7 +1,8 @@
 """A class which manages pipelines of denoisers and featurizers"""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import torch
@@ -12,6 +13,7 @@ from ..util.internal_config import (
     ComputationConfig,
     FeaturizationConfig,
     WaveformConfig,
+    WaveformKind,
 )
 from ..util.logging_util import get_logger
 from ..util.py_util import ensure_path
@@ -207,9 +209,9 @@ class WaveformPipeline(torch.nn.Module):
             sampling_frequency=sampling_frequency,
         )
         return cls.from_class_names_and_kwargs(
-            geom,
-            channel_index,
-            args,
+            geom=geom,
+            channel_index=channel_index,
+            class_names_and_kwargs=args,
             waveform_cfg=waveform_cfg,
             sampling_frequency=sampling_frequency,
         )
@@ -324,13 +326,19 @@ class WaveformPipeline(torch.nn.Module):
 
             if transformer.needs_fit():
                 transformer.train()
-                transformer.fit(
-                    recording=recording,
-                    computation_cfg=computation_cfg,
-                    hdf5_filename=hdf5_filename,
-                    pipeline=self,
-                    **features,
-                )
+                try:
+                    transformer.fit(
+                        recording=recording,
+                        computation_cfg=computation_cfg,
+                        hdf5_filename=hdf5_filename,
+                        pipeline=self,
+                        **features,
+                    )
+                except Exception as e:
+                    raise ValueError(
+                        f"Error fitting {transformer} at index {tix} of pipeline:\n{self}"
+                        f"Features are: {list(features.keys())}"
+                    ) from e
             transformer.eval()
             transformer.requires_grad_(False)
 
@@ -340,6 +348,9 @@ class WaveformPipeline(torch.nn.Module):
 
             if transformer.is_featurizer and transformer.is_denoiser:
                 waveforms, new_features = transformer(**features)
+                if "waveforms" in new_features:
+                    if new_features.pop("waveforms") is not waveforms:
+                        raise AssertionError()
                 features.update(waveforms=waveforms, **new_features)
             elif transformer.is_featurizer and transformer.featurize_in_fit:
                 assert isinstance(transformer, BaseWaveformFeaturizer)
@@ -458,6 +469,64 @@ def check_unique_feature_names(transformers):
         raise ValueError("Featurizer name collision in a WaveformPipeline")
 
 
+def check_unique_feature_names_across(pipelines: "Mapping[str, WaveformPipeline]"):
+    """Pipelines write to a shared h5, so their dataset names must not collide."""
+    seen: dict[str, str] = {}
+    for kind, pipeline in pipelines.items():
+        for ds in pipeline.spike_datasets():
+            if ds.name in seen:
+                raise ValueError(
+                    f"Feature name collision: {ds.name} is written by both the "
+                    f"{seen[ds.name]} and {kind} featurization pipelines."
+                )
+            seen[ds.name] = kind
+
+
+def split_featurization_cfg_for_denoised_features(
+    featurization_cfg: FeaturizationConfig,
+    localization: bool = False,
+    amplitudes: bool = False,
+) -> dict[WaveformKind, FeaturizationConfig]:
+    fc = featurization_cfg
+    do_feats = not (fc.skip or fc.denoise_only)
+    localization &= do_feats and (fc.do_localization or fc.additional_com_localization)
+    amplitudes &= do_feats and _saves_amplitudes(fc)
+    if not (localization or amplitudes):
+        return {"collisioncleaned": featurization_cfg}
+
+    loc_off = dict(do_localization=False, additional_com_localization=False)
+    amp_off = dict(
+        save_amplitudes=False,
+        save_amplitude_vectors=False,
+        save_all_amplitudes=False,
+        output_amplitude_vectors="none",
+    )
+    collisioncleaned_kw = {}
+    denoised_kw = {}
+    (collisioncleaned_kw if localization else denoised_kw).update(loc_off)
+    (collisioncleaned_kw if amplitudes else denoised_kw).update(amp_off)
+
+    collisioncleaned_cfg = replace(featurization_cfg, **collisioncleaned_kw)
+    denoised_cfg = replace(
+        featurization_cfg,
+        do_nn_denoise=False,
+        do_tpca_denoise=False,
+        save_input_voltages=False,
+        save_input_waveforms=False,
+        save_input_tpca_projs=False,
+        compute_input_tpca_projs_regardless=False,
+        save_output_waveforms=False,
+        save_output_tpca_projs=False,
+        save_collidedness=False,
+        learn_cleaned_tpca_basis=False,
+        use_gmm_classifier=False,
+        fit_disabled_whitener=False,
+        whiten_cfg=None,
+        **denoised_kw,
+    )
+    return {"collisioncleaned": collisioncleaned_cfg, "denoised": denoised_cfg}
+
+
 def featurization_config_to_class_names_and_kwargs(
     featurization_cfg: FeaturizationConfig,
     waveform_cfg: WaveformConfig,
@@ -505,12 +574,26 @@ def featurization_config_to_class_names_and_kwargs(
             ("WaveformWhitener", {"disabled": True, "whiten_cfg": fc.whiten_cfg})
         )
 
+    will_localize_or_amplitude = _will_localize_or_amplitude(fc)
+    early_stack = (
+        will_localize_or_amplitude
+        and fc.singlechan_denoised_amplitudes_and_localizations
+    )
+    if early_stack:
+        loc_kw = _add_localization_and_ampvec(featurization_cfg)
+        class_names_and_kwargs.append(
+            (
+                "Passthrough",
+                {"name": "loc_passthrough", "class_names_and_kwargs": loc_kw},
+            )
+        )
+
     # logic for picking an efficient combo of tpcas and nn denoisers
     class_names_and_kwargs.extend(
         _add_tpca_and_nn(featurization_cfg, waveform_cfg, sampling_frequency)
     )
 
-    if fc.do_enforce_decrease is True:
+    if fc.do_enforce_decrease == "yes":
         class_names_and_kwargs.append(("EnforceDecrease", {}))
     if fc.save_output_waveforms:
         class_names_and_kwargs.append(
@@ -531,7 +614,8 @@ def featurization_config_to_class_names_and_kwargs(
         )
 
     # logic for grabbing localizations and amplitude vectors
-    class_names_and_kwargs.extend(_add_localization_and_ampvec(featurization_cfg))
+    if will_localize_or_amplitude and not early_stack:
+        class_names_and_kwargs.extend(_add_localization_and_ampvec(featurization_cfg))
 
     if fc.use_gmm_classifier:
         class_names_and_kwargs.append(
@@ -616,23 +700,31 @@ def _add_tpca_and_nn(fc, wc, fs):
     return more
 
 
-def _add_localization_and_ampvec(fc):
+def _saves_amplitudes(fc: FeaturizationConfig):
+    return fc.save_amplitudes or fc.save_amplitude_vectors or fc.save_all_amplitudes
+
+
+def _will_localize_or_amplitude(fc: FeaturizationConfig):
+    if fc.output_amplitude_vectors != "none":
+        return True
+    return (not fc.denoise_only) and (fc.do_localization or _saves_amplitudes(fc))
+
+
+def _add_localization_and_ampvec(fc: FeaturizationConfig):
     do_feats = not fc.denoise_only
     more = []
 
+    if fc.singlechan_denoised_amplitudes_and_localizations:
+        more.append(("SingleChannelWaveformDenoiser", {}))
+
     do_ptp_amp = do_feats and fc.save_amplitudes
-    do_peak_vec = (
-        do_feats
-        and fc.do_localization
-        and (fc.localization_amplitude_type == "peak")
-        and (fc.save_amplitude_vectors or not fc.nn_localization)
+    need_vec = fc.save_amplitude_vectors or (
+        fc.do_localization and not fc.nn_localization
     )
-    do_ptp_vec = (
-        do_feats
-        and fc.do_localization
-        and (fc.localization_amplitude_type == "ptp")
-        and (fc.save_amplitude_vectors or not fc.nn_localization)
-    )
+    do_peak_vec = do_feats and need_vec and (fc.localization_amplitude_type == "peak")
+    do_ptp_vec = do_feats and need_vec and (fc.localization_amplitude_type == "ptp")
+    do_peak_vec |= fc.output_amplitude_vectors == "peak"
+    do_ptp_vec |= fc.output_amplitude_vectors == "ptp"
     do_logptt = do_feats and fc.save_all_amplitudes
     do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
     if do_any_amp or (do_feats and fc.save_all_amplitudes):

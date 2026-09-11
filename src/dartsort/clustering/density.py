@@ -416,12 +416,10 @@ _kdtdens_ctx.sargs = None
 
 
 def _kdtdens_init(kdtree, X, batch_size, sigma, sigma_regional, max_dist):
-    global _kdtdens_ctx
     _kdtdens_ctx.sargs = (kdtree, X, batch_size, sigma, sigma_regional, max_dist)
 
 
 def _kdtdens_job(i0):
-    global _kdtdens_ctx
     kdtree, X, batch_size, sigma, sigma_regional, max_dist = _kdtdens_ctx.sargs
     i1 = min(kdtree.n, i0 + batch_size)
     batch_kdt = KDTree(X[i0:i1])

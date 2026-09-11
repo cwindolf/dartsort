@@ -42,7 +42,9 @@ def test_channels_in_probe():
     (
         channels_in_probe,
         waveforms_in_probe,
-    ) = waveform_util.get_channels_in_probe(waveforms, max_channels, channel_index)
+    ) = waveform_util.get_channels_in_probe(
+        waveforms, max_channels, torch.asarray(channel_index)
+    )
     assert not torch.isnan(waveforms_in_probe).any()
     assert 0 < len(waveforms_in_probe) < len(max_channels) * n_neighbors
     assert (waveforms_in_probe == 0).all()
@@ -70,7 +72,9 @@ def test_channels_in_probe():
     (
         channels_in_probe,
         waveforms_in_probe,
-    ) = waveform_util.get_channels_in_probe(waveforms, max_channels, channel_index)
+    ) = waveform_util.get_channels_in_probe(
+        waveforms, max_channels, torch.asarray(channel_index)
+    )
     assert not torch.isnan(waveforms_in_probe).any()
     assert 0 < len(waveforms_in_probe) < len(max_channels) * n_neighbors
     assert (waveforms_in_probe == 1).all()
@@ -152,7 +156,7 @@ def test_channel_subsetting():
         )
 
         (
-            channels_in_probe_small,
+            _channels_in_probe_small,
             waveforms_in_probe_small,
         ) = waveform_util.get_channels_in_probe(
             waveforms_small,
