@@ -812,6 +812,7 @@ refinement_strategies["none"] = Refinement
 
 
 class TMMRefinement(Refinement):
+    _needs_simple_features = True
     _needs_stable_features = True
 
     def _demix(
