@@ -8,7 +8,7 @@ from typing import Literal, Self
 import torch
 
 from .cli_util import argfield, dataclass_from_toml
-from .py_util import cfg_dataclass, ensure_path
+from .py_util import cfg_dataclass, ensure_path, panic
 
 try:
     from importlib.resources import files
@@ -563,22 +563,24 @@ class RefinementConfig:
         linkage="single"
     )
 
-    # other agglomeration parameters
-    glom_max_firing_corr: float | None = -0.1
-    glom_firing_corr_dt: float = 0.5
-    glom_firing_corr_method: Literal["binsqrt"] = "binsqrt"
-    qda_link: Literal["single", "complete"] = "single"
+    # agglomeration: which pairs are allowed to merge
+    glom_force_merge_template_distance: float = 0.3
+    glom_qda_overlap: bool = False
+    glom_qda_bimodality: bool = False
     qda_uni_score: float = 0.95
     qda_threshold: float = 0.35
     qda_min_ratio: float = 0.1
     qda_min_coverage: float = 0.35
     qda_min_iou: float = 0.5
-    qda_force_merge_for_temp_dist_below: float = 0.3
-    spikeinterface_merge_preset: str | Literal["none"] = "none"
-    spikeinterface_merge_max_distance: float = 0.8
-    spikeinterface_merge_min_coentropy: float | None = 0.01
-    spikeinterface_merge_coent_coverage: float = 0.8
-    spikeinterface_merge_coent_iou: float = 0.5
+
+    # agglomeration: refractory violations across a pair
+    glom_violation_ms: float = 1.0
+    glom_jitter_ms: float = 20.0
+    glom_min_violation_evidence: float = 4.6
+    glom_violation_linkage: Literal["average", "complete"] = "average"
+    glom_violation_threshold: float | None = 0.3
+    glom_veto_threshold: float | None = None
+    glom_veto_min_evidence: float = 10.0
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
@@ -949,9 +951,8 @@ default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 default_agglomerate_cfg = RefinementConfig(
     refinement_strategy="agglomerate",
     template_merge_cfg=TemplateMergeConfig(
-        merge_distance_threshold=0.6, linkage="single"
+        merge_distance_threshold=0.6, linkage="complete"
     ),
-    spikeinterface_merge_preset="none",
 )
 default_post_refinement_cfg = RefinementConfig(
     refinement_strategy="filter", cc_flag_excess_rate=0.3
@@ -968,6 +969,7 @@ default_matching_streaming_classifier_cfg = FeaturizationConfig(
 default_clean_cfg = RefinementConfig(
     refinement_strategy="clean", template_merge_cfg=None
 )
+default_final_refinement_cfgs = (default_agglomerate_cfg, default_clean_cfg)
 
 
 @cfg_dataclass
@@ -987,7 +989,7 @@ class DARTsortInternalConfig:
     pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     refinement_cfg: RefinementConfig = default_refinement_cfg
     post_refinement_cfgs: Sequence[RefinementConfig] = default_post_refinement_cfgs
-    agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
+    final_refinement_cfgs: Sequence[RefinementConfig] = default_final_refinement_cfgs
     clean_cfg: RefinementConfig | None = default_clean_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
@@ -1379,60 +1381,48 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         tmpdir_parent=cfg.tmpdir_parent,
     )
 
-    # final aggregation, always followed by the cleanup pass
-    agg_cfg: RefinementConfig | None
-    if cfg.agg_kind == "clean":
-        agg_cfg = None
-    elif cfg.agg_kind == "template_distance":
-        agg_whiten_cfg = WhiteningConfig(
-            strategy=cfg.agg_template_whiten_strategy,
-            estimator=cfg.whiten_estimator,
-            radius=cfg.subtraction_radius_um,
-            interp_params=temp_interp_params,
-        )
-        agg_tmcfg = TemplateMergeConfig(
+    agg_whiten_cfg = WhiteningConfig(
+        strategy=cfg.agg_template_whiten_strategy,
+        estimator=cfg.whiten_estimator,
+        radius=cfg.subtraction_radius_um,
+        interp_params=temp_interp_params,
+    )
+    agg_cfg = RefinementConfig(
+        refinement_strategy="agglomerate",
+        template_merge_cfg=TemplateMergeConfig(
             linkage=cfg.agg_template_linkage,
-            merge_distance_threshold=cfg.agg_no_qda_template_distance,
+            merge_distance_threshold=cfg.agg_max_template_distance,
             waveform_cfg=waveform_cfg,
             whitening=agg_whiten_cfg,
             template_cfg=replace(template_cfg, whitening=agg_whiten_cfg),
-        )
-        agg_cfg = RefinementConfig(
-            refinement_strategy="agglomerate",
-            template_merge_cfg=agg_tmcfg,
-            qda_threshold=0.0,
-            spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
-            spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
-        )
-    elif cfg.agg_kind == "qda":
-        agg_whiten_cfg = WhiteningConfig(
-            strategy=cfg.agg_template_whiten_strategy,
-            estimator=cfg.whiten_estimator,
-            radius=cfg.subtraction_radius_um,
-            interp_params=temp_interp_params,
-        )
-        agg_tmcfg = TemplateMergeConfig(
-            linkage=cfg.agg_qda_linkage,
-            merge_distance_threshold=cfg.agg_qda_max_template_distance,
-            waveform_cfg=waveform_cfg,
-            whitening=agg_whiten_cfg,
-            template_cfg=replace(template_cfg, whitening=agg_whiten_cfg),
-        )
-        agg_cfg = RefinementConfig(
-            refinement_strategy="agglomerate",
-            template_merge_cfg=agg_tmcfg,
-            qda_force_merge_for_temp_dist_below=cfg.agg_no_qda_template_distance,
-            spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
-            spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
-        )
-    else:
-        raise ValueError(f"Unknown {cfg.agg_kind=}.")
+        ),
+        glom_force_merge_template_distance=cfg.agg_force_merge_template_distance,
+        glom_qda_overlap=cfg.agg_qda_overlap,
+        glom_qda_bimodality=cfg.agg_qda_bimodality,
+        glom_violation_ms=cfg.agg_violation_ms,
+        glom_jitter_ms=cfg.agg_jitter_ms,
+        glom_min_violation_evidence=cfg.agg_min_violation_evidence,
+        glom_violation_linkage=cfg.agg_violation_linkage,
+        glom_violation_threshold=cfg.agg_violation_threshold,
+        glom_veto_threshold=cfg.agg_veto_threshold,
+        glom_veto_min_evidence=cfg.agg_veto_min_evidence,
+    )
 
     clean_cfg = RefinementConfig(
         refinement_strategy="clean",
         template_merge_cfg=None,
         dedup_ms=cfg.deduplication_ms,
     )
+
+    final_refinement_cfgs: tuple[RefinementConfig, ...]
+    if cfg.postprocessing == "agglomerate_and_clean":
+        final_refinement_cfgs = (agg_cfg, clean_cfg)
+    elif cfg.postprocessing == "agglomerate":
+        final_refinement_cfgs = (agg_cfg,)
+    elif cfg.postprocessing == "clean":
+        final_refinement_cfgs = (clean_cfg,)
+    else:
+        panic(cfg.postprocessing)
 
     post_refinement_cfgs: list[RefinementConfig] = []
     if cfg.post_refinement_merge:
@@ -1479,7 +1469,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
         post_refinement_cfgs=tuple(post_refinement_cfgs),
-        agglomerate_cfg=agg_cfg,
+        final_refinement_cfgs=final_refinement_cfgs,
         clean_cfg=clean_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,

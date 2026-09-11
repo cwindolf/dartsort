@@ -562,7 +562,7 @@ def test_truncated_kmeanspp_step():
 
     centroids = (0, n_neighb)
     distsq = X.new_full((n,), torch.inf)
-for c in centroids:
+    for c in centroids:
         ix, d = mixture._truncated_kmeanspp_propose(
             X=X,
             centroid_ix=torch.tensor(c, device=device),

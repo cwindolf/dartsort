@@ -6,6 +6,7 @@ from dartsort.clustering.agglomerate import (
     combine_gmm_scores,
     deduplicate_spikes,
 )
+from dartsort.clustering.cluster_util import apply_reclustering, merge_group_shifts
 from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.motion import MotionInfo
 
@@ -185,7 +186,9 @@ def test_combine_gmm_scores(
         for k in ("labels", "gmm_candidates", "gmm_responsibilities", "gmm_log_liks")
     }
     exp_labels, exp_cand, exp_resp, exp_logliks = _reference_combine(
-        orig["gmm_candidates"], orig["gmm_responsibilities"], orig["gmm_log_liks"],
+        orig["gmm_candidates"],
+        orig["gmm_responsibilities"],
+        orig["gmm_log_liks"],
         new_ids,
     )
 
@@ -338,3 +341,72 @@ def test_clean_final_sorting_composes_merge_mapping():
 
     assert np.array_equal(out.labels, [1, 1, 0, 0])
     assert np.array_equal(mapping, [1, 0, 0, 1])
+
+
+def test_merge_group_shifts():
+    merge_mapping = np.array([0, 1, 0, 1])
+    unit_snrs = np.array([10.0, 1.0, 5.0, 9.0])
+    shifts = np.arange(16).reshape(4, 4) - 8
+    np.fill_diagonal(shifts, 0)
+
+    unit_shifts = merge_group_shifts(merge_mapping, shifts, unit_snrs)
+
+    # 0, 3 are "best"
+    assert unit_shifts[0] == 0
+    assert unit_shifts[3] == 0
+    # others follow their lead
+    assert unit_shifts[2] == shifts[0, 2]
+    assert unit_shifts[1] == shifts[3, 1]
+
+
+def test_merge_group_shifts_ties_and_singletons():
+    merge_mapping = np.array([0, 0, 1])
+    unit_snrs = np.array([4.0, 4.0, 7.0])
+    shifts = np.arange(9).reshape(3, 3) - 4
+    np.fill_diagonal(shifts, 0)
+
+    unit_shifts = merge_group_shifts(merge_mapping, shifts, unit_snrs)
+
+    # ties go to the first one
+    assert unit_shifts[0] == 0
+    assert unit_shifts[1] == shifts[0, 1]
+    # no merge
+    assert unit_shifts[2] == 0
+
+
+@pytest.mark.parametrize("in_place", [False, True])
+def test_apply_reclustering_shifts(in_place):
+    times = np.array([1000, 1100, 2000, 2100, 3000])
+    labels = np.array([0, 1, 1, 2, -1])
+    sorting = DARTsortSorting(
+        times_samples=times.copy(),
+        channels=np.zeros_like(times),
+        labels=labels.copy(),
+        sampling_frequency=30_000.0,
+    )
+
+    merge_mapping = np.array([0, 0, 1])
+    unit_snrs = np.array([10.0, 1.0, 1.0])
+    shifts = np.zeros((3, 3), dtype=times.dtype)
+    shifts[0, 1] = 7
+
+    out = apply_reclustering(
+        sorting=sorting,
+        merge_mapping=merge_mapping,
+        shifts=shifts,
+        unit_snrs=unit_snrs,
+        in_place=in_place,
+    )
+    assert out.labels is not None
+
+    # orig unit 1 follows unit 0. new unit 1 was a loner. -1 does not shift.
+    np.testing.assert_array_equal(
+        out.times_samples, [1000, 1100 - 7, 2000 - 7, 2100, 3000]
+    )
+    np.testing.assert_array_equal(out.labels, [0, 0, 0, 1, -1])
+
+    if in_place:
+        np.testing.assert_array_equal(sorting.times_samples, out.times_samples)
+    else:
+        np.testing.assert_array_equal(sorting.times_samples, times)
+        np.testing.assert_array_equal(sorting.labels, labels)

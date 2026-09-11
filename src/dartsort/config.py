@@ -208,17 +208,12 @@ class DARTsortUserConfig:
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
     """Upsampling of templates during matching to allow for temporal aliasing of waveforms."""
 
-    # -- final merge step
-    agg_kind: Literal["clean", "template_distance", "qda"] = "qda"
-    """Final distance or GMM-based merge type. clean is a final postprocessing."""
-
-    spikeinterface_merge_preset: str | Literal["none"] = "none"
-    """Call out to SpikeInterface's auto_merge() for a final merge using timing / RP information.
-    Setting this is slightly different' from calling auto_merge() externally, since the internal
-    version will make use of dartsort's templates and template distances.
-    dartsort extends auto_merge() with some additional presets: dartsort_slay_xc_ccg,
-    dartsort_slay_xc, dartsort_slay_ccg. These are conservative presets; see and cite
-    Koukuntla et al., 2025 for the SLAY score criterion."""
+    # -- final postprocessing
+    postprocessing: Literal["agglomerate_and_clean", "agglomerate", "clean"] = (
+        "agglomerate_and_clean"
+    )
+    """Which steps run after the last matching iteration. Agglomeration merges
+    oversplit units; cleaning deduplicates and orders units by depth."""
 
     # -- motion estimation parameters
     rigid: bool = False
@@ -286,7 +281,6 @@ class DeveloperConfig(DARTsortUserConfig):
     temporal_dedup_radius_samples: int = 7
     subtract_global_dedup: bool = True
     positive_temporal_dedup_radius_samples: int = 41
-    spikeinterface_merge_max_distance: float = 0.8
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
@@ -401,9 +395,17 @@ class DeveloperConfig(DARTsortUserConfig):
     tpca_from_templates: bool = True
 
     # agglomeration
-    agg_qda_max_template_distance: float = 0.6
-    agg_no_qda_template_distance: float = 0.3
-    agg_qda_linkage: Literal["single", "complete"] = "single"
+    agg_max_template_distance: float = 0.6
+    agg_force_merge_template_distance: float = 0.3
+    agg_qda_overlap: bool = False
+    agg_qda_bimodality: bool = False
+    agg_violation_ms: float = 1.0
+    agg_jitter_ms: float = 20.0
+    agg_min_violation_evidence: float = 4.6
+    agg_violation_linkage: Literal["average", "complete"] = "average"
+    agg_violation_threshold: float | None = 0.3
+    agg_veto_threshold: float | None = None
+    agg_veto_min_evidence: float = 10.0
     agg_template_linkage: Literal["single", "complete"] = "complete"
     agg_template_whiten_strategy: WhiteningStrategy = "none"
 

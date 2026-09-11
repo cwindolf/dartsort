@@ -38,11 +38,14 @@ from ..util.spiketorch import (
 )
 from ..util.waveform_util import make_channel_index
 from .cluster_util import (
+    ViolationInfo,
+    apply_reclustering,
     closest_registered_channels,
-    linkage_mask,
-    recluster,
+    hierarchical_cluster,
+    meet,
     reorder_by_depth,
     sparsify_labels,
+    violation_statistics,
 )
 
 logger = get_logger(__name__)
@@ -52,9 +55,10 @@ logger = get_logger(__name__)
 class Agglomeration:
     agglomerated_sorting: DARTsortSorting
     merge_mapping: np.ndarray
-    distances: np.ndarray | None
-    shifts: np.ndarray | None
-    firing_corr: np.ndarray | None
+    template_distances: np.ndarray | None
+    template_shifts: np.ndarray | None
+    violation: ViolationInfo | None
+    glom_cost: np.ndarray | None
 
 
 def agglomerate(
@@ -67,9 +71,32 @@ def agglomerate(
     template_data: TemplateData | None = None,
     computation_cfg: ComputationConfig | None = None,
     waveform_cfg: WaveformConfig,
-    show_progress: bool = True,
     in_place: bool = True,
 ) -> Agglomeration:
+    """Postprocessing merge step
+
+    By default, template distances and a refractoriness statistic are combined
+    with hierarchical clustering to perform the merge.
+
+    If refinement_cfg is not set, the merge is just a hierarchical clustering
+    of the template distances.
+
+    The algorithm is like this.
+     - Pair i,j is allowed to be merged if any of:
+        - Template distance < merge_distance_threshold (and, a non-default
+          QDA/overlap condition holds if specified)
+        - Template distance < glom_force_merge_template_distance
+     - Merges are decided within allowed groups by average linkage on a chance-
+       corrected measure of violation within the groups
+        - Optionally, the criterion can be restricted by a "worst pair" violation
+          rather than average if glom_veto_threshold is set.
+        - Pairs with low overlap (glom_min_violation_evidence) are merged only
+          under the force_merge_template_distance
+
+    This code might read a little weird, because it's used both as a clustering pass
+    and to apply a distance-based merge to the template library. In the latter case
+    template_data is supplied. So there are some conditions that depend on that.
+    """
     computation_cfg = ensure_computation_config(computation_cfg)
 
     if template_merge_cfg is None:
@@ -79,176 +106,195 @@ def agglomerate(
     if template_data is None:
         sorting = sorting.flatten(include_gmm_properties=True, in_place=in_place)
 
-    if template_merge_cfg is not None:
-        tdist = template_distances(
-            sorting=sorting,
-            recording=recording,
-            motion=motion,
-            template_data=template_data,
-            waveform_cfg=waveform_cfg,
-            template_merge_cfg=template_merge_cfg,
-            computation_cfg=computation_cfg,
+    if template_merge_cfg is None:
+        agg_sorting, merge_mapping = clean_final_sorting(
+            sorting, motion=motion, merge_mapping=None, in_place=in_place
         )
-    else:
-        tdist = None
-
-    # if not doing any QDA, be done now.
-    no_further_glom = (
-        (refinement_cfg is None)
-        or (template_merge_cfg is None)
-        or (not refinement_cfg.qda_threshold)
-    )
-    if no_further_glom:
-        if tdist is not None:
-            assert template_merge_cfg is not None
-            agg_sorting, new_ids = recluster(
-                sorting=sorting,
-                unit_ids=tdist.template_data.unit_ids,
-                dists=tdist.distances,
-                shifts=tdist.shifts,
-                unit_snrs=tdist.template_data.snrs_by_channel().max(1),
-                threshold=template_merge_cfg.merge_distance_threshold,
-                link=template_merge_cfg.linkage,
-            )
-            # if this is refinement, make sure gmm labels are consistent!
-            if refinement_cfg is not None:
-                agg_sorting = combine_gmm_scores(
-                    agg_sorting, new_ids=new_ids, in_place=in_place
-                )
-        else:
-            agg_sorting = sorting
-            new_ids = None
-
-        agg_sorting, new_ids = clean_final_sorting(
-            agg_sorting, motion=motion, merge_mapping=new_ids, in_place=in_place
-        )
-
         return Agglomeration(
             agglomerated_sorting=agg_sorting,
-            merge_mapping=new_ids,
-            distances=None if tdist is None else tdist.distances,
-            shifts=None if tdist is None else tdist.shifts,
-            firing_corr=None,
+            merge_mapping=merge_mapping,
+            template_distances=None,
+            template_shifts=None,
+            violation=None,
+            glom_cost=None,
         )
 
-    # tdist tells us the possible merges
-    assert tdist is not None
-    assert template_merge_cfg is not None
-    distance_mask = linkage_mask(
-        tdist.distances,
-        linkage_method=template_merge_cfg.linkage,
-        threshold=template_merge_cfg.merge_distance_threshold,
-    )
-
-    # only QDA within negatively correlated firing enemies
-    if refinement_cfg.glom_max_firing_corr is not None:
-        fcorr = firing_corr(
-            sorting,
-            dt=refinement_cfg.glom_firing_corr_dt,
-            method=refinement_cfg.glom_firing_corr_method,
-        )
-        _oldsum = distance_mask[np.triu_indices_from(distance_mask)].sum()
-        fcorr_mask = fcorr <= refinement_cfg.glom_max_firing_corr
-        mask = np.logical_and(distance_mask, fcorr_mask)
-        np.fill_diagonal(mask, val=True)
-        _newsum = mask[np.triu_indices_from(mask)].sum()
-        logger.dartsortdebug(
-            f"Firing corr dropped QDA candidate count from {_oldsum} -> {_newsum}."
-        )
-    else:
-        fcorr = fcorr_mask = None
-        mask = distance_mask
-
-    # restrict mask by overlap criteria
-    qda_res = qda(
-        mask=mask,
+    tdist = template_distances(
         sorting=sorting,
-        min_iou=refinement_cfg.qda_min_iou,
-        min_cov=refinement_cfg.qda_min_coverage,
-        show_progress=show_progress,
+        recording=recording,
+        motion=motion,
+        template_data=template_data,
+        waveform_cfg=waveform_cfg,
+        template_merge_cfg=template_merge_cfg,
         computation_cfg=computation_cfg,
     )
+    distances = np.minimum(tdist.distances, tdist.distances.T)
+    np.fill_diagonal(distances, 0.0)
+    assert np.array_equal(tdist.template_data.unit_ids, np.arange(distances.shape[0]))
 
-    coverage_mask = np.logical_and(
-        qda_res.coverage >= refinement_cfg.qda_min_coverage,
-        qda_res.iou >= refinement_cfg.qda_min_iou,
-    )
-    qda_mask_uni = np.logical_and(
-        coverage_mask,
-        qda_res.score >= refinement_cfg.qda_uni_score,
-    )
-    qda_mask_bi = np.all(
-        [
-            coverage_mask,
-            qda_res.score >= refinement_cfg.qda_threshold,
-            qda_res.min_ratio >= refinement_cfg.qda_min_ratio,
-        ],
-        axis=0,
-    )
-    qda_mask = np.logical_or(qda_mask_uni, qda_mask_bi)
-    assert np.all(qda_mask <= mask)
-    if fcorr_mask is not None:
-        assert np.all(np.logical_and(qda_mask, fcorr_mask) <= mask)
-
-    simg = refinement_cfg.spikeinterface_merge_preset
-    if simg is not None and simg != "none":
-        pair_mask = tdist.distances < refinement_cfg.spikeinterface_merge_max_distance
-        if refinement_cfg.spikeinterface_merge_min_coentropy is not None:
-            cmask, _ = coentropy_merge_mask(
-                sorting=sorting,
-                min_coentropy=refinement_cfg.spikeinterface_merge_min_coentropy,
-                coverage_threshold=refinement_cfg.spikeinterface_merge_coent_coverage,
-                iou_threshold=refinement_cfg.spikeinterface_merge_coent_iou,
-            )
-            pair_mask = np.logical_or(cmask, pair_mask)
-
-        si_mask = spikeinterface_merge_mask(
-            recording=recording,
-            sorting=sorting,
-            preset=refinement_cfg.spikeinterface_merge_preset,
-            censor_ms=refinement_cfg.censor_ms,
-            template_data=tdist.template_data,
-            pair_mask=pair_mask,
-        )
+    # early out
+    if refinement_cfg is None:
+        glom_cost = distances
+        veto_cost = veto_threshold = violation = None
+        linkage_method = template_merge_cfg.linkage
+        threshold = template_merge_cfg.merge_distance_threshold
+        violation = None
     else:
-        si_mask = None
+        res = _agglomerate_violation_merge(
+            sorting, distances, refinement_cfg, template_merge_cfg, computation_cfg
+        )
+        (
+            _mask,
+            glom_cost,
+            veto_cost,
+            linkage_method,
+            threshold,
+            veto_threshold,
+            violation,
+        ) = res
 
-    # force merges for very close neighbors
-    force_mask = linkage_mask(
-        tdist.distances,
-        linkage_method=template_merge_cfg.linkage,
-        threshold=refinement_cfg.qda_force_merge_for_temp_dist_below,
+    _, merge_mapping = hierarchical_cluster(
+        None, glom_cost, linkage_method=linkage_method, threshold=threshold
     )
+    if veto_cost is not None:
+        assert veto_threshold is not None
+        _, veto_mapping = hierarchical_cluster(
+            None, veto_cost, linkage_method="complete", threshold=veto_threshold
+        )
+        merge_mapping = meet(merge_mapping, veto_mapping)
 
-    # extract final mask
-    final_mask = np.logical_or(qda_mask, force_mask)
-    if si_mask is not None:
-        final_mask = np.logical_or(final_mask, si_mask)
-    np.fill_diagonal(final_mask, val=True)
-    final_mask_as_distance = np.logical_not(final_mask).astype(np.float32)
-
-    agg_sorting, new_ids = recluster(
+    agg_sorting = apply_reclustering(
         sorting=sorting,
-        unit_ids=tdist.template_data.unit_ids,
-        dists=final_mask_as_distance,
+        merge_mapping=merge_mapping,
         shifts=tdist.shifts,
         unit_snrs=tdist.template_data.snrs_by_channel().max(1),
-        threshold=0.5,  # binary input here
-        link=template_merge_cfg.linkage,
+        in_place=in_place,
     )
-
-    agg_sorting = combine_gmm_scores(agg_sorting, new_ids=new_ids, in_place=in_place)
-
-    agg_sorting, new_ids = clean_final_sorting(
-        agg_sorting, motion=motion, merge_mapping=new_ids, in_place=in_place
+    agg_sorting = combine_gmm_scores(
+        agg_sorting, new_ids=merge_mapping, in_place=in_place
+    )
+    agg_sorting, merge_mapping = clean_final_sorting(
+        agg_sorting, motion=motion, merge_mapping=merge_mapping, in_place=in_place
     )
 
     return Agglomeration(
         agglomerated_sorting=agg_sorting,
-        merge_mapping=new_ids,
-        distances=tdist.distances,
-        shifts=tdist.shifts,
-        firing_corr=fcorr,
+        merge_mapping=merge_mapping,
+        template_distances=distances,
+        template_shifts=tdist.shifts,
+        violation=violation,
+        glom_cost=glom_cost,
+    )
+
+
+def _agglomerate_violation_merge(
+    sorting: DARTsortSorting,
+    distances: np.ndarray,
+    refinement_cfg: RefinementConfig,
+    template_merge_cfg: TemplateMergeConfig,
+    computation_cfg: ComputationConfig,
+    huge=1e8,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+    str,
+    float,
+    float | None,
+    ViolationInfo | None,
+]:
+    mask = distances < template_merge_cfg.merge_distance_threshold
+
+    if refinement_cfg.glom_qda_overlap or refinement_cfg.glom_qda_bimodality:
+        qda_res = qda(
+            mask=mask,
+            sorting=sorting,
+            min_iou=refinement_cfg.qda_min_iou
+            if refinement_cfg.glom_qda_overlap
+            else 0.0,
+            min_cov=refinement_cfg.qda_min_coverage
+            if refinement_cfg.glom_qda_overlap
+            else 0.0,
+            bimodality=refinement_cfg.glom_qda_bimodality,
+            show_progress=False,
+            computation_cfg=computation_cfg,
+        )
+        if refinement_cfg.glom_qda_overlap:
+            mask &= np.logical_and(
+                qda_res.coverage >= refinement_cfg.qda_min_coverage,
+                qda_res.iou >= refinement_cfg.qda_min_iou,
+            )
+        if refinement_cfg.glom_qda_bimodality:
+            mask &= np.logical_or(
+                qda_res.score >= refinement_cfg.qda_uni_score,
+                np.logical_and(
+                    qda_res.score >= refinement_cfg.qda_threshold,
+                    qda_res.min_ratio >= refinement_cfg.qda_min_ratio,
+                ),
+            )
+
+    force_mask = distances < refinement_cfg.glom_force_merge_template_distance
+    mask |= force_mask
+    np.fill_diagonal(mask, True)
+
+    # early out: no violation stuff. just distance mask connected components.
+    if refinement_cfg.glom_violation_threshold is None:
+        glom_cost = np.logical_not(mask).astype(np.float32)
+        linkage_method = template_merge_cfg.linkage
+        threshold = 0.5
+        veto_cost = veto_threshold = None
+        return (
+            mask,
+            glom_cost,
+            veto_cost,
+            linkage_method,
+            threshold,
+            veto_threshold,
+            None,
+        )
+
+    violation = violation_statistics(
+        sorting,
+        censor_ms=refinement_cfg.censor_ms,
+        viol_ms=refinement_cfg.glom_violation_ms,
+        jitter_ms=refinement_cfg.glom_jitter_ms,
+    )
+    assert violation.jitter_counts is not None
+    assert violation.jitter_counts.shape == distances.shape
+
+    # main mask:
+    # it's basically forcing where there's low evidence, and it's the ratio
+    # of observed violation counts to their jitter average elsewhere.
+    glom_cost = violation.jitter_viol_ratio(
+        refinement_cfg.glom_min_violation_evidence,
+        fill_value=np.where(force_mask, 0.0, huge),
+    )
+    # mask out distance enemies
+    glom_cost[np.logical_not(mask)] = huge
+    glom_cost = np.minimum(glom_cost, glom_cost.T)
+    np.fill_diagonal(glom_cost, 0.0)
+
+    # last thing: optionally, be extremely finnicky about merging into violated groups
+    # i am not sure if this will be a good idea or not; it may cost too many merges
+    # to be worthwhile.
+    if refinement_cfg.glom_veto_threshold is not None:
+        veto_cost = violation.jitter_viol_ratio(
+            refinement_cfg.glom_veto_min_evidence, fill_value=0.0
+        )
+        veto_cost[np.logical_not(mask)] = huge
+        veto_cost = np.minimum(veto_cost, veto_cost.T)
+        np.fill_diagonal(veto_cost, 0.0)
+    else:
+        veto_cost = None
+
+    return (
+        mask,
+        glom_cost,
+        veto_cost,
+        refinement_cfg.glom_violation_linkage,
+        refinement_cfg.glom_violation_threshold,
+        refinement_cfg.glom_veto_threshold,
+        violation,
     )
 
 
@@ -390,105 +436,6 @@ def template_distances(
     )
 
 
-def spikeinterface_merge_mask(
-    *,
-    recording: BaseRecording,
-    sorting: DARTsortSorting,
-    preset: str | None,
-    censor_ms: float = 0.0,
-    template_data: TemplateData,
-    pair_mask: np.ndarray,
-    min_count: int = 100,
-):
-    from spikeinterface.curation.auto_merge import compute_merge_unit_groups
-    from spikeinterface.postprocessing import ComputeTemplateSimilarity
-
-    # censor first
-    if censor_ms:
-        sorting = deduplicate_spikes(sorting, censor_ms)
-
-    # analyzer (lightweight one)
-    analyzer = sorting.to_sorting_analyzer(
-        recording=recording,
-        template_data=template_data,
-        compute_extensions=None,
-        compute_extensions_if_templates=None,
-        estimate_si_sparsity=False,
-        compute_template_similarity=False,
-    )
-
-    # register the mask as the template similarity extension
-    tsim_ext = ComputeTemplateSimilarity(analyzer)
-    tsim_ext.data = {"similarity": pair_mask.astype(np.float32)}
-    tsim_ext.params = {"method": "dartsort"}
-    tsim_ext.run_info = {"run_completed": True}
-    analyzer.extensions["template_similarity"] = tsim_ext
-
-    # handle custom presets
-    if preset == "dartsort_slay_xc":
-        steps = [
-            "num_spikes",
-            "remove_contaminated",
-            "unit_locations",
-            "template_similarity",
-            "slay_score",
-            "cross_contamination",
-            "quality_score",
-        ]
-        preset = None
-        analyzer.compute_one_extension("correlograms")
-    elif preset == "dartsort_slay_ccg":
-        steps = [
-            "num_spikes",
-            "remove_contaminated",
-            "unit_locations",
-            "template_similarity",
-            "correlogram",
-            "slay_score",
-            "quality_score",
-        ]
-        preset = None
-        analyzer.compute_one_extension("correlograms")
-    elif preset == "dartsort_slay_xc_ccg":
-        steps = [
-            "num_spikes",
-            "remove_contaminated",
-            "unit_locations",
-            "template_similarity",
-            "correlogram",
-            "cross_contamination",
-            "slay_score",
-            "quality_score",
-        ]
-        preset = None
-        analyzer.compute_one_extension("correlograms")
-    else:
-        assert preset is not None
-        steps = None
-
-    # make parameters aware of censorship and other params
-    my_step_params = {
-        "num_spikes": {"min_spikes": min_count},
-        "remove_contaminated": {"censored_period_ms": censor_ms},
-        "template_similarity": {"similarity_method": "dartsort"},
-        "correlogram": {"censor_correlograms_ms": censor_ms},
-        "cross_contamination": {"censored_period_ms": censor_ms},
-        "quality_score": {"censored_period_ms": censor_ms},
-    }
-    groups = compute_merge_unit_groups(
-        preset=preset,
-        steps=steps,
-        sorting_analyzer=analyzer,
-        steps_params=my_step_params,
-        force_copy=False,
-    )
-    mask = np.zeros_like(pair_mask)
-    for g in groups:
-        g = np.array(g)
-        mask[g[:, None], g[None, :]] = True
-    return mask
-
-
 @databag
 class QDAResult:
     """Unit pair QDA metrics
@@ -526,6 +473,7 @@ def qda(
     min_cov: float = 0.35,
     min_count: int = 20,
     dx: float = 1.0,
+    bimodality: bool = True,
     show_progress: bool,
     computation_cfg: ComputationConfig,
 ) -> QDAResult:
@@ -552,6 +500,7 @@ def qda(
         score=iou.copy(),
         min_ratio=iou.copy(),
         dx=dx,
+        bimodality=bimodality,
     )
 
     n_jobs, Executor, context, *_ = pool_from_cfg(
@@ -603,6 +552,7 @@ class QDACtx:
     score: np.ndarray
     min_ratio: np.ndarray
     dx: float
+    bimodality: bool
 
 
 def _qda_init(ctx):
@@ -624,6 +574,8 @@ def _qda_job(ij):
     p.iou[i, j] = p.iou[j, i] = iou
     p.cov[i, j] = p.cov[j, i] = cov
 
+    if not p.bimodality:
+        return
     if iou < p.min_iou:
         return
     if cov < p.min_cov:
@@ -763,17 +715,6 @@ def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: f
     denom = weights.max(axis=1, keepdims=True).clip(min=1e-10)  # avoid div by 0
     weights /= denom
     return weights
-
-
-def firing_corr(sorting: DARTsortSorting, dt: float, method="binsqrt"):
-    if method != "binsqrt":
-        raise ValueError(f"Unknown {method=}.")
-
-    tsg = sorting.to_tsgroup()
-    fr = tsg.count(bin_size=dt) / dt
-    fr = np.sqrt(fr.values)
-
-    return np.corrcoef(fr, rowvar=False)
 
 
 def combine_gmm_scores(
@@ -1130,152 +1071,3 @@ def _dedup_unit_loop(
                 break
 
         i0 = i1
-
-
-@databag
-class CoentropyResult:
-    coentropy: np.ndarray
-    """KxK; reduction of entropy per cooccurrence due to merging pair"""
-
-    cooccurrence: np.ndarray
-    """KxK; number of times these units score the same spike"""
-
-    rival_count: np.ndarray
-    """KxK; number of times one unit scores a spike where the other is top"""
-
-    occurrence: np.ndarray
-    """K; number of times the unit appears in the candidates at all"""
-
-    cov: np.ndarray
-    """KxK; rival count / max pair count (rival diag)"""
-
-    iou: np.ndarray
-    """KxK; rival count over pair sum"""
-
-
-def coentropy_merge_mask(
-    sorting: DARTsortSorting,
-    min_coentropy: float,
-    coverage_threshold: float,
-    iou_threshold: float,
-    gmm_prefix=("merged", "gmm"),
-) -> tuple[np.ndarray, CoentropyResult]:
-    """
-    Parameters
-    ----------
-    sorting : DARTsortSorting
-    min_coentropy : float
-        Must be met by pair for mask=True
-    min_coverage : float
-        Pairs such that at least one unit in each pair has
-        rival_count/count > mincov are allowed
-    iou_threshold: float
-        Pairs with rival iou > iouthresh are allowed
-    """
-    c = coentropy(sorting, gmm_prefix=gmm_prefix)
-    assert c is not None
-
-    mask = np.logical_or(c.cov >= coverage_threshold, c.iou >= iou_threshold)
-    mask = np.logical_and(c.coentropy >= min_coentropy, mask)
-    np.fill_diagonal(mask, val=True)
-    return mask, c
-
-
-def coentropy(
-    sorting: DARTsortSorting,
-    gmm_prefix=("merged", "gmm"),
-) -> CoentropyResult | None:
-    """Calculate entropy reduction due to merging pairs."""
-    for k in gmm_prefix:
-        cands = getattr(sorting, f"{k}_candidates", None)
-        resps = getattr(sorting, f"{k}_responsibilities", None)
-        if cands is not None:
-            assert resps is not None
-            break
-    else:
-        return None
-
-    k = sorting.n_units
-    resps = resps[:, : cands.shape[1]].astype(np.float64)
-    coentropy = np.zeros((k, k))
-    cooccurrence = np.zeros((k, k), dtype=np.int64)
-    rival_count = np.zeros((k, k), dtype=np.int64)
-    occurrence = np.zeros((k,), dtype=np.int64)
-    _calc_coentropy(coentropy, cooccurrence, rival_count, occurrence, cands, resps)
-    rival_count += rival_count.T
-    cdiag = np.diagonal(rival_count)
-    assert (cdiag % 2 == 0).all()
-    np.fill_diagonal(rival_count, cdiag // 2)
-    coentropy += coentropy.T
-    cooccurrence += cooccurrence.T
-
-    # rival count diagonal is just unit top count (not exactly label count,
-    # since it doesn't account for noise assignments)
-    counts = np.diagonal(rival_count)
-    counts = np.maximum(counts, 1)
-
-    cov = rival_count / counts
-    cov = np.minimum(cov, cov.T)
-
-    # this is a disjoint union, since it's the top-label count
-    union = counts[:, None] + counts[None, :]
-    iou = rival_count / union
-
-    return CoentropyResult(
-        coentropy=coentropy,
-        cooccurrence=cooccurrence,
-        rival_count=rival_count,
-        occurrence=occurrence,
-        cov=cov,
-        iou=iou,
-    )
-
-
-@numba.njit(parallel=True, nogil=True)
-def _calc_coentropy(
-    coentropy: np.ndarray,
-    cooccurrence: np.ndarray,
-    rival_count: np.ndarray,
-    occurrence: np.ndarray,
-    cands: np.ndarray,
-    resps: np.ndarray,
-):
-    for i in numba.prange(cands.shape[0]):  # ty: ignore
-        u = cands[i]
-        q = resps[i]
-        log_q = np.log(q)
-        np.nan_to_num(log_q, copy=False, neginf=0.0, posinf=np.inf)
-        dh = q * log_q
-
-        ui0 = u[0]
-        qi0 = q[0]
-        dhi0 = dh[0]
-
-        occurrence[ui0] += 1
-        rival_count[ui0, ui0] += 1
-
-        for j in range(1, cands.shape[1]):
-            uj = u[j]
-            if uj < 0:
-                break
-
-            ii = min(ui0, uj)
-            jj = max(ui0, uj)
-
-            occurrence[uj] += 1
-            rival_count[ui0, uj] += 1
-
-            cij = cooccurrence[ii, jj] + 1
-            cooccurrence[ii, jj] = cij
-
-            # change in entropy due to merging uj, uk:
-            # subtract their current contribution, add the new contribution
-            # we want reduction of entropy, so this is the negative of that!
-            qij = q[j] + qi0
-            dhij = dh[j] + dhi0
-            if qij > 0:
-                dhij -= qij * np.log(qij)
-
-            # Welford mean of -dh
-            cur_coent = coentropy[ii, jj]
-            coentropy[ii, jj] = cur_coent + (-dhij - cur_coent) / cij

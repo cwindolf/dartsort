@@ -430,6 +430,7 @@ def _handle_merge(
             computation_cfg=computation_cfg,
             waveform_cfg=waveform_cfg,
             refinement_cfg=None,
+            in_place=False,
         )
         new_unit_ids = agg.merge_mapping
         sorting = agg.agglomerated_sorting

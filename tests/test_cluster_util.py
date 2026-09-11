@@ -2,10 +2,11 @@ import numpy as np
 import pytest
 
 from dartsort.clustering.cluster_util import (
+    _jitter_spread_violation_weights,
     decrumb_labels,
     recluster,
     reorder_by_depth,
-    violation_matrix,
+    violation_statistics,
 )
 from dartsort.util.data_util import DARTsortSorting
 
@@ -165,13 +166,14 @@ def _brute_force_viols(times, labels, n_units, censor_samples=0):
         (2, [[0, 0], [0, 0]]),
     ],
 )
-def test_violation_matrix_explicit(censor_ms, expected):
+def test_violation_counts_explicit(censor_ms, expected):
     times = [0, 0, 100, 108, 200, 209, 300, 310, 400, 405, 411]
     labels = [0, 1, 0, 0, 0, 1, 1, 1, 0, -1, 1]
-    res = violation_matrix(
+    res = violation_statistics(
         _viol_sorting(times, labels),
         censor_ms=censor_ms,
         viol_ms=1.0,
+        chance_method="none",
     )
 
     assert np.array_equal(res.unit_ids, [0, 1])
@@ -180,11 +182,14 @@ def test_violation_matrix_explicit(censor_ms, expected):
 
 
 @pytest.mark.parametrize("censor_ms", [0.0, 0.2])
-def test_violation_matrix_sametime(censor_ms):
+def test_violation_counts_sametime(censor_ms):
     times = [0] * 7
     labels = [0, 0, 1, 1, 1, 2, -1]
-    res = violation_matrix(
-        _viol_sorting(times, labels), censor_ms=censor_ms, viol_ms=1.0
+    res = violation_statistics(
+        _viol_sorting(times, labels),
+        censor_ms=censor_ms,
+        viol_ms=1.0,
+        chance_method="none",
     )
 
     assert np.array_equal(res.unit_ids, [0, 1, 2])
@@ -195,12 +200,137 @@ def test_violation_matrix_sametime(censor_ms):
         assert np.array_equal(res.viol_counts, [[1, 6, 2], [6, 3, 3], [2, 3, 0]])
 
 
+def _brute_force_weights(censor, viol, jitter, max_gap=None):
+    if max_gap is None:
+        max_gap = 2 * jitter + viol
+    draws = np.arange(-jitter, jitter + 1)
+    shifts = draws[:, None] - draws[None, :]
+    gaps = np.arange(max_gap + 1)
+    jittered = np.abs(gaps[:, None, None] + shifts[None, :, :])
+    violates = (jittered >= censor) & (jittered <= viol)
+    return violates.mean(axis=(1, 2))
+
+
+@pytest.mark.parametrize("censor, viol, jitter", [(0, 1, 3), (1, 2, 4), (0, 0, 2)])
+def test_jitter_weights(censor, viol, jitter):
+    weights = _jitter_spread_violation_weights(censor, viol, jitter)
+    np.testing.assert_allclose(weights, _brute_force_weights(censor, viol, jitter))
+
+    # no pair past the end of the table can reach the window at all
+    assert weights.size == 2 * jitter + viol + 1
+    wider = _brute_force_weights(censor, viol, jitter, max_gap=4 * jitter + viol)
+    assert not wider[weights.size :].any()
+
+
+@pytest.mark.parametrize("censor_ms", [0.0, 0.3])
+def test_violation_chance_matches_observed(censor_ms):
+    # the observed half of the result has to agree with chance_method="none"
+    rg = np.random.default_rng(0)
+    times = np.sort(rg.integers(0, 100_000, size=400))
+    labels = rg.integers(-1, 3, size=400)
+    st = _viol_sorting(times, labels)
+
+    res = violation_statistics(
+        st, censor_ms=censor_ms, viol_ms=1.0, jitter_ms=20.0, n_resamples=2
+    )
+    expected = violation_statistics(
+        st, censor_ms=censor_ms, viol_ms=1.0, chance_method="none"
+    )
+
+    assert np.array_equal(res.viol_counts, expected.viol_counts)
+    assert np.array_equal(res.unit_ids, expected.unit_ids)
+    assert np.array_equal(res.spike_counts, expected.spike_counts)
+
+
+@pytest.mark.parametrize("censor_ms", [0.0, 0.3])
+def test_violation_chance_montecarlo(censor_ms):
+    n_resamples = 200
+    rg = np.random.default_rng(1)
+    times = np.sort(rg.integers(0, 10_000, size=120))
+    labels = rg.integers(0, 3, size=120)
+    st = _viol_sorting(times, labels)
+
+    res = violation_statistics(
+        st,
+        censor_ms=censor_ms,
+        viol_ms=1.0,
+        jitter_ms=20.0,
+        chance_method="resample",
+        n_resamples=n_resamples,
+        rg=7,
+    )
+    assert res.jitter_counts is not None
+    assert res.jitter_counts.max() > 1.0
+
+    exact = violation_statistics(
+        st, censor_ms=censor_ms, viol_ms=1.0, jitter_ms=20.0, chance_method="weighted"
+    )
+    assert exact.n_resamples == 0
+    assert exact.jitter_counts is not None
+    assert np.array_equal(exact.viol_counts, res.viol_counts)
+    atol = 6 * np.sqrt(exact.jitter_counts.max() / n_resamples)
+    assert np.allclose(res.jitter_counts, exact.jitter_counts, rtol=0, atol=atol)
+
+
+def test_violation_chance_deterministic():
+    rg = np.random.default_rng(2)
+    times = np.sort(rg.integers(0, 50_000, size=200))
+    labels = rg.integers(0, 2, size=200)
+    st = _viol_sorting(times, labels)
+
+    kw = dict(
+        viol_ms=1.0, jitter_ms=20.0, chance_method="resample", n_resamples=8, rg=3
+    )
+    a = violation_statistics(st, **kw)  # ty: ignore[invalid-argument-type]
+    b = violation_statistics(st, **kw)  # ty: ignore[invalid-argument-type]
+    assert a.jitter_counts is not None
+    assert b.jitter_counts is not None
+    assert np.array_equal(a.jitter_counts, b.jitter_counts)
+
+    c = violation_statistics(st, **(kw | dict(rg=4)))  # ty: ignore[invalid-argument-type]
+    assert c.jitter_counts is not None
+    assert not np.array_equal(a.jitter_counts, c.jitter_counts)
+
+
+def _refractory_train(rg, mean_gap, duration, refractory):
+    n = int(2 * duration / mean_gap)
+    gaps = refractory + rg.exponential(mean_gap - refractory, size=n)
+    t = np.cumsum(gaps).astype(np.int64)
+    return t[t < duration]
+
+
+def test_jitter_viol_ratio_blanks():
+    st = _viol_sorting([0, 5, 100, 105], [0, 0, 1, 1])
+    res = violation_statistics(st, censor_ms=0.0, viol_ms=1.0, jitter_ms=20.0)
+    # to feew to reach 4.6 expected
+    assert np.isnan(res.jitter_viol_ratio()).all()
+    assert not np.isnan(res.jitter_viol_ratio(min_jitter=0.0)).all()
+
+
+@pytest.mark.parametrize("censor_ms, viol_ms", [(0.25, 1.0), (1.0, 0.5)])
+def test_violation_chance_degenerate(censor_ms, viol_ms):
+    empty = violation_statistics(
+        _viol_sorting([], []), censor_ms=censor_ms, viol_ms=viol_ms, jitter_ms=20.0
+    )
+    assert empty.viol_counts.shape == (0, 0)
+    assert (empty.jitter_counts is None) or (empty.jitter_counts.shape == (0, 0))
+
+    st = _viol_sorting([0, 5, 10, 15], [0, 1, 0, 1])
+    res = violation_statistics(
+        st, censor_ms=censor_ms, viol_ms=viol_ms, jitter_ms=20.0, n_resamples=4
+    )
+    assert res.jitter_counts is not None
+    assert res.viol_counts.shape == res.jitter_counts.shape == (2, 2)
+    if viol_ms < censor_ms:
+        assert not res.jitter_counts.any()
+
+
 @pytest.mark.parametrize(
     "n_units, n_spikes, seed",
     [(0, 0, 0), (1, 1, 0), (1, 50, 1), (3, 200, 2), (6, 500, 3)],
 )
 @pytest.mark.parametrize("censor_ms", [0.0, 0.3, 1.0])
-def test_violation_matrix(n_units, n_spikes, seed, censor_ms):
+def test_violation_counts(n_units, n_spikes, seed, censor_ms):
     censor_samples = int(censor_ms * 10)  # 10 kHz
     rg = np.random.default_rng(seed)
 
@@ -215,7 +345,9 @@ def test_violation_matrix(n_units, n_spikes, seed, censor_ms):
     rg.shuffle(labels)
 
     sorting = _viol_sorting(times, labels)
-    res = violation_matrix(sorting, censor_ms=censor_ms, viol_ms=1.0)
+    res = violation_statistics(
+        sorting, censor_ms=censor_ms, viol_ms=1.0, chance_method="none"
+    )
 
     assert res.viol_counts.shape == (n_units, n_units)
     assert np.array_equal(res.unit_ids, np.arange(n_units))
@@ -230,13 +362,18 @@ def test_violation_matrix(n_units, n_spikes, seed, censor_ms):
 
     # unsorted spike times don't change result
     order = rg.permutation(n_spikes)
-    shuffled = violation_matrix(
-        _viol_sorting(times[order], labels[order]), censor_ms=censor_ms, viol_ms=1.0
+    shuffled = violation_statistics(
+        _viol_sorting(times[order], labels[order]),
+        censor_ms=censor_ms,
+        viol_ms=1.0,
+        chance_method="none",
     )
     assert np.array_equal(shuffled.viol_counts, res.viol_counts)
 
     # a window of 0ms only counts simultaneous spikes
-    zero = violation_matrix(sorting, censor_ms=0.0, viol_ms=0.0)
+    zero = violation_statistics(
+        sorting, censor_ms=0.0, viol_ms=0.0, chance_method="none"
+    )
     same_time = np.zeros((n_units, n_units), dtype=np.int64)
     for t in np.unique(times):
         in_t = labels[times == t]

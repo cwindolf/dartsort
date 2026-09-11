@@ -351,7 +351,6 @@ def _dartsort_impl(
             step_ref_cfgs,
             step_feat_cfg,
             samp_cfg,
-            will_refine,
         ) = _matching_step_cfgs(is_final, is_subsampling, cfg)
         fit_only = cfg.fit_matching_models_only and is_final
 
@@ -380,7 +379,7 @@ def _dartsort_impl(
                 model_subdir=f"matching{step}_models",
                 prev_step_name=f"refined{step - 1}",
                 save_cfg=cfg,
-                load_simple_features=will_refine,
+                load_simple_features=False,
                 fit_only=fit_only,
                 save_residual=is_final and cfg.save_full_final_residual,
             )

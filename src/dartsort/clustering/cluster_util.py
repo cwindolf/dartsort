@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Literal, cast
 
 import h5py
 import numba
@@ -17,7 +17,7 @@ from ..util.data_util import (
 )
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from ..util.py_util import databag
+from ..util.py_util import databag, panic
 
 logger = get_logger(__name__)
 
@@ -64,40 +64,67 @@ def apply_reclustering(
     new_labels: np.ndarray | None = None,
     shifts: np.ndarray | None = None,
     unit_snrs: np.ndarray | None = None,
+    in_place: bool = False,
 ) -> DARTsortSorting:
     assert sorting.labels is not None
 
+    # shifts are indexed by the pre-merge labels. apply them before remapping.
+    if shifts is None:
+        times_updated = None
+    else:
+        assert unit_snrs is not None
+        times_samples = sorting.times_samples
+        times_updated = times_samples if in_place else times_samples.copy()
+        apply_time_shifts(
+            times_updated,
+            sorting.labels,
+            merge_group_shifts(merge_mapping, shifts, unit_snrs),
+        )
+
     if new_labels is None:
-        new_labels = sorting.labels.copy()
+        new_labels = sorting.labels if in_place else sorting.labels.copy()
         apply_label_remapping_in_place(new_labels, merge_mapping)
 
-    if shifts is None:
+    if times_updated is None:
         return sorting.ephemeral_replace(labels=new_labels)
-    assert unit_snrs is not None
-
-    # find original labels in each cluster
-    clust_inverse = {i: [] for i in merge_mapping}
-    for orig_label, new_label in enumerate(merge_mapping):
-        clust_inverse[new_label].append(orig_label)
-
-    # align to best snr unit
-    times_updated = sorting.times_samples.copy()
-    for orig_labels in clust_inverse.values():
-        # we don't need to realign clusters which didn't change
-        if len(orig_labels) <= 1:
-            continue
-
-        orig_snrs = unit_snrs[orig_labels]
-        best_orig = orig_labels[orig_snrs.argmax()]
-        for ogl in np.setdiff1d(orig_labels, [best_orig]):
-            in_orig_unit = np.flatnonzero(sorting.labels == ogl)
-            # this is like trough[best] - trough[ogl]
-            shift_og_best = shifts[best_orig, ogl]
-            # if >0, trough of og is behind trough of best.
-            # subtracting will move trough of og to the right.
-            times_updated[in_orig_unit] -= shift_og_best
-
     return sorting.ephemeral_replace(times_samples=times_updated, labels=new_labels)
+
+
+def merge_group_shifts(
+    merge_mapping: np.ndarray, shifts: np.ndarray, unit_snrs: np.ndarray
+) -> np.ndarray:
+    """Each unit's shift rel to the highest SNR unit in its group
+
+    shifts[i, j] is like trough[i] - trough[j]. Subtracting the result from
+    a unit's times aligns it to the group's best unit. And the return would
+    be unit_shifts[j] = best one - trough[j]
+
+    Use me with apply_time_shifts. We have the same sign convention.
+    """
+    assert np.abs(np.diagonal(shifts)).max() == 0
+
+    # find each unit's group-best-unit
+    best_units = np.full(merge_mapping.max(initial=-1) + 1, -1)
+    for unit, group in enumerate(merge_mapping):
+        best = best_units[group]
+        if best < 0 or unit_snrs[unit] > unit_snrs[best]:
+            best_units[group] = unit
+
+    # pick out the shift entry
+    arange = np.arange(merge_mapping.shape[0])
+    target = best_units[merge_mapping]
+    unit_shifts = shifts[target, arange]
+    assert np.all(unit_shifts[target == arange] == 0)
+
+    return unit_shifts
+
+
+@numba.njit(nogil=True, parallel=True)
+def apply_time_shifts(times: np.ndarray, labels: np.ndarray, unit_shifts: np.ndarray):
+    for i in numba.prange(times.shape[0]):  # ty: ignore[not-iterable]
+        label = labels[i]
+        if label >= 0:
+            times[i] -= unit_shifts[label]
 
 
 def hierarchical_cluster(
@@ -202,6 +229,18 @@ def leafsets(Z, max_distance=np.inf):
         leaves[n + i] = leavesa + leavesb
         leaves[n + i].sort()
     return leaves
+
+
+def meet(id_mapping_a: np.ndarray, id_mapping_b: np.ndarray) -> np.ndarray:
+    """The meet opration on the lattice of partitions."""
+    # this doesn't support destroying ids
+    assert id_mapping_a.min() >= 0
+    assert id_mapping_b.min() >= 0
+
+    _, meet_mapping = np.unique(
+        np.column_stack((id_mapping_a, id_mapping_b)), axis=0, return_inverse=True
+    )
+    return meet_mapping.ravel()
 
 
 def maximal_leaf_groups(
@@ -590,36 +629,82 @@ def decrumb(
 
 
 @databag
-class ViolationCounts:
+class ViolationInfo:
     unit_ids: np.ndarray
     spike_counts: np.ndarray
     """Same shape as unit_ids (flat)"""
     viol_counts: np.ndarray
-    """Indexed by pair of ids (not flat)"""
+    """Observed violated spike pair count. Indexed by pair of ids (not flat)."""
+    jitter_counts: np.ndarray | None
+    """Expected counts under a jitter resampling null model. (Also not flat.)"""
+
+    n_resamples: int
+    """Sample count if Monte Carlo was used, else 0."""
+    jitter_ms: float
+    censor_ms: float
+    viol_ms: float
+
+    def jitter_viol_ratio(
+        self, min_jitter: float = 4.6, fill_value=np.nan
+    ) -> np.ndarray:
+        """observed / expected, but masked out with fill_value where expected is small."""
+        assert self.jitter_counts is not None
+        ratio = np.full(self.viol_counts.shape, fill_value, dtype=np.float64)
+        np.divide(
+            self.viol_counts,
+            self.jitter_counts,
+            out=ratio,
+            where=self.jitter_counts >= min_jitter,
+        )
+        return ratio
 
 
-def violation_matrix(
-    st: DARTsortSorting, *, censor_ms: float = 0.25, viol_ms: float = 1.0
-) -> ViolationCounts:
-    """Count ACG and CCG violations within viol_ms
+def violation_statistics(
+    st: DARTsortSorting,
+    *,
+    censor_ms: float = 0.25,
+    viol_ms: float = 1.0,
+    jitter_ms: float = 20.0,
+    chance_method: Literal["weighted", "resample", "none"] = "weighted",
+    n_resamples: int = 32,
+    rg: int | np.random.Generator = 0,
+) -> ViolationInfo:
+    """Observed ACG/CCG violations together with a jittered chance level
+
+    Count ACG and CCG violations within viol_ms.
 
     Times within censor_ms of each other are ignored in the violation
     count. The censorship is right-exclusive, so that if censor_ms is 0,
     exact duplicates are counted; if censor_ms corresponds to 10 samples,
     9-sample viols are excluded and 10-sample viols are counted.
+
+    This also supports jitter-based null models. The default (weighted)
+    gets the expected violation count under a null model without drawing
+    jitter samples. "none" is well hey go figure. "resample" uses Monte
+    Carlo and is just there for unit tests pretty much.
     """
     assert st.labels is not None
-    censor_samples = int(censor_ms * (st.sampling_frequency / 1000.0))
+    rg = np.random.default_rng(rg)
+    censor_samples = max(0, int(censor_ms * (st.sampling_frequency / 1000.0)))
     viol_samples = int(viol_ms * (st.sampling_frequency / 1000.0))
+    jitter_samples = int(jitter_ms * (st.sampling_frequency / 1000.0))
+    if chance_method != "none":
+        # well you should probably do a good amount more but it's a start
+        assert jitter_samples > viol_samples
 
     unit_ids, spike_counts, _ = pos_int_unique_and_counts(st.labels)
     nu = (unit_ids.max() + 1).item() if unit_ids.size else 0
-    if not nu or (viol_samples < max(0, censor_samples)):
-        # nothing can be counted, but keep the matrix shape consistent
-        return ViolationCounts(
+    if not nu or viol_samples < censor_samples:
+        blank = np.zeros((nu, nu))
+        return ViolationInfo(
             unit_ids=unit_ids,
             spike_counts=spike_counts,
-            viol_counts=np.zeros((nu, nu), dtype=np.int64),
+            viol_counts=blank.astype(np.int64),
+            jitter_counts=None if chance_method == "none" else blank,
+            n_resamples=n_resamples if chance_method == "resample" else 0,
+            jitter_ms=jitter_ms,
+            censor_ms=censor_ms,
+            viol_ms=viol_ms,
         )
 
     labels = st.labels
@@ -629,27 +714,144 @@ def violation_matrix(
         labels = labels[tsort]
         times = times[tsort]
 
-    # count in chunks, per thread buffer; counts are ti<=tj
-    n = times.size
-    nchunks = max(1, numba.get_num_threads())
-    nchunks = min(nchunks, max(n, 1))
-    starts = (np.arange(nchunks + 1) * n) // nchunks
-    viol_counts = np.zeros((nchunks, nu, nu), dtype=np.int64)
-
-    _violation_count_matrix(
-        times, labels, censor_samples, viol_samples, starts, viol_counts
+    viol_counts, buffer = count_violations(
+        times, labels, censor_samples, viol_samples, nu
     )
 
-    viol_counts = viol_counts.sum(axis=0)
-    viol_diag = np.diagonal(viol_counts).copy()
-    viol_counts += viol_counts.T
-    np.fill_diagonal(viol_counts, viol_diag)
+    if chance_method == "none":
+        jitter_counts = None
+        n_resamples = 0
+    elif chance_method == "weighted":
+        jitter_counts, _ = count_violations(
+            times,
+            labels,
+            censor_samples,
+            viol_samples,
+            nu,
+            jitter_samples=jitter_samples,
+            buffer=buffer.view(np.float64),
+        )
+        n_resamples = 0
+    elif chance_method == "resample":
+        jittered_times = np.empty_like(times)
+        jittered_labels = np.empty_like(labels)
+        jitter_counts = np.zeros((nu, nu))
+        for _ in range(n_resamples):
+            offsets = rg.integers(-jitter_samples, jitter_samples + 1, size=times.size)
+            np.add(times, offsets, out=jittered_times)
+            order = np.argsort(jittered_times, kind="stable")
+            np.take(labels, order, out=jittered_labels)
+            jittered_times.sort()
+            sample, buffer = count_violations(
+                jittered_times,
+                jittered_labels,
+                censor_samples,
+                viol_samples,
+                nu,
+                buffer=buffer,
+            )
+            jitter_counts += sample
+        jitter_counts /= n_resamples
+    else:
+        panic(chance_method)
 
-    return ViolationCounts(
+    return ViolationInfo(
         unit_ids=unit_ids,
         spike_counts=spike_counts,
         viol_counts=viol_counts,
+        jitter_counts=jitter_counts,
+        n_resamples=n_resamples,
+        jitter_ms=jitter_ms,
+        censor_ms=censor_ms,
+        viol_ms=viol_ms,
     )
+
+
+def count_violations(
+    times: np.ndarray,
+    labels: np.ndarray,
+    censor_samples: int,
+    viol_samples: int,
+    n_units: int,
+    jitter_samples: int | None = None,
+    buffer=None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return a matrix counting spike pair violations
+
+    Helper function for violation_statistics
+
+    Each violating pair is counted exactly once!
+
+    weights are used if jitter_samples is supplied. It is maybe a bit
+    confusing to do it that way, because jitter is not simulated. It's
+    a closed form for the expectation.
+    """
+    n = times.shape[0]
+    nchunks = max(1, min(numba.get_num_threads(), max(n, 1)))
+    dtype = np.float64 if jitter_samples is not None else np.int64
+    if buffer is None:
+        buffer = np.zeros((nchunks, n_units, n_units), dtype=dtype)
+    else:
+        assert buffer.shape == (nchunks, n_units, n_units)
+        assert buffer.dtype == dtype
+        buffer.fill(0)
+    chunk_starts = (np.arange(buffer.shape[0] + 1) * times.size) // buffer.shape[0]
+    if jitter_samples is None:
+        _violation_count_matrix(
+            times,
+            labels,
+            censor_samples,
+            viol_samples,
+            chunk_starts,
+            buffer,
+        )
+    else:
+        weights = _jitter_spread_violation_weights(censor_samples, viol_samples, jitter_samples)
+        _violation_weight_matrix(
+            times,
+            labels,
+            weights,
+            chunk_starts,
+            buffer,
+        )
+
+    # sum chunks, symmetrize, handle diag
+    totals = buffer.sum(axis=0)
+    diag = np.diagonal(totals).copy()
+    totals += totals.T
+    np.fill_diagonal(totals, diag)
+    return totals, buffer
+
+
+def _jitter_spread_violation_weights(
+    censor_samples: int, viol_samples: int, jitter_samples: int
+) -> np.ndarray:
+    r"""Helper for getting the jitter-expected counts
+
+    The violation region gets spread out according to the joint distribution
+    of two Uniform{-J,...,J} variables. The jitter shift that results
+    has a triangular law (jitter_shifts and its probs below). So the final
+    answer is the convolution of the violation region with the triangle.
+
+    That expression is the expectation of violation over jitter outcomes.
+    Returned length goes out to 2 * jitter + viol, which is the support of
+    that expectation as f(observed dt). We return the right half including
+    0 lag.
+    """
+    assert 0 <= censor_samples <= viol_samples < jitter_samples
+
+    m = 2 * jitter_samples + 1
+    jitter_shifts = np.arange(-2 * jitter_samples, 2 * jitter_samples + 1)
+    jitter_shift_probs = (m - np.abs(jitter_shifts)) / (m * m)
+
+    offsets = np.arange(-viol_samples, viol_samples + 1)
+    violates = (np.abs(offsets) >= censor_samples).astype(float)
+
+    center = 2 * jitter_samples + viol_samples
+    conv = np.convolve(jitter_shift_probs, violates)
+    assert conv.shape == (2 * center + 1,)
+    # want the piece from zero lag on because we index with positive lags
+    return conv[center:]
 
 
 @numba.njit(nogil=True, parallel=True)
@@ -661,11 +863,12 @@ def _violation_count_matrix(
     starts: np.ndarray,
     counts: np.ndarray,
 ):
+    """numba loop: count violations: dts in [censor_samples, viol_samples)"""
     n = times.shape[0]
 
     # parallelize over chunks
     for c in numba.prange(starts.shape[0] - 1):  # ty: ignore[not-iterable]
-        out = counts[c]
+        out = counts[c]  # my thread's output buffer
 
         for i in range(starts[c], starts[c + 1]):
             li = labels[i]
@@ -686,3 +889,36 @@ def _violation_count_matrix(
                 if lj < 0:
                     continue
                 out[li, lj] += 1
+
+
+@numba.njit(nogil=True, parallel=True)
+def _violation_weight_matrix(
+    times: np.ndarray,
+    labels: np.ndarray,
+    weights: np.ndarray,
+    starts: np.ndarray,
+    sums: np.ndarray,
+):
+    """numba loop: for pairs of spikes, sum weights[dt]"""
+    n = times.shape[0]
+    window_length = weights.shape[0] - 1
+
+    # parallelize over chunks
+    for c in numba.prange(starts.shape[0] - 1):  # ty: ignore[not-iterable]
+        out = sums[c]  # my thread's output buffer
+
+        for i in range(starts[c], starts[c + 1]):
+            li = labels[i]
+            if li < 0:
+                continue
+            ti = times[i]
+
+            # make sure to read js past the chunk end!
+            for j in range(i + 1, n):
+                dt = times[j] - ti
+                if dt > window_length:
+                    break
+                lj = labels[j]
+                if lj < 0:
+                    continue
+                out[li, lj] += weights[dt]

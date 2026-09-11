@@ -472,29 +472,23 @@ def _matching_step_cfgs(
     Sequence[RefinementConfig | None],
     FeaturizationConfig,
     FitSamplingConfig,
-    bool,
 ]:
     clus_cfg = cfg.clustering_cfg if cfg.recluster_after_matching else None
     gmm_as_classifier = (
         is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "tmm"
     )
+    ref_cfgs: list[RefinementConfig | None]
     if gmm_as_classifier:
         gmm_clus_cfg = clus_cfg
         clus_cfg = None
-        ref_cfgs = [cfg.agglomerate_cfg, cfg.clean_cfg]
-        will_refine = (
-            cfg.agglomerate_cfg is not None
-            and cfg.agglomerate_cfg.template_merge_cfg is not None
-        )
+        ref_cfgs = list(cfg.final_refinement_cfgs)
     else:
         gmm_clus_cfg = None
-        ref_cfgs = [
-            cfg.pre_refinement_cfg,
-            cfg.refinement_cfg,
-            cfg.agglomerate_cfg,
-            cfg.clean_cfg,
-        ]
-        will_refine = True
+        ref_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg]
+        if is_final:
+            ref_cfgs.extend(cfg.final_refinement_cfgs)
+        else:
+            ref_cfgs.extend(cfg.post_refinement_cfgs)
     clfeat_cfg = cfg.clustering_features_cfg
 
     if gmm_as_classifier and ref_cfgs:
@@ -532,7 +526,7 @@ def _matching_step_cfgs(
     ):
         clfeat_cfg = replace(clfeat_cfg, skip=True)
 
-    return clus_cfg, clfeat_cfg, ref_cfgs, feat_cfg, samp_cfg, will_refine
+    return clus_cfg, clfeat_cfg, ref_cfgs, feat_cfg, samp_cfg
 
 
 def ds_save_timing(timings: dict[str, float], output_dir: Path):
