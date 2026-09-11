@@ -254,7 +254,7 @@ class ClusteringFeaturesConfig:
     log_transform_amplitude: bool = False
     amp_log_c: float = 5.0
     amp_scale: float = 3.0
-    amplitude_kind: Literal["peak", "ptp", "rms", "stored"] = "peak"
+    amplitude_kind: Literal["peak", "ptp", "rms", "stored"] = "ptp"
     x_scale: float = 1.0
     n_main_channel_pcs: int = 5
     n_multi_channel_pcs: int = 0
