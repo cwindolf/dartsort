@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -26,7 +28,7 @@ def scatter_max_channel_waveforms(
     waveform_width=0.95,
     show_geom=True,
     geom=None,
-    geom_scatter_kwargs={"marker": "s", "lw": 0, "s": 3},
+    geom_scatter_kwargs={"marker": "s", "lw": 0, "s": 3},  # noqa: B006
     lw=1,
     colors=glasbey1024,
     **plot_kwargs,
@@ -46,7 +48,7 @@ def scatter_max_channel_waveforms(
     if show_geom:
         axis.scatter(*rgeom.T, **geom_scatter_kwargs)
 
-    for j, (u, temp) in enumerate(zip(template_data.unit_ids, template_data.templates)):
+    for j, (u, temp) in enumerate(zip(template_data.unit_ids, template_data.templates, strict=True)):
         ptpvec = np.ptp(temp, 0)
         if ptpvec.max() == 0:
             continue
@@ -90,7 +92,7 @@ def annotated_dendro(
 
     lines = np.zeros((len(Z), 4, 2))
     colors = np.zeros((len(Z), 3))
-    for jj, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
+    for jj, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"], strict=True)):
         j = depth_order[jj]
         lines[j, :, 0] = ic
         lines[j, :, 1] = dc
@@ -108,10 +110,10 @@ def annotated_dendro(
     ax.set_xticks(
         5 + 10 * np.arange(len(res["leaves"])), labels=leaf_labels[res["leaves"]]
     )
-    for tick, leaf in zip(ax.get_xticklabels(), res["leaves"]):
+    for tick, leaf in zip(ax.get_xticklabels(), res["leaves"], strict=True):
         tick.set_color(glasbey1024[leaf_labels[leaf]])
 
-    for jj, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
+    for jj, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"], strict=True)):
         j = depth_order[jj]
         cluix = n + j if annotations_offset_by_n else j
         isbrute = brute_indicator is not None and brute_indicator[j]
@@ -254,7 +256,7 @@ def distance_matrix_dendro(
         ax_im.set_xticks(so + sc * np.arange(len(order)), unit_ids[order].tolist())
         ax_im.set_yticks(so + sc * np.arange(len(order)), unit_ids[order].tolist())
         for i, (tx, ty) in enumerate(
-            zip(ax_im.xaxis.get_ticklabels(), ax_im.yaxis.get_ticklabels())
+            zip(ax_im.xaxis.get_ticklabels(), ax_im.yaxis.get_ticklabels(), strict=False)
         ):
             tx.set_color(label_colors[unit_ids[i] % len(label_colors)])
             ty.set_color(label_colors[unit_ids[i] % len(label_colors)])
@@ -295,7 +297,7 @@ def get_linkage(dists, method="complete", threshold=0.25):
 def density_peaks_study(
     X,
     density_result,
-    dims=[0, 1],
+    dims=(0, 1),
     fig=None,
     axes=None,
     *,
@@ -426,7 +428,7 @@ def bar(ax, x, y, **kwargs):
 def stackbar(ax, x, y, colors, labels, fill=True):
     bottom = np.zeros_like(y[0]) if fill else None
     handles = []
-    for yy, cc, ll in zip(y, colors, labels):
+    for yy, cc, ll in zip(y, colors, labels, strict=False):
         ckw = dict(facecolor=cc, edgecolor=None, lw=0) if fill else dict(color=cc)
         h = bar(ax, x, yy + bottom, baseline=bottom, label=ll, fill=fill, **ckw)
         handles.append(h)
@@ -473,16 +475,20 @@ def visualize_denoiser(
     vis_sorting: DARTsortSorting,
     vis_mask: np.ndarray | None = None,
     load_denoiser_from_sorting: DARTsortSorting | None = None,
+    denoising_pipeline_pt: Path | None = None,
     n_show: int = 8,
     figscale: float = 2.0,
     seed: int = 0,
     cmap="seismic",
     suptitle=None,
+    waveforms_feature_name: str | None = "waveforms",
 ):
     # load denoiser
     if load_denoiser_from_sorting is None:
         load_denoiser_from_sorting = vis_sorting
-    dn, geom, channel_index = try_get_denoising_pipeline(load_denoiser_from_sorting)
+    dn, geom, channel_index = try_get_denoising_pipeline(
+        load_denoiser_from_sorting, denoising_pipeline_pt=denoising_pipeline_pt
+    )
     assert dn is not None
     assert channel_index is not None
     assert geom is not None
@@ -493,8 +499,12 @@ def visualize_denoiser(
     elif vis_mask.dtype.kind == "b":
         assert vis_mask.shape == (len(vis_sorting),)
         vis_mask = np.flatnonzero(vis_mask)
-    rg = np.random.default_rng(seed)
-    choices = rg.choice(vis_mask, size=n_show, replace=n_show < len(vis_sorting))
+    if len(vis_mask) > n_show:
+        rg = np.random.default_rng(seed)
+        choices = rg.choice(vis_mask, size=n_show, replace=n_show < len(vis_sorting))
+    else:
+        n_show = len(vis_mask)
+        choices = vis_mask
     times_samples = vis_sorting.times_samples[choices]
     main_channels = vis_sorting.channels[choices]
     x = spikeio.read_waveforms_channel_index(
@@ -504,6 +514,16 @@ def visualize_denoiser(
         channel_index=channel_index.numpy(force=True),
     )
     x = torch.asarray(x, dtype=torch.float)
+
+    # ground truth waveforms, when the sorting carries them. they must live on the same
+    # channel neighborhoods as the loaded waveforms, i.e. channel_index[main_channels].
+    g = None
+    if waveforms_feature_name is not None and vis_sorting.has_dataset(
+        waveforms_feature_name
+    ):
+        g = np.asarray(getattr(vis_sorting, waveforms_feature_name))[choices]
+        g = torch.asarray(g, dtype=torch.float)
+        assert g.shape == x.shape, f"{g.shape=} did not match {x.shape=}"
 
     # denoise, compute residuals
     mc_ = torch.asarray(main_channels)
@@ -517,6 +537,9 @@ def visualize_denoiser(
     xm = x.take_along_dim(dim=2, indices=mcri[:, None, None])[:, :, 0]
     ym = y.take_along_dim(dim=2, indices=mcri[:, None, None])[:, :, 0]
     zm = z.take_along_dim(dim=2, indices=mcri[:, None, None])[:, :, 0]
+    gm = None
+    if g is not None:
+        gm = g.take_along_dim(dim=2, indices=mcri[:, None, None])[:, :, 0]
 
     # all to numpy
     x = x.numpy(force=True)
@@ -525,35 +548,55 @@ def visualize_denoiser(
     xm = xm.numpy(force=True)
     ym = ym.numpy(force=True)
     zm = zm.numpy(force=True)
+    if g is not None:
+        g = g.numpy(force=True)
+        gm = gm.numpy(force=True)  # ty: ignore[unresolved-attribute]
 
     # vis part
+    traces = [
+        (xm, "k", "raw input"),
+        (zm, "darkgray", "residual"),
+        (ym, "orange", "denoised"),
+    ]
+    images = [(x, "raw input"), (y, "denoised"), (z, "residual")]
+    if g is not None:
+        traces.append((gm, "mediumblue", "ground truth"))
+        # next to the raw input, so the comparison the eye wants to make is adjacent
+        images.insert(1, (g, "ground truth"))
+    n_img = len(images)
+
     fig = plt.figure(
-        figsize=(figscale * 1.5 * n_show, figscale * 3.75),
+        figsize=(figscale * 1.5 * n_show, figscale * (0.75 + n_img)),
         layout="constrained",
     )
     axes = fig.subplots(
-        nrows=4, ncols=n_show, height_ratios=[0.75, 1, 1, 1], sharex=True, sharey="row"
+        nrows=1 + n_img,
+        ncols=n_show,
+        height_ratios=[0.75] + [1] * n_img,
+        sharex=True,
+        sharey="row",
     )
 
     for j in range(n_show):
-        for tr, c, ll in zip(
-            [xm, zm, ym], ["k", "darkgray", "orange"], ["raw input", "residual", "denoised"]
-        ):
+        for tr, c, ll in traces:
+            assert tr is not None
             axes[0, j].plot(tr[j], color=c, lw=1, label=ll)
             sns.despine(ax=axes[0, j], right=True, top=True)
             # axes[0, j].axhline(0, color='k', lw=0.8)
         if j == n_show - 1:
             axes[0, j].legend(frameon=False, ncols=1, loc="lower right")
-        for i, (wf, ll) in enumerate(zip([x, y, z], ["raw input", "denoised", "residual"])):
+        for i, (wf, ll) in enumerate(images):
             im = axes[i + 1, j].imshow(
                 wf[j].T, cmap=cmap, vmin=-5, vmax=5, interpolation="none", aspect="auto"
             )
             sns.despine(ax=axes[i + 1, j], left=bool(j))
             if j == n_show - 1:
-                plt.colorbar(im, ax=axes[i + 1, j], shrink=0.3, label='standardized voltage')
+                plt.colorbar(
+                    im, ax=axes[i + 1, j], shrink=0.3, label="standardized voltage"
+                )
             if j == 0:
                 axes[i + 1, j].set_ylabel(f"{ll}\nlocal channel index")
-    axes[0, 0].set_ylabel('main trace view\nstandardized voltage')
+    axes[0, 0].set_ylabel("main trace view\nstandardized voltage")
     if suptitle:
         fig.suptitle(suptitle)
     return fig
@@ -770,7 +813,7 @@ def plot_denoiser_scores(
                 color=glasbey1024[unit_id % len(glasbey1024)],
             )
 
-    for ax, name in zip(axes.flat, ["original", "whitened"]):
+    for ax, name in zip(axes.flat, ["original", "whitened"], strict=False):
         ax.grid()
         ax.set_xlabel(f"{name} score")
 
