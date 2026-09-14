@@ -58,6 +58,50 @@ def test_isin_sorted():
     assert torch.equal(spiketorch.isin_sorted(full, empty), full_b)
 
 
+def test_sort_to_csr():
+    ids = torch.tensor([2, 0, 2, 1, 2, 0])
+    order, indptr, counts = spiketorch.sort_to_csr(ids, 4)
+
+    assert counts.tolist() == [2, 1, 3, 0]
+    assert indptr.tolist() == [0, 2, 3, 6, 6]
+    for j in range(4):
+        members = order[indptr[j] : indptr[j + 1]]
+        assert members.tolist() == (ids == j).nonzero()[:, 0].tolist()
+
+    got = spiketorch.csr_members_ordered(order, indptr, counts, torch.tensor([2, 0]))
+    assert got.tolist() == [0, 2, 4, 1, 5]
+    empty = spiketorch.csr_members_ordered(order, indptr, counts, torch.tensor([3]))
+    assert empty.numel() == 0
+
+
+def test_stratified_subsample():
+    gen = spiketorch.spawn_torch_rg(0)
+    counts = torch.tensor([1, 3, 5, 8, 200])
+    n_groups = counts.numel() + 1  # last group is empty
+    groups = torch.repeat_interleave(torch.arange(counts.numel()), counts)
+    groups = groups[torch.randperm(groups.numel(), generator=gen)]
+    arr = 3 * torch.arange(groups.numel()) + 7
+
+    for min_per_group in (0, 1, 4, 10):
+        for n_target in (5, 50, 100):
+            sub = spiketorch.stratified_subsample(
+                arr,
+                groups,
+                n_groups=n_groups,
+                n_target=n_target,
+                min_per_group=min_per_group,
+                gen=gen,
+            )
+            guaranteed = counts.clamp(max=min_per_group)
+            assert sub.numel() == max(n_target, int(guaranteed.sum()))
+            assert torch.equal(sub, sub.unique())
+            assert torch.isin(sub, arr).all()
+
+            sub_counts = torch.bincount(groups[(sub - 7) // 3], minlength=n_groups)
+            assert (sub_counts[: counts.numel()] >= guaranteed).all()
+            assert sub_counts[-1] == 0
+
+
 def test_ravel_multi_index():
     # no broadcasting case
     x = torch.zeros((40, 41))

@@ -1529,6 +1529,64 @@ def isin_sorted(x, y):
     return x == y[ix]
 
 
+def sort_to_csr(ids: Tensor, n_groups: int) -> tuple[Tensor, Tensor, Tensor]:
+    """Order, indptr, and counts which group the indices of ids by value, like CSR rows."""
+    counts = torch.bincount(ids, minlength=n_groups)
+    order = torch.argsort(ids, stable=True)
+    indptr = F.pad(counts.cumsum(0), (1, 0))
+    return order, indptr, counts
+
+
+def csr_members_ordered(
+    order: Tensor, indptr: Tensor, counts: Tensor, groups: Tensor
+) -> Tensor:
+    """Concatenated members of each of groups, from sort_to_csr's output."""
+    sizes = counts[groups]
+    total = int(sizes.sum())
+    if not total:
+        return order[:0]
+    # ragged arange over the selected CSR rows
+    starts = torch.repeat_interleave(indptr[groups] - sizes.cumsum(0) + sizes, sizes)
+    return order[starts + torch.arange(total, device=order.device)]
+
+
+def stratified_subsample(
+    arr: Tensor,
+    groups: Tensor,
+    *,
+    n_groups: int,
+    n_target: int,
+    min_per_group: int,
+    gen: torch.Generator,
+) -> Tensor:
+    """Random subset of arr of size n_target which keeps min_per_group from each group.
+
+    Groups with fewer members are kept whole. The result exceeds n_target when
+    the per-group minimums add up to more than that.
+    """
+    perm = torch.randperm(arr.numel(), generator=gen, device=arr.device)
+    groups = groups[perm]
+
+    # reorder to csgroup in random shuffle space
+    order, indptr, _ = sort_to_csr(groups, n_groups)
+
+    # after subtracting indptr[groups], is just counting up from 0 in each group,
+    # but in the csgroup ordering
+    rank = torch.empty_like(order)
+    rank[order] = torch.arange(order.numel(), device=order.device)
+    rank -= indptr[groups]
+
+    # this keeps randomly selected guys from each group
+    keep = rank < min_per_group
+
+    # and, backfill with totally uniform samples
+    n_rest = max(0, n_target - int(keep.sum()))
+    (rest,) = keep.logical_not().nonzero(as_tuple=True)
+    keep[rest[:n_rest]] = True
+
+    return torch.msort(arr[perm[keep]])
+
+
 def average_by_label(x, labels, channels, n_channels, weights=None):
     """weights should sum to 1 already in each group."""
     n = x.shape[0]
