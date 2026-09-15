@@ -89,6 +89,13 @@ class Decollider(BaseMultichannelDenoiser):
         inf_net_hidden_dims=None,
         eyz_net_hidden_dims=None,
         queue_chunks=50,
+        conv_fullheight_width_mult=1,
+        conv_fullheight_depth=1,
+        conv_fullheight_channel_mix=False,
+        whiten_loss=False,
+        whiten_loss_terms=("eyz", "emz", "e_exz_y", "cycle"),
+        whiten_loss_temporal=True,
+        whitener=None,
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
         assert inference_kind in ("raw", "exz", "exz_fromz", "amortized", "exy_fake")
@@ -127,6 +134,9 @@ class Decollider(BaseMultichannelDenoiser):
             epoch_size=epoch_size,
             warmup_epochs=warmup_epochs,
             warmup_lr=warmup_lr,
+            conv_fullheight_width_mult=conv_fullheight_width_mult,
+            conv_fullheight_depth=conv_fullheight_depth,
+            conv_fullheight_channel_mix=conv_fullheight_channel_mix,
         )
         self.queue_chunks = queue_chunks
         self.batches_per_chunk = batches_per_chunk
@@ -150,6 +160,11 @@ class Decollider(BaseMultichannelDenoiser):
         self.detach_cycle_loss = detach_cycle_loss
         self.clip_value = clip_value
         self.clip_norm = clip_norm
+        self.whiten_loss = whiten_loss
+        self.whiten_loss_terms = tuple(whiten_loss_terms)
+        self.whiten_loss_temporal = whiten_loss_temporal
+        # weak reference, only used in training
+        self._whitener_holder = [whitener]
         if self.svd_projection_rank:
             self.submodule_names = ["tpca"]
 
@@ -201,7 +216,25 @@ class Decollider(BaseMultichannelDenoiser):
             self.tpca.initialize_spike_length_dependent_params()
         else:
             self.tpca = None
+        self.initialize_loss_whitener()
         self.to(self.device)
+
+    def initialize_loss_whitener(self):
+        whitener = self._whitener_holder[0]
+        if not self.whiten_loss or whitener is None:
+            return
+        if hasattr(self, "loss_local_whiteners"):
+            return
+        lw = whitener.local_whiteners(self.b.model_channel_index.cpu())
+        self.register_buffer(
+            "loss_local_whiteners", lw.to(self.device), persistent=False
+        )
+        kernel = None
+        if self.whiten_loss_temporal:
+            kernel = whitener.b.temporal_kernel
+            if kernel is not None:
+                kernel = kernel.clone().to(self.device)
+        self.register_buffer_or_none("loss_whitening_kernel", kernel, persistent=False)
 
     def fit(
         self,
@@ -214,9 +247,12 @@ class Decollider(BaseMultichannelDenoiser):
         **spike_data,
     ):
         weights = spike_data.get("weights")
+        if self.whiten_loss and self._whitener_holder[0] is None:
+            self._whitener_holder[0] = self._estimate_loss_whitener(hdf5_filename)
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
+        self.initialize_loss_whitener()
         if self.tpca is not None and self.tpca.needs_fit():
             self.tpca.fit(
                 recording=recording,
@@ -238,6 +274,36 @@ class Decollider(BaseMultichannelDenoiser):
             res = self._fit(train_data, val_data)
         self._needs_fit = False
         return res
+
+    def _estimate_loss_whitener(self, hdf5_filename):
+        from ..util.data_util import DARTsortSorting
+        from ..util.internal_config import WhiteningConfig
+        from ..util.noise_util import Whitener
+
+        if hdf5_filename is None or not _check_has_dataset(hdf5_filename, "residual"):
+            panic(f"No residual in {hdf5_filename}")
+        logger.dartsortdebug(f"Estimate loss whitener from {hdf5_filename}.")
+        return Whitener.from_config(
+            sorting=DARTsortSorting.from_peeling_hdf5(hdf5_filename),
+            motion=None,
+            whiten_cfg=WhiteningConfig(strategy="prewhiten_postapply"),
+        )
+
+    def whiten_for_loss(self, d, channels):
+        w = self.b.loss_local_whiteners[channels].to(d)
+        dw = w.bmm(d.mT)
+        kernel = self.b.loss_whitening_kernel
+        if kernel is not None:
+            n, c, t = dw.shape
+            k = kernel[None, None].to(dw)
+            dw = F.conv1d(dw.reshape(n * c, 1, t), k, padding="same").view(n, c, t)
+        return dw
+
+    def masked_mse(self, a, b, mask, term, channels):
+        d = (a - b).mul(mask)
+        if self.whiten_loss and channels is not None and term in self.whiten_loss_terms:
+            d = self.whiten_for_loss(d, channels)
+        return d.square().mean()
 
     def forward_unbatched(self, waveforms, channels):
         """Called only at inference time."""
@@ -361,6 +427,7 @@ class Decollider(BaseMultichannelDenoiser):
         l1_alpha=None,
         l4_alpha=None,
         output_l1_alpha=None,
+        channels=None,
     ):
         loss_dict = {}
         mask = mask.unsqueeze(1)
@@ -373,7 +440,7 @@ class Decollider(BaseMultichannelDenoiser):
 
         if eyz is not None:
             eyz_mask = mask * eyz
-            loss_dict["eyz"] = F.mse_loss(eyz_mask, mask * waveforms)
+            loss_dict["eyz"] = self.masked_mse(eyz, waveforms, mask, "eyz", channels)
             if l1_alpha:
                 loss_dict["eyz_l1"] = (
                     l4_alpha * (eyz - waveforms).mul_(mask).abs_().mean()
@@ -385,7 +452,7 @@ class Decollider(BaseMultichannelDenoiser):
             if output_l1_alpha:
                 loss_dict["eyz_ol1"] = output_l1_alpha * eyz_mask.abs().mean()
         if emz is not None:
-            loss_dict["emz"] = F.mse_loss(mask * emz, mask * m)
+            loss_dict["emz"] = self.masked_mse(emz, m, mask, "emz", channels)
             if l1_alpha:
                 loss_dict["emz_l1"] = l4_alpha * (emz - m).mul_(mask).abs_().mean()
             if l4_alpha:
@@ -396,7 +463,9 @@ class Decollider(BaseMultichannelDenoiser):
                 # should amortize-ability affect the learning of eyz, emz?
                 to_amortize = to_amortize.detach()
             am_mask = mask * to_amortize
-            loss_dict["e_exz_y"] = F.mse_loss(am_mask, mask * e_exz_y)
+            loss_dict["e_exz_y"] = self.masked_mse(
+                e_exz_y, to_amortize, mask, "e_exz_y", channels
+            )
             if l1_alpha:
                 loss_dict["e_exz_y_l1"] = (
                     l4_alpha * (to_amortize - e_exz_y).mul_(mask).abs_().mean()
@@ -410,8 +479,8 @@ class Decollider(BaseMultichannelDenoiser):
         if cycle_output is not None:
             coef = 1 if self.separate_cycle_net else self.cycle_loss_alpha
             cycle_targ = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
-            loss_dict["cycle"] = coef * F.mse_loss(
-                mask * cycle_targ, mask * cycle_output
+            loss_dict["cycle"] = coef * self.masked_mse(
+                cycle_output, cycle_targ, mask, "cycle", channels
             )
             if l1_alpha:
                 loss_dict["cycle_l1"] = (coef * l1_alpha) * (
@@ -657,6 +726,7 @@ class Decollider(BaseMultichannelDenoiser):
                         l1_alpha=self.l1_alpha,
                         l4_alpha=self.l4_alpha,
                         output_l1_alpha=self.output_l1_alpha,
+                        channels=channels_b,
                     )
                     loss = sum(loss_dict.values())
                     loss.backward()
@@ -714,6 +784,7 @@ class Decollider(BaseMultichannelDenoiser):
                                 l1_alpha=self.l1_alpha,
                                 l4_alpha=self.l4_alpha,
                                 output_l1_alpha=self.output_l1_alpha,
+                                channels=channels_b,
                             )
                             for k, v in loss_dict.items():
                                 val_losses[k] = v + val_losses.get(k, 0.0)

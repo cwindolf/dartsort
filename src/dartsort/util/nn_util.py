@@ -1,3 +1,5 @@
+from typing import Sequence
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -247,6 +249,46 @@ def get_mlp(
     return nn.Sequential(*layers)
 
 
+def fullheight_layers(
+    spike_length_samples,
+    n_input_channels,
+    norm_kind,
+    width_mult=1,
+    depth=1,
+    channel_mix=False,
+    end_linear=False,
+):
+    """By fullheight... conv1d's channels are time here, so this is time mixing."""
+    t = spike_length_samples
+    layers: Sequence[nn.Module] = []
+    dims = [t]
+    if width_mult > 1:
+        dims += [width_mult * t] * depth
+    else:
+        dims += [t] * depth
+    dims.append(t)
+
+    def post(is_last):
+        if end_linear and is_last:
+            return
+        norm = get_channel_norm(n_input_channels, norm_kind)
+        if norm is not None:
+            layers.append(norm)
+        layers.append(nn.ReLU())
+
+    n_blocks = len(dims) - 1
+    for i, (din, dout) in enumerate(zip(dims[:-1], dims[1:], strict=True)):
+        layers.append(nn.Conv1d(din, dout, kernel_size=1))
+        post(is_last=(i == n_blocks - 1) and not channel_mix)
+    if channel_mix:
+        # full matmul across channels
+        layers.append(Permute(0, 2, 1))
+        layers.append(nn.Conv1d(n_input_channels, n_input_channels, kernel_size=1))
+        layers.append(Permute(0, 2, 1))
+        post(is_last=True)
+    return layers
+
+
 def get_waveform_mlp(
     spike_length_samples,
     n_input_channels,
@@ -266,6 +308,9 @@ def get_waveform_mlp(
     nonlinearity="ReLU",
     attention_layer=False,
     num_heads=4,
+    conv_fullheight_width_mult=1,
+    conv_fullheight_depth=1,
+    conv_fullheight_channel_mix=False,
 ):
     input_dim = n_input_channels * (spike_length_samples + input_includes_mask)
     layers = []
@@ -273,14 +318,15 @@ def get_waveform_mlp(
         layers.append(WaveformOnly(LogTransform()))
 
     if initial_conv_fullheight:
-        # what Conv1d considers channels is actually time (conv1d is ncl).
-        # so this is matmul over time, and kernel size is 1 to be separate over chans
-        conv = nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)
-        layers.append(WaveformOnly(conv))
-        norm = get_channel_norm(n_input_channels, norm_kind)
-        if norm is not None:
-            layers.append(WaveformOnly(norm))
-        layers.append(WaveformOnly(nn.ReLU()))
+        for layer in fullheight_layers(
+            spike_length_samples,
+            n_input_channels,
+            norm_kind,
+            width_mult=conv_fullheight_width_mult,
+            depth=conv_fullheight_depth,
+            channel_mix=conv_fullheight_channel_mix,
+        ):
+            layers.append(WaveformOnly(layer))
 
     if separated_mask_input:
         layers.append(Cat(dim=1))
@@ -309,8 +355,17 @@ def get_waveform_mlp(
         if norm is not None:
             layers.append(norm)
         layers.append(nn.ReLU())
-        conv = nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)
-        layers.append(conv)
+        layers.extend(
+            fullheight_layers(
+                spike_length_samples,
+                n_input_channels,
+                norm_kind,
+                width_mult=conv_fullheight_width_mult,
+                depth=conv_fullheight_depth,
+                channel_mix=conv_fullheight_channel_mix,
+                end_linear=True,
+            )
+        )
 
     net = nn.Sequential(*layers)
 

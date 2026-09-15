@@ -53,6 +53,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         signal_gates=True,
         step_callback=None,
         fused_opt=True,
+        conv_fullheight_width_mult=1,
+        conv_fullheight_depth=1,
+        conv_fullheight_channel_mix=False,
     ):
         super().__init__(
             geom=geom,
@@ -90,6 +93,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.epoch_size = epoch_size
         self.svd_projection_rank = svd_projection_rank
         self.fused_opt = fused_opt
+        self.conv_fullheight_width_mult = conv_fullheight_width_mult
+        self.conv_fullheight_depth = conv_fullheight_depth
+        self.conv_fullheight_channel_mix = conv_fullheight_channel_mix
 
         model_channel_index = regularize_channel_index(
             geom=self.geom, channel_index=channel_index, depth_only=pad_depth_only
@@ -227,6 +233,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             nonlinearity=self.nonlinearity,
             log_transform=log_transform,
             scaling=self.scaling,
+            conv_fullheight_width_mult=self.conv_fullheight_width_mult,
+            conv_fullheight_depth=self.conv_fullheight_depth,
+            conv_fullheight_channel_mix=self.conv_fullheight_channel_mix,
         )
 
     def to_nn_channels(self, waveforms, channels):

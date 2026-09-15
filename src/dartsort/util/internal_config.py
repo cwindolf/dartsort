@@ -1302,6 +1302,11 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,
         scale_dist_args=(cfg.amplitude_scaling_stddev, 1.0 / sb, sb / 1.0),
+        censor_ms=cfg.deduplication_ms,
+        glom_violation_ms=cfg.agg_violation_ms,
+        glom_jitter_ms=cfg.agg_jitter_ms,
+        glom_min_violation_evidence=cfg.agg_min_violation_evidence,
+        glom_violation_threshold=cfg.agg_violation_threshold,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank
@@ -1399,6 +1404,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         glom_force_merge_template_distance=cfg.agg_force_merge_template_distance,
         glom_qda_overlap=cfg.agg_qda_overlap,
         glom_qda_bimodality=cfg.agg_qda_bimodality,
+        censor_ms=cfg.deduplication_ms,
         glom_violation_ms=cfg.agg_violation_ms,
         glom_jitter_ms=cfg.agg_jitter_ms,
         glom_min_violation_evidence=cfg.agg_min_violation_evidence,
