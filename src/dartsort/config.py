@@ -32,13 +32,26 @@ class DARTsortUserConfig:
     do_motion_estimation: bool = True
     """Set this to false if your data is super stable or already motion-corrected."""
 
-    preprocessing: PreprocessingStrategy = "none"
-    """If other than `'none'`, dartsort will apply some preprocessing to the
-    recording. Leave as `'none'` if you are passing in an already-preprocesed
-    recording. If so, be aware that dartsort expects its input to be standardized on
-    each channel in addition to the usual highpass filtering, but that
-    whitening is handled internally. See util/preprocess_util.py if you're
-    curious about the details of the methods.
+    already_preprocessed: Literal["yes", "no", "assume_yes_if_float"] = (
+        "assume_yes_if_float"
+    )
+    """Is your data already preprocessed?
+
+    If so, the preprocessing flag below is ignored. By default, the recording is
+    assumed to be preprocessed already (including standardization) if its data
+    type is any floating point type.
+
+    dartsort will warn you if the data looks weird according to some simple checks
+    (see check_recording in data_util and warn_about_preprocessing in
+    preprocess_util).
+    """
+
+    preprocessing: PreprocessingStrategy = "ibllikecmr"
+    """If other than `'none'`, and following the already_preprocessed flag above,
+    dartsort will apply some preprocessing to the recording. Be aware that
+    dartsort expects its input to be standardized on each channel in addition to
+    the usual highpass filtering, but that whitening is handled internally. See
+    util/preprocess_util.py if you're curious about the details of the methods.
 
     Options: `'ibllikecmr', 'ibllike', 'standardize', 'none'`
     """

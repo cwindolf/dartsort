@@ -141,7 +141,9 @@ def dartsort(
 
     # preprocess
     copy_rec_flag = ds_will_copy_recording(cfg)
-    recording = preprocess(recording, cfg.preprocessing, cfg.preprocessing_dtype)
+    recording = preprocess(
+        recording, cfg.preprocessing, cfg.already_preprocessed, cfg.preprocessing_dtype
+    )
     check_recording(recording, copy_flag=copy_rec_flag)
 
     needs_dir = copy_rec_flag or cfg.work_in_tmpdir

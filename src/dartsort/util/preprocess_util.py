@@ -1,4 +1,5 @@
 import warnings
+from typing import Literal
 
 import numpy as np
 import spikeinterface.full as si
@@ -6,6 +7,7 @@ from spikeinterface.core import BaseRecording
 
 from .internal_config import PreprocessingStrategy
 from .logging_util import get_logger
+from .py_util import panic
 
 logger = get_logger(__name__)
 
@@ -95,13 +97,10 @@ class DSPreprocessingError(ValueError):
     pass
 
 
-def warn_about_preprocessing(
-    rec: BaseRecording,
-    strategy: PreprocessingStrategy = "none",
-):
+def warn_about_preprocessing(rec: BaseRecording, will_preprocess: bool):
     from .data_util import check_recording
 
-    if strategy == "none" and rec.dtype.kind != "f":
+    if (not will_preprocess) and rec.dtype.kind != "f":
         raise DSPreprocessingError(
             f"The input recording had data type {rec.dtype.name}, but "
             "dartsort's preprocessing flag was set to 'none'. Please "
@@ -113,18 +112,18 @@ def warn_about_preprocessing(
     )
     in_range = not not_in_range
 
-    if strategy != "none" and in_range:
+    if will_preprocess and in_range:
         warnings.warn(
-            f"preprocessing was configured to '{strategy}', but recording values "
+            f"preprocessing was configured to be skipped, but recording values "
             f"reach |{max_abs:0.2f}| with std dev {std:0.2f}, so the recording "
             "looks like it may already have some preprocessing applied. Just a "
             "heads up to give a chance to double check.",
             DSPreprocessingWarning,
             stacklevel=2,
         )
-    if strategy == "none" and not_in_range:
+    if (not will_preprocess) and not_in_range:
         warnings.warn(
-            f"preprocessing was configured to 'none', but recording values "
+            f"preprocessing was configured to be skipped, but recording values "
             f"reach |{max_abs:0.2f}| with std dev {std:0.2f}, so the recording "
             "looks like it was not preprocessed. Did you want to set the "
             "preprocessing flag?",
@@ -136,8 +135,28 @@ def warn_about_preprocessing(
 def preprocess(
     rec: BaseRecording,
     strategy: PreprocessingStrategy = "none",
+    already_preprocessed: Literal[
+        "yes", "no", "assume_yes_if_float"
+    ] = "assume_yes_if_float",
     dtype: str = "float32",
 ) -> BaseRecording:
+    if already_preprocessed == "yes":
+        logger.info("skipping preprocessing since already_preprocessed=yes.")
+        warn_about_preprocessing(rec=rec, will_preprocess=False)
+        return rec
+    elif already_preprocessed == "assume_yes_if_float":
+        if rec.dtype.kind == "f":
+            logger.info(
+                "skipping preprocessing since already_preprocessed=assume_yes_if_float and "
+                "the data is already floating point."
+            )
+            warn_about_preprocessing(rec=rec, will_preprocess=False)
+            return rec
+    elif already_preprocessed == "no":
+        pass
+    else:
+        panic(already_preprocessed)
+
     logger.info("applying preprocessing: %s", strategy)
-    warn_about_preprocessing(rec=rec, strategy=strategy)
+    warn_about_preprocessing(rec=rec, will_preprocess=strategy != "none")
     return preprocessing_strategies[strategy](rec, dtype)

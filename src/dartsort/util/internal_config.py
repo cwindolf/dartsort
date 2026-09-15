@@ -1001,6 +1001,9 @@ class DARTsortInternalConfig:
     fit_matching_models_only: bool = False
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     preprocessing: PreprocessingStrategy = "none"
+    already_preprocessed: Literal["yes", "no", "assume_yes_if_float"] = (
+        "assume_yes_if_float"
+    )
     preprocessing_dtype: Literal["float16", "float32"] = "float32"
     matching_iterations: int = 1
     recluster_after_matching: bool = False
@@ -1483,6 +1486,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         motion_estimation_cfg=motion_estimation_cfg,
         computation_cfg=computation_cfg,
         preprocessing=cfg.preprocessing,
+        already_preprocessed=cfg.already_preprocessed,
         preprocessing_dtype=cfg.preprocessing_dtype,
         detection_type=cfg.detection_type,
         dredge_only=cfg.dredge_only,
