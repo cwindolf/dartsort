@@ -132,14 +132,14 @@ class Threshold(BasePeeler):
         datasets = super().out_datasets()
         if self.is_random:
             datasets.append(
-                SpikeDataset(name="orig_times_samples", shape_per_spike=(), dtype=float)
+                SpikeDataset(name="orig_times_samples", shape_per_spike=(), dtype=np.int64)
             )
             datasets.append(
-                SpikeDataset(name="orig_channels", shape_per_spike=(), dtype=float)
+                SpikeDataset(name="orig_channels", shape_per_spike=(), dtype=np.int64)
             )
         if self.save_collidedness:
             datasets.append(SpikeDataset("collidedness", (), "float32"))
-        datasets.append(SpikeDataset(name="voltages", shape_per_spike=(), dtype=float))
+        datasets.append(SpikeDataset(name="voltages", shape_per_spike=(), dtype="float32"))
         return datasets
 
     def peel_chunk(
