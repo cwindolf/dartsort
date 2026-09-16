@@ -376,6 +376,7 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
                 whitening=dartsort.WhiteningConfig(),
             ),
         )
+    assert st is not None
     gt_st = align_sim["sorting"]
     np.testing.assert_array_equal(st.times_samples, gt_st.times_samples)
     assert st.labels is not None
@@ -489,6 +490,7 @@ def test_matching_alignment_upsampled(match_test_sims, up_factor, matchtype, tem
         )
 
     assert gt_st.labels is not None
+    assert st is not None
     assert st.labels is not None
     np.testing.assert_array_equal(gt_st.labels, st.labels)
     gt_up = getattr(gt_st, "jitter_ix", None)
