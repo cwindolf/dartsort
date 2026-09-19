@@ -1916,6 +1916,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         labels: Tensor | None,
         min_count: int = 0,
         min_per_neighborhood: int = 0,
+        min_per_unit: int = 0,
     ) -> DenseSpikeData | None:
         assert self.candidates is not None
         assert unit_ids is not None
@@ -1937,13 +1938,24 @@ class TruncatedSpikeData(BatchedSpikeData):
         if min_count and ixs.numel() < min_count:
             return None
         n_target = self.dense_slice_size_per_unit * n_ids
-        if (nixs := ixs.numel()) > n_target and min_per_neighborhood:
+        nixs = ixs.numel()
+        assert not (min_per_neighborhood and min_per_unit)
+        if nixs > n_target and min_per_neighborhood:
             ixs = stratified_subsample(
                 ixs,
                 self.neighborhood_ids[ixs],
                 n_groups=self.neighborhoods.n_neighborhoods,
                 n_target=n_target,
                 min_per_group=min_per_neighborhood,
+                gen=gen,
+            )
+        elif nixs > n_target and min_per_unit:
+            ixs = stratified_subsample(
+                ixs,
+                labels[ixs],
+                n_groups=int(unit_ids.max()) + 1,
+                n_target=n_target,
+                min_per_group=min_per_unit,
                 gen=gen,
             )
         elif nixs > n_target:
@@ -3480,7 +3492,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         view = self.unit_slice(group)
         group_train_data = train_data.dense_slice_by_unit(
-            group, gen=self.rg, labels=train_labels
+            group, gen=self.rg, labels=train_labels, min_per_unit=self.p.min_count
         )
         assert group_train_data is not None
         if pnoid:
@@ -3575,6 +3587,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # log(new_props) = props[group].sum() * sub_props)
             group_log_prop = self.b.log_proportions[group].logsumexp(dim=0)
             new_log_props = group_res.sub_proportions.log().add_(group_log_prop)
+            new_log_props = new_log_props.clamp_(min=self.LP_MIN)
             if pnoid and not new_log_props[groups_kept].isfinite().all():
                 raise AssertionError(
                     f"Non-finite log proportions in merge of group {group.tolist()} "
