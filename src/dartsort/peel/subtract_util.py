@@ -212,9 +212,11 @@ class LocalPeakProposer:
         pass
 
     def update(self, residual: Tensor, times_samples: Tensor) -> None:
-        """Not patched yet: local detection batches over time inside
-        detect_and_deduplicate, so its peak map isn't separable the way the
-        global one is."""
+        # possible TODO: in place patching like global
+        # local isn't really used, and it's more complicated to implement
+        # patching for local, so I'm not doing this yet
+        # partly this is because of the time batching in the implementation...
+        pass
 
     def propose_peaks(
         self, residual: Tensor, detection_mask: Tensor | None
