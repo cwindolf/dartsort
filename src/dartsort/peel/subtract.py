@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import local
 
 import numpy as np
 import torch
@@ -37,11 +38,15 @@ from ..util.waveform_util import (
     relative_channel_subset_index,
 )
 from .peel_base import BasePeeler, PeelingBatchResult
-from .peel_lib import subtract_chunk, threshold_to_fit
+from .peel_lib import threshold_to_fit
+from .subtract_util import ChunkSubtracter, make_peak_proposer
 
 
 class SubtractionPeeler(BasePeeler):
     peel_kind = "Subtraction"
+
+    # validate detections against direct impl
+    audit_patches = False
 
     def __init__(
         self,
@@ -142,6 +147,66 @@ class SubtractionPeeler(BasePeeler):
         # this may be overwritten after featurization fit
         self.register_buffer_or_none("local_whiteners", None)
         self.register_buffer_or_none("whitening_kernel", None)
+
+        self._subtracters: local = local()
+
+    # -- thread-local chunk subtracters. one per worker, and locals can't be pickled
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        del state["_subtracters"]
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._subtracters = local()
+
+    @property
+    def chunk_subtracter(self) -> ChunkSubtracter:
+        """This thread's subtracter, rebuilt when the peeler has moved or refit."""
+        signature = (
+            self.b.sub_channel_index.device,
+            id(self.subtraction_denoising_pipeline),
+            self.threshold,
+            self.audit_patches,
+        )
+        if getattr(self._subtracters, "signature", None) != signature:
+            self._subtracters.subtracter = self._build_chunk_subtracter()
+            self._subtracters.signature = signature
+        return self._subtracters.subtracter
+
+    def _build_chunk_subtracter(self) -> ChunkSubtracter:
+        proposer = make_peak_proposer(
+            self.p,
+            spike_length_samples=self.spike_length_samples,
+            trough_offset_samples=self.trough_offset_samples,
+            peak_channel_index=self.b.peak_channel_index,
+            sub_dedup_channel_index=self.b.sub_dedup_channel_index,
+            audit=self.audit_patches,
+        )
+        return ChunkSubtracter(
+            channel_index=self.b.sub_channel_index,
+            denoising_pipeline=self.subtraction_denoising_pipeline,
+            proposer=proposer,
+            trough_offset_samples=self.trough_offset_samples,
+            spike_length_samples=self.spike_length_samples,
+            residnorm_decrease_threshold=self.threshold,
+            extract_index=None if self.extract_subtract_same else self.b.channel_index,
+            extract_mask=self.extract_subtract_mask,
+            dedup_channel_index=self.b.dedup_channel_index,
+            subtract_rel_inds=self.b.subtract_index_rel_inds,
+            local_whiteners=self.b.local_whiteners,
+            whitening_kernel=self.b.whitening_kernel,
+            peak_sign=self.p.peak_sign,
+            exclusion_time_radius=self.p.temporal_dedup_radius_samples,
+            pos_exclusion_time_radius=self.p.positive_temporal_dedup_radius_samples,
+            realign_to_denoiser=self.p.realign_to_denoiser,
+            denoiser_realignment_shift=self.p.denoiser_realignment_shift,
+            max_iter=self.p.max_iter,
+            save_iteration=self.save_iteration,
+            save_residnorm_decrease=self.save_residnorm_decrease,
+            compute_collidedness=self.save_collidedness,
+        )
 
     def out_datasets(self):
         datasets = super().out_datasets()
@@ -282,40 +347,12 @@ class SubtractionPeeler(BasePeeler):
             return_waveforms and "denoised" in self.featurization_pipelines
         )
 
-        extract_index = None if self.extract_subtract_same else self.b.channel_index
         traces = traces.to(self.dtype)
 
-        subtraction_result = subtract_chunk(
+        subtraction_result = self.chunk_subtracter.subtract_chunk(
             traces,
-            self.b.sub_channel_index,
-            self.subtraction_denoising_pipeline,
-            sub_dedup_channel_index=self.b.sub_dedup_channel_index,
-            extract_index=extract_index,
-            extract_mask=self.extract_subtract_mask,
-            trough_offset_samples=self.trough_offset_samples,
-            spike_length_samples=self.spike_length_samples,
             left_margin=left_margin,
             right_margin=right_margin,
-            detection_threshold=self.p.detection_threshold,
-            relative_peak_radius=self.p.relative_peak_radius_samples,
-            peak_sign=self.p.peak_sign,
-            peak_channel_index=self.b.peak_channel_index,
-            dedup_channel_index=self.b.dedup_channel_index,
-            dedup_temporal_radius=self.p.temporal_dedup_radius_samples,
-            remove_exact_duplicates=self.p.remove_exact_duplicates,
-            subtract_global_dedup=self.p.subtract_global_dedup,
-            pos_dedup_temporal_radius=self.p.positive_temporal_dedup_radius_samples,
-            residnorm_decrease_threshold=self.threshold,
-            trough_priority=self.p.trough_priority,
-            save_iteration=self.save_iteration,
-            save_residnorm_decrease=self.save_residnorm_decrease,
-            max_iter=self.p.max_iter,
-            subtract_rel_inds=self.b.subtract_index_rel_inds,
-            realign_to_denoiser=self.p.realign_to_denoiser,
-            denoiser_realignment_shift=self.p.denoiser_realignment_shift,
-            compute_collidedness=self.save_collidedness,
-            local_whiteners=self.b.local_whiteners,
-            whitening_kernel=self.b.whitening_kernel,
             return_denoised_waveforms=return_denoised,
         )
 
