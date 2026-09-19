@@ -83,6 +83,8 @@ class Decollider(BaseMultichannelDenoiser):
         l1_alpha=0,
         output_l1_alpha=0.0,
         cycle_loss_alpha=1.0,
+        cycle_null_alpha=0.0,
+        cycle_kernel_alpha=1.0,
         separate_cycle_net=False,
         detach_cycle_loss=False,
         val_noise_random_seed=0,
@@ -93,7 +95,14 @@ class Decollider(BaseMultichannelDenoiser):
         conv_fullheight_depth=1,
         conv_fullheight_channel_mix=False,
         whiten_loss=False,
-        whiten_loss_terms=("eyz", "emz", "e_exz_y", "cycle"),
+        whiten_loss_terms=(
+            "eyz",
+            "emz",
+            "e_exz_y",
+            "cycle",
+            "cycle_null",
+            "cycle_kernel",
+        ),
         whiten_loss_temporal=True,
         whitener=None,
     ):
@@ -156,6 +165,8 @@ class Decollider(BaseMultichannelDenoiser):
         self.l4_alpha = l4_alpha
         self.output_l1_alpha = output_l1_alpha
         self.cycle_loss_alpha = cycle_loss_alpha
+        self.cycle_null_alpha = cycle_null_alpha
+        self.cycle_kernel_alpha = cycle_kernel_alpha
         self.separate_cycle_net = separate_cycle_net
         self.detach_cycle_loss = detach_cycle_loss
         self.clip_value = clip_value
@@ -382,7 +393,8 @@ class Decollider(BaseMultichannelDenoiser):
 
         # predictions given z
         # TODO: variance given z and put it in the loss
-        exz = eyz = emz = e_exz_y = cycle_output = None
+        exz = eyz = emz = e_exz_y = cycle_output = cycle_null_output = None
+        cycle_kernel_output = None
         net_input = z, mask.unsqueeze(1)
         if self.exz_estimator == "n2n":
             eyz = self.eyz(net_input)
@@ -410,12 +422,23 @@ class Decollider(BaseMultichannelDenoiser):
             cycle_input = cycle_targ + ell
             cycle_output = self.den_net((cycle_input, mask.unsqueeze(1)))
 
+        if self.cycle_null_alpha:
+            assert ell is not None
+            cycle_null_output = self.den_net((ell, mask.unsqueeze(1)))
+
+        if self.cycle_kernel_alpha:
+            assert e_exz_y is not None
+            kernel_base = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
+            cycle_kernel_output = self.den_net((y - kernel_base, mask.unsqueeze(1)))
+
         return dict(
             exz=exz,
             eyz=eyz,
             emz=emz,
             e_exz_y=e_exz_y,
             cycle_output=cycle_output,
+            cycle_null_output=cycle_null_output,
+            cycle_kernel_output=cycle_kernel_output,
         )
 
     def loss(
@@ -476,6 +499,24 @@ class Decollider(BaseMultichannelDenoiser):
                 )
             if output_l1_alpha:
                 loss_dict["e_exz_y_ol1"] = output_l1_alpha * am_mask.abs().mean()
+        cycle_kernel_output = net_outputs.get("cycle_kernel_output")
+        if cycle_kernel_output is not None:
+            loss_dict["cycle_kernel"] = self.cycle_kernel_alpha * self.masked_mse(
+                cycle_kernel_output,
+                torch.zeros_like(cycle_kernel_output),
+                mask,
+                "cycle_kernel",
+                channels,
+            )
+        cycle_null_output = net_outputs.get("cycle_null_output")
+        if cycle_null_output is not None:
+            loss_dict["cycle_null"] = self.cycle_null_alpha * self.masked_mse(
+                cycle_null_output,
+                torch.zeros_like(cycle_null_output),
+                mask,
+                "cycle_null",
+                channels,
+            )
         if cycle_output is not None:
             coef = 1 if self.separate_cycle_net else self.cycle_loss_alpha
             cycle_targ = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
@@ -530,6 +571,7 @@ class Decollider(BaseMultichannelDenoiser):
             val_indices = np.setdiff1d(np.arange(num_samples), train_indices)
 
         can_load_h5 = _check_has_dataset(hdf5_filename, dataset_name)
+        needs_cycle_noise = bool(self.cycle_loss_alpha or self.cycle_null_alpha)
 
         spike_length_samples = waveforms.shape[1]
 
@@ -565,7 +607,7 @@ class Decollider(BaseMultichannelDenoiser):
                 n_workers=n_data_workers,
                 pin_memory=pin_memory,
             )
-        if self.cycle_loss_alpha and can_load_h5:
+        if needs_cycle_noise and can_load_h5:
             logger.dartsortdebug(
                 f"Load Decollider cycle noise data from {hdf5_filename}."
             )
@@ -581,7 +623,7 @@ class Decollider(BaseMultichannelDenoiser):
                 n_workers=n_data_workers,
                 pin_memory=pin_memory,
             )
-        elif self.cycle_loss_alpha:
+        elif needs_cycle_noise:
             logger.dartsortdebug("Load Decollider cycle noise data from recording.")
             train_cycle_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
                 recording,
@@ -634,7 +676,7 @@ class Decollider(BaseMultichannelDenoiser):
                 spike_length_samples=spike_length_samples,
                 rg=rg,
             )
-            if self.cycle_loss_alpha:
+            if needs_cycle_noise:
                 cycle_val_noise = get_noise(
                     recording,
                     val_channels.numpy(force=True),

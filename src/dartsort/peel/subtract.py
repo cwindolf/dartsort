@@ -368,7 +368,7 @@ class SubtractionPeeler(BasePeeler):
         if return_denoised:
             assert subtraction_result.denoised_waveforms is not None
             peel_result["denoised_waveforms"] = subtraction_result.denoised_waveforms
-        peel_result.update(subtraction_result.features)
+        peel_result.update(subtraction_result.features)  # ty: ignore[invalid-argument-type]
         if return_residual:
             peel_result["residual"] = subtraction_result.residual
 
