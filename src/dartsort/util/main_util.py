@@ -3,7 +3,7 @@ import shutil
 from collections.abc import Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import numpy as np
 from spikeinterface.core import BaseRecording, get_global_job_kwargs
@@ -171,7 +171,10 @@ def ds_all_to_workdir(
                 "set_global_job_kwargs() for better control of this step."
             )
             job_kw = {}
-        recording = recording.save_to_folder(str(rec_dir), **job_kw)
+        recording = cast(
+            BaseRecording,
+            recording.save(format="binary", folder=rec_dir, **job_kw),
+        )
 
     if not internal_cfg.work_in_tmpdir:
         return recording, None
