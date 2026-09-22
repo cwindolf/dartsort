@@ -60,6 +60,7 @@ transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}
 # serialization
 if hasattr(torch.serialization, "add_safe_globals"):
     from ..util.internal_config import WaveformConfig
+    from .matched_filter_net import ScoreNet, ScoreNetParams
 
     others = [
         set,
@@ -69,5 +70,7 @@ if hasattr(torch.serialization, "add_safe_globals"):
         WaveformPipeline,
         SingleChannelDenoiser,
         WaveformConfig,
+        ScoreNet,
+        ScoreNetParams,
     ]
     torch.serialization.add_safe_globals(all_transformers + others)  # type: ignore  # ty: ignore[x]
