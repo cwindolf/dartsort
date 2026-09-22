@@ -159,7 +159,11 @@ class WaveformPipeline(torch.nn.Module):
                     pretrained_path=pretrained_path,
                     channel_index=channel_index,
                     geom=geom,
-                    **kwargs,
+                    **{
+                        "waveform_cfg": waveform_cfg,
+                        "sampling_frequency": sampling_frequency,
+                        **kwargs,
+                    },  # ty: ignore[invalid-argument-type]
                 )
             else:
                 transformer = transformer_cls(
@@ -673,17 +677,15 @@ def _add_tpca_and_nn(fc, wc, fs):
         return more
 
     if fc.do_nn_denoise:
-        more.append(
-            (
-                fc.nn_denoiser_class_name,
-                {
-                    "pretrained_path": fc.nn_denoiser_pretrained_path,
-                    "n_epochs": fc.nn_denoiser_train_epochs,
-                    "epoch_size": fc.nn_denoiser_epoch_size,
-                    **(fc.nn_denoiser_extra_kwargs or {}),
-                },
-            )
-        )
+        nn_kwargs = {
+            "pretrained_path": fc.nn_denoiser_pretrained_path,
+            "n_epochs": fc.nn_denoiser_train_epochs,
+            "epoch_size": fc.nn_denoiser_epoch_size,
+        }
+        if fc.nn_denoiser_class_name == "Decollider":
+            nn_kwargs["score_radius_um"] = fc.score_filter_radius_um or None
+        nn_kwargs.update(fc.nn_denoiser_extra_kwargs or {})
+        more.append((fc.nn_denoiser_class_name, nn_kwargs))
     if fc.do_tpca_denoise:
         more.append(
             (
