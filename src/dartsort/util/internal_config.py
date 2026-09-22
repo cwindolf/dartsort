@@ -1007,7 +1007,7 @@ class DARTsortInternalConfig:
     dredge_only: bool = False
     fit_matching_models_only: bool = False
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
-    preprocessing: PreprocessingStrategy = "none"
+    preprocessing: PreprocessingStrategy = "ibllikecmr"
     already_preprocessed: Literal["yes", "no", "assume_yes_if_float"] = (
         "assume_yes_if_float"
     )
