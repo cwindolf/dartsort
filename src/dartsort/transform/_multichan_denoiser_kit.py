@@ -578,7 +578,6 @@ class AsyncBatchDataset(RefreshableDataset):
         self._cur_data_ix = None
         self._cur_chunk = None
         self._cur_chunk_ix = None
-        self._pin_buf = None
         self.bye = False
 
     def __len__(self):
@@ -631,11 +630,8 @@ class AsyncBatchDataset(RefreshableDataset):
         # need to batch up the chunks...
         if self._cur_chunk is None:
             self._cur_chunk = self._queue.get()
-            if self.pin_memory and self._pin_buf is None:
-                self._pin_buf = self._cur_chunk = self._cur_chunk.pin_memory()
-            elif self.pin_memory:
-                assert isinstance(self._pin_buf, torch.Tensor)
-                self._cur_chunk = self._pin_buf.copy_(self._cur_chunk)
+            if self.pin_memory:
+                self._cur_chunk = self._cur_chunk.pin_memory()
             self._cur_chunk_ix = 0
         assert self._cur_chunk_ix is not None
 
