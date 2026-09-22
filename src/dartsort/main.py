@@ -252,9 +252,6 @@ def _dartsort_impl(
         ds_save_motion(motion, output_dir, work_dir, overwrite)
         ret["motion"] = motion
 
-    is_subsampling = cfg.subsampling_spikes_per_channel is not None
-    is_subsampling = is_subsampling and cfg.subsampling_presence != 1.0
-
     if next_step == 0:
         # first step: initial detection and motion estimation
         is_final = cfg.detect_only or cfg.dredge_only or not cfg.matching_iterations
@@ -353,7 +350,7 @@ def _dartsort_impl(
             step_ref_cfgs,
             step_feat_cfg,
             samp_cfg,
-        ) = _matching_step_cfgs(is_final, is_subsampling, cfg)
+        ) = _matching_step_cfgs(is_final, cfg)
         fit_only = cfg.fit_matching_models_only and is_final
 
         # avoid keeping all the previous step's features in memory

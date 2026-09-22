@@ -965,14 +965,6 @@ default_post_refinement_cfg = RefinementConfig(
     refinement_strategy="filter", cc_flag_excess_rate=0.3
 )
 default_post_refinement_cfgs = (default_post_refinement_cfg,)
-default_matching_streaming_classifier_cfg = FeaturizationConfig(
-    compute_input_tpca_projs_regardless=True,
-    save_input_tpca_projs=False,
-    use_gmm_classifier=True,
-    pre_gmm_clustering_cfg=None,
-    gmm_clustering_features_cfg=default_clustering_features_cfg,
-    gmm_refinement_cfg=default_refinement_cfg,
-)
 default_clean_cfg = RefinementConfig(
     refinement_strategy="clean", template_merge_cfg=None
 )
@@ -1045,6 +1037,48 @@ class DARTsortInternalConfig:
         if self.computation_cfg.tmpdir_parent is not None:
             return ensure_path(self.tmpdir_parent, strict=True)
         return None
+
+    @property
+    def is_subsampling(self) -> bool:
+        return (
+            self.subsampling_spikes_per_channel is not None
+            and self.subsampling_presence != 1.0
+        )
+
+    def use_gmm_classifier(self, is_final: bool) -> bool:
+        return (
+            is_final
+            and self.is_subsampling
+            and self.refinement_cfg.refinement_strategy == "tmm"
+        )
+
+    @property
+    def save_detailed_features(self) -> bool:
+        return self.recluster_after_matching or self.always_save_detailed_features
+
+    @property
+    def matching_classifier_featurization_cfg(self) -> FeaturizationConfig:
+        return replace(
+            self.featurization_cfg,
+            save_input_tpca_projs=self.save_detailed_features,
+            compute_input_tpca_projs_regardless=True,
+            use_gmm_classifier=True,
+            pre_gmm_clustering_cfg=(
+                self.clustering_cfg if self.recluster_after_matching else None
+            ),
+            gmm_clustering_features_cfg=self.clustering_features_cfg,
+            save_amplitude_vectors=self.always_save_detailed_features,
+            pre_gmm_refinement_cfgs=[self.pre_refinement_cfg],
+            gmm_refinement_cfg=self.refinement_cfg,
+        )
+
+    @property
+    def matching_classifier_clustering_features_cfg(self) -> ClusteringFeaturesConfig:
+        if self.save_detailed_features:
+            return self.clustering_features_cfg
+        return replace(
+            self.clustering_features_cfg, n_main_channel_pcs=0, n_multi_channel_pcs=0
+        )
 
 
 def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
