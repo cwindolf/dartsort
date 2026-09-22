@@ -153,7 +153,7 @@ def test_denoiser_alignment(align_sim, align_templates):
             p=dartsort.SubtractionConfig(
                 realign_to_denoiser=rtd,
                 denoiser_realignment_shift=3,
-                detection_threshold=15.0,
+                voltage_threshold=15.0,
                 relative_peak_radius_samples=1,
                 temporal_dedup_radius_samples=3,
                 positive_temporal_dedup_radius_samples=0,

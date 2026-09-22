@@ -7,6 +7,13 @@ from dartsort.util.logging_util import get_logger
 logger = get_logger(__name__)
 
 
+cheap_decollider_kwargs = dict(
+    nn_denoiser_train_epochs=25,
+    nn_denoiser_epoch_size=256,
+    nn_denoiser_extra_kwargs=dict(hidden_dims=[512] * 2, batch_size=32),
+)
+
+
 common_params = dict(
     probe_kwargs=dict(
         num_columns=2, num_contact_per_column=12, y_shift_per_column="flat"
@@ -52,6 +59,60 @@ def mini_simulations(pytestconfig, tmp_path_factory):
         sims[sim_name] = simkit.generate_simulation(p / "sim", p / "noise", **kw)
 
     return sims
+
+
+@pytest.fixture(scope="session")
+def score_net_pt(pytestconfig, tmp_path_factory, mini_simulations):
+    from dartsort.peel.subtract import SubtractionPeeler
+    from dartsort.transform.decollider import Decollider
+    from dartsort.util.internal_config import (
+        ComputationConfig,
+        FeaturizationConfig,
+        FitSamplingConfig,
+        SubtractionConfig,
+        WaveformConfig,
+    )
+
+    cache_key = "dartsort/score_net_pt"
+    if (p := pytestconfig.cache.get(cache_key, None)) is not None:
+        p = ensure_path(p)
+        if p.exists():
+            logger.info("score net cache hit")
+            return p
+
+    recording = mini_simulations["driftn_szmini"]["recording"]
+    subtraction_cfg = SubtractionConfig(
+        subtraction_denoising_cfg=FeaturizationConfig(
+            denoise_only=True,
+            do_nn_denoise=True,
+            nn_denoiser_class_name="Decollider",
+            nn_denoiser_pretrained_path=None,
+            score_filter_radius_um=35.0,
+            **cheap_decollider_kwargs,  # ty: ignore[invalid-argument-type]
+        ),
+        detection_proposal="score_net",
+        score_proposal_threshold=4.0,
+        first_denoiser_thinning=0.0,
+    )
+    peeler = SubtractionPeeler.from_config(
+        recording=recording,
+        waveform_cfg=WaveformConfig(),
+        subtraction_cfg=subtraction_cfg,
+        featurization_cfg=FeaturizationConfig(nn_localization=False),
+        sampling_cfg=FitSamplingConfig(n_residual_snips=512),
+    )
+    folder = ensure_path(tmp_path_factory.mktemp("score_net"))
+    peeler.load_or_fit_and_save_models(
+        folder, computation_cfg=ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=1)
+    )
+    denoiser = next(
+        t for t in peeler.subtraction_denoising_pipeline if isinstance(t, Decollider)
+    )
+    assert denoiser.score_net is not None
+    path = folder / "score_net_decollider.pt"
+    denoiser.save_to_pt(path)
+    pytestconfig.cache.set(cache_key, str(path))
+    return path
 
 
 @pytest.fixture(scope="session")

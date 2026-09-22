@@ -523,6 +523,7 @@ def split_featurization_cfg_for_denoised_features(
         save_output_tpca_projs=False,
         save_collidedness=False,
         learn_cleaned_tpca_basis=False,
+        vq_proposal_filters=0,
         use_gmm_classifier=False,
         fit_disabled_whitener=False,
         whiten_cfg=None,
@@ -558,6 +559,11 @@ def featurization_config_to_class_names_and_kwargs(
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fc.input_waveforms_name})
         )
+    input_tpca_slice = None
+    if fc.input_tpca_waveform_cfg is not None:
+        input_tpca_slice = fc.input_tpca_waveform_cfg.relative_slice(
+            waveform_cfg, sampling_frequency
+        )
     if do_feats and fc.learn_cleaned_tpca_basis:
         class_names_and_kwargs.append(
             (
@@ -568,6 +574,20 @@ def featurization_config_to_class_names_and_kwargs(
                     "centered": False,
                     "max_waveforms": fc.tpca_max_waveforms,
                     "fit_radius": fc.tpca_fit_radius,
+                    "temporal_slice": input_tpca_slice,
+                },
+            )
+        )
+    if fc.vq_proposal_filters:
+        class_names_and_kwargs.append(
+            (
+                "VQMatchedFilter",
+                {
+                    "n_filters": fc.vq_proposal_filters,
+                    "name_prefix": fc.input_waveforms_name,
+                    "max_waveforms": fc.tpca_max_waveforms,
+                    "fit_radius": fc.tpca_fit_radius,
+                    "temporal_slice": input_tpca_slice,
                 },
             )
         )

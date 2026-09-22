@@ -677,12 +677,14 @@ class FeaturizationConfig:
     nn_denoiser_train_epochs: int = 100
     nn_denoiser_epoch_size: int = 200 * 256
     nn_denoiser_extra_kwargs: dict | None = argfield(None, cli=False)
+    score_filter_radius_um: float | None = None
 
     # optionally restrict how many channels TPCA are fit on
     tpca_fit_radius: float = 75.0
     tpca_rank: int = 8
     tpca_centered: bool = False
     learn_cleaned_tpca_basis: bool = False
+    vq_proposal_filters: int = 0
     input_tpca_waveform_cfg: WaveformConfig | None = WaveformConfig(
         ms_before=0.75, ms_after=1.25
     )
@@ -718,8 +720,15 @@ class SubtractionConfig:
     chunk_length_samples: int = 30_000
     fit_only: bool = False
 
+    detection_proposal: Literal["voltage", "tpca", "vq", "score_net"] = "voltage"
+    proposal_filters: int = 1
+
+    voltage_threshold: float = 3.0
+    score_proposal_threshold: float = 5.0
+    subtraction_threshold: float = 9.0
+    threshold_before_whitening: float = 10.0
+
     # subtraction
-    detection_threshold: float = 3.0
     peak_sign: PeakSign = "both"
     realign_to_denoiser: bool = True
     denoiser_realignment_shift: int = 5
@@ -731,11 +740,9 @@ class SubtractionConfig:
     subtract_global_dedup: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius_um: float = 200.0
-    residnorm_decrease_threshold: float = 9.0
     trough_priority: float | None = 2.0
     max_iter: int = 200
     whiten: bool = True
-    threshold_before_whitening: float = 10.0
     denoise_before_localization: bool = False
     denoise_before_amplitudes: bool = False
     whiten_cfg: WhiteningConfig | None = WhiteningConfig(strategy="prewhiten_postapply")
@@ -1148,14 +1155,18 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             nn_denoiser_class_name=cfg.nn_denoiser_class_name,
             nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
             nn_denoiser_extra_kwargs=cfg.nn_denoiser_extra_kwargs,
+            score_filter_radius_um=cfg.score_filter_radius_um or None,
         )
         initial_detection_cfg = SubtractionConfig(
             peak_sign=cfg.peak_sign,
-            detection_threshold=cfg.voltage_threshold,
+            detection_proposal=cfg.detection_proposal,
+            proposal_filters=cfg.proposal_filters,
+            voltage_threshold=cfg.voltage_threshold,
+            score_proposal_threshold=cfg.score_proposal_threshold,
+            subtraction_threshold=cfg.initial_threshold,
             spatial_dedup_radius_um=cfg.deduplication_radius_um,
             subtract_radius_um=cfg.subtraction_radius_um,
             realign_to_denoiser=cfg.realign_to_denoiser,
-            residnorm_decrease_threshold=cfg.initial_threshold,
             threshold_before_whitening=cfg.threshold_before_whitening,
             subtract_global_dedup=cfg.subtract_global_dedup,
             chunk_length_samples=cfg.chunk_length_samples,

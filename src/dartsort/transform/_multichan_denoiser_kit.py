@@ -145,7 +145,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.wf_dim = dim0 * self.b.model_channel_index.shape[1]
         self.output_dim = self.wf_dim
 
-    def get_optimizer(self):
+    def get_optimizer(self, params=None, lr=None):
         opt = self.optimizer
         okw = self.optimizer_kwargs
         if isinstance(opt, str):
@@ -158,8 +158,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         if "fused" not in okw and self.fused_opt:
             okw["fused"] = True
         return opt(
-            self.parameters(),
-            lr=self.learning_rate,
+            self.parameters() if params is None else params,
+            lr=self.learning_rate if lr is None else lr,
             weight_decay=self.weight_decay,
             **okw,
         )
@@ -177,8 +177,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         sched = lr_schedule(optimizer, **sched_kw)
 
         if self.warmup_epochs:
-            warm_sched = torch.optim.lr_scheduler.ConstantLR(
-                optimizer, self.warmup_lr, total_iters=self.warmup_epochs
+            warmup_factor = self.warmup_lr / self.learning_rate
+            warm_sched = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lambda _: warmup_factor
             )
             sched = torch.optim.lr_scheduler.SequentialLR(
                 optimizer, [warm_sched, sched], milestones=[self.warmup_epochs]

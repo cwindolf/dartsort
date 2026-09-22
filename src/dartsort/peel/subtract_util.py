@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Protocol, Self
+from typing import TYPE_CHECKING, Literal, Protocol, Self
 
 import torch
 import torch.nn.functional as F
@@ -15,24 +15,15 @@ from ..util.internal_config import PeakSign, SubtractionConfig
 from ..util.py_util import databag, panic
 from ..util.spiketorch import grab_spikes, subtract_spikes_
 from ..util.torch_util import BModule
-from ..util.waveform_util import get_relative_subset
+from ..util.waveform_util import compose_channel_index, get_relative_subset
 from .peel_lib import check_residual_decrease
 
 if TYPE_CHECKING:
+    from ..transform.matched_filter_net import ScoreNet
     from ..transform.pipeline import WaveformPipeline
 
 
 # -- messenger classes
-
-
-@databag(frozen=True)
-class Dilation:
-    """Proposers need different lengths of context to update after residual changes"""
-
-    time: int
-
-    def __or__(self, other: Self) -> Self:
-        return self.__class__(time=max(self.time, other.time))
 
 
 @databag
@@ -89,18 +80,40 @@ class ChunkSubtractionResult:
 class PeakProposer(Protocol):
     """Detects and deduplicates the peaks to try subtracting this iteration."""
 
-    @property
-    def dilation(self) -> Dilation: ...
-
     def setup(self, residual: Tensor) -> None: ...
 
-    def update(self, residual: Tensor, times_samples: Tensor) -> None: ...
+    def update(self, residual: Tensor, peaks: AcceptedPeaks) -> None: ...
 
     def cleanup(self) -> None: ...
 
     def propose_peaks(
         self, residual: Tensor, detection_mask: Tensor | None
     ) -> PeakProposals: ...
+
+
+def patch_peak_map(
+    peak_map: Tensor,
+    field: Tensor,
+    patch_starts: Tensor,
+    patch_length: int,
+    *,
+    relative_peak_radius: int,
+    peak_sign: PeakSign,
+    peak_channel_index: Tensor | None,
+) -> None:
+    dt = relative_peak_radius
+    width = patch_length + 4 * dt
+    starts = (patch_starts - 2 * dt).clamp_(0, field.shape[0] - width)
+    update_peak_map(
+        peak_map,
+        field,
+        starts,
+        width,
+        dt,
+        peak_sign=peak_sign,
+        relative_peak_radius=dt,
+        peak_channel_index=peak_channel_index,
+    )
 
 
 @databag
@@ -120,8 +133,12 @@ class GlobalPeakProposer:
     peak_map: Tensor | None = None
 
     @property
-    def dilation(self) -> Dilation:
-        return Dilation(time=self.relative_peak_radius)
+    def field_patch_offset(self) -> int:
+        return self.trough_offset_samples
+
+    @property
+    def field_patch_length(self) -> int:
+        return self.spike_length_samples
 
     def setup(self, residual: Tensor) -> None:
         self.peak_map = self._full_peak_map(residual)
@@ -129,27 +146,18 @@ class GlobalPeakProposer:
     def cleanup(self) -> None:
         self.peak_map = None
 
-    def update(self, residual: Tensor, times_samples: Tensor) -> None:
+    def update(self, residual: Tensor, peaks: AcceptedPeaks) -> None:
         assert self.peak_map is not None
-        if not times_samples.numel():
+        if not len(peaks):
             return
 
-        # after subtraction, residual is "dirty" and the peak map is invalidated
-        # invalidation region is a spike length plus one "dilation". but an extra
-        # dilation of context is needed to fill in the first one!
-        dt = self.dilation.time
-        width = self.spike_length_samples + 4 * dt
-        lead = self.trough_offset_samples + 2 * dt
-        starts = (times_samples - lead).clamp_(0, residual.shape[0] - width)
-
-        update_peak_map(
+        patch_peak_map(
             self.peak_map,
             residual,
-            starts,
-            width,
-            dt,
-            peak_sign=self.peak_sign,
+            peaks.times_samples - self.field_patch_offset,
+            self.field_patch_length,
             relative_peak_radius=self.relative_peak_radius,
+            peak_sign=self.peak_sign,
             peak_channel_index=self.peak_channel_index,
         )
 
@@ -201,17 +209,13 @@ class LocalPeakProposer:
     trough_priority: float | None
     remove_exact_duplicates: bool
 
-    @property
-    def dilation(self) -> Dilation:
-        return Dilation(time=self.relative_peak_radius)
-
     def setup(self, residual: Tensor) -> None:
         pass
 
     def cleanup(self) -> None:
         pass
 
-    def update(self, residual: Tensor, times_samples: Tensor) -> None:
+    def update(self, residual: Tensor, peaks: AcceptedPeaks) -> None:
         # possible TODO: in place patching like global
         # local isn't really used, and it's more complicated to implement
         # patching for local, so I'm not doing this yet
@@ -240,17 +244,417 @@ class LocalPeakProposer:
         )
 
 
+@databag
+class MatchedFilterProposer:
+    score_net: "ScoreNet"
+    score_channel_index: Tensor
+    score_mask: Tensor
+    threshold: float
+    relative_peak_radius: int
+    detect_dedup_radius: int
+    peak_channel_index: Tensor | None
+    remove_exact_duplicates: bool
+    trough_offset_samples: int
+    spike_length_samples: int
+    field_patch_channel_index: Tensor
+    time_chunk: int = 512
+    audit: bool = False
+    field: Tensor | None = None
+    peak_map: Tensor | None = None
+
+    @property
+    def field_patch_offset(self) -> int:
+        net = self.score_net
+        nbefore = net.receptive_field - 1 - net.trough_offset
+        return self.trough_offset_samples + nbefore
+
+    @property
+    def field_patch_length(self) -> int:
+        net = self.score_net
+        nbefore = net.receptive_field - 1 - net.trough_offset
+        nafter = net.trough_offset
+        return self.spike_length_samples + nbefore + nafter
+
+    # -- state
+
+    def setup(self, residual: Tensor) -> None:
+        net = self.score_net
+        if net.baked_spatial is None:
+            if net.local_whiteners is None:
+                panic()
+            net.bake()
+        self.field = self._full_field(residual)
+        self.peak_map = self._full_peak_map()
+
+    def cleanup(self) -> None:
+        self.field = None
+        self.peak_map = None
+
+    def update(self, residual: Tensor, peaks: AcceptedPeaks) -> None:
+        assert self.field is not None and self.peak_map is not None
+        if not len(peaks):
+            return
+
+        patch_starts = self._patch_field(residual, peaks)
+        patch_peak_map(
+            self.peak_map,
+            self.field,
+            patch_starts,
+            self.field_patch_length,
+            relative_peak_radius=self.relative_peak_radius,
+            peak_sign="pos",
+            peak_channel_index=self.peak_channel_index,
+        )
+
+        if self.audit:
+            self._check(residual)
+
+    def propose_peaks(
+        self, residual: Tensor, detection_mask: Tensor | None
+    ) -> PeakProposals:
+        assert self.field is not None and self.peak_map is not None
+        times_samples, channels = deduplicate_globally(
+            self.field,
+            peak_sign_to_pos(self.field, "pos"),
+            self.peak_map,
+            self.threshold,
+            peak_sign="pos",
+            dedup_temporal_radius=self.detect_dedup_radius,
+            trough_priority=None,
+            remove_exact_duplicates=self.remove_exact_duplicates,
+            detection_mask=None if detection_mask is None else detection_mask[:, :-1],
+        )
+        return PeakProposals(
+            times_samples=times_samples,
+            channels=channels,
+            voltages=residual[times_samples, channels],
+        )
+
+    def _patch_field(self, residual: Tensor, peaks: AcceptedPeaks) -> Tensor:
+        net = self.score_net
+        assert self.field is not None
+        rf = net.receptive_field
+        n_samples, n_pad_channels = self.field.shape
+        n_channels = n_pad_channels - 1
+        n = len(peaks)
+        device = peaks.times_samples.device
+
+        out_width = self.field_patch_length
+        in_width = out_width + rf - 1
+
+        trace_starts = (
+            peaks.times_samples - self.field_patch_offset - net.trough_offset
+        ).clamp_(0, n_samples - in_width)
+        time_ix = trace_starts[:, None] + torch.arange(in_width, device=device)
+        chan_ix = self.field_patch_channel_index[peaks.channels]
+        chan_width = chan_ix.shape[1]
+        chan_read = chan_ix.clamp(max=n_channels - 1)
+
+        traces = residual[time_ix.reshape(-1), :n_channels]
+        conv = F.conv1d(traces.T[:, None], net.effective_temporal()[:, None])
+        conv = F.pad(conv, (0, rf - 1)).view(n_channels, net.n_temporal, n, in_width)
+        conv = conv[..., :out_width]
+
+        neighborhoods = self.score_channel_index[chan_read]
+        valid = neighborhoods < n_channels
+        slab_ix = torch.arange(n, device=device)[:, None, None]
+        features = conv[neighborhoods.clamp(max=n_channels - 1), :, slab_ix]
+        features = features.mul_(valid[..., None, None])
+        scores = net.score_from_features(
+            features.reshape(n * chan_width, -1, net.n_temporal, out_width),
+            chan_read.reshape(-1),
+            self.score_mask[chan_read].reshape(n * chan_width, -1),
+        )
+
+        trough_ix = (
+            trace_starts[:, None]
+            + net.trough_offset
+            + torch.arange(out_width, device=device)
+        )
+        self.field[trough_ix[:, :, None], chan_ix[:, None, :]] = scores.view(
+            n, chan_width, out_width
+        ).permute(0, 2, 1)
+        return trace_starts + net.trough_offset
+
+    # -- for audit
+
+    def _full_field(self, residual: Tensor) -> Tensor:
+        net = self.score_net
+        field = residual.new_full(residual.shape, -torch.inf)
+        dense = net.forward_dense(
+            residual[:, :-1],
+            self.score_channel_index,
+            self.score_mask,
+            time_chunk=self.time_chunk,
+        )
+        field[net.trough_offset : net.trough_offset + dense.shape[1], :-1] = dense.T
+        return field
+
+    def _full_peak_map(self) -> Tensor:
+        assert self.field is not None
+        return is_extreme_transpose_no_pad(
+            peak_sign_to_pos(self.field, "pos"),
+            dt=self.relative_peak_radius,
+            neighbors=self.peak_channel_index,
+        )
+
+    def _check(self, residual: Tensor) -> None:
+        assert self.field is not None and self.peak_map is not None
+        reference = self._full_field(residual)
+        off = reference.isfinite().logical_and_(
+            torch.isclose(reference, self.field, rtol=1e-4, atol=1e-5).logical_not_()
+        )
+        bad = int(off.sum())
+        if bad:
+            worst = (reference - self.field).abs().nan_to_num().max()
+            panic(f"patched score field differs at {bad} sites, worst {worst:.3e}")
+        bad = int((self._full_peak_map() != self.peak_map).sum())
+        if bad:
+            panic(f"patched score peak map differs from full recompute at {bad} sites")
+
+
+@databag
+class LinearMatchedFilterProposer:
+    filters: Tensor
+    filter_trough_offset: int
+    threshold: float
+    relative_peak_radius: int
+    detect_dedup_radius: int
+    peak_channel_index: Tensor | None
+    remove_exact_duplicates: bool
+    trough_offset_samples: int
+    spike_length_samples: int
+    field_patch_channel_index: Tensor
+    reduction: Literal["sum", "max"] = "sum"
+    time_chunk: int = 4096
+    audit: bool = False
+    field: Tensor | None = None
+    peak_map: Tensor | None = None
+
+    def __post_init__(self) -> None:
+        self.filters = self.filters / self.filters.norm(dim=1, keepdim=True)
+
+    @property
+    def receptive_field(self) -> int:
+        return self.filters.shape[1]
+
+    @property
+    def trough_offset(self) -> int:
+        """Output time t aligned to input trough at index t + trough_offset"""
+        return self.filter_trough_offset
+
+    @property
+    def field_patch_offset(self) -> int:
+        nbefore = self.receptive_field - 1 - self.trough_offset
+        return self.trough_offset_samples + nbefore
+
+    @property
+    def field_patch_length(self) -> int:
+        nbefore = self.receptive_field - 1 - self.trough_offset
+        nafter = self.trough_offset
+        return self.spike_length_samples + nbefore + nafter
+
+    def setup(self, residual: Tensor) -> None:
+        self.field = self._full_field(residual)
+        self.peak_map = self._full_peak_map()
+
+    def cleanup(self) -> None:
+        self.field = None
+        self.peak_map = None
+
+    def update(self, residual: Tensor, peaks: AcceptedPeaks) -> None:
+        assert self.field is not None and self.peak_map is not None
+        if not len(peaks):
+            return
+
+        patch_starts = self._patch_field(residual, peaks)
+        patch_peak_map(
+            self.peak_map,
+            self.field,
+            patch_starts,
+            self.field_patch_length,
+            relative_peak_radius=self.relative_peak_radius,
+            peak_sign="pos",
+            peak_channel_index=self.peak_channel_index,
+        )
+
+        if self.audit:
+            self._check(residual)
+
+    def propose_peaks(
+        self, residual: Tensor, detection_mask: Tensor | None
+    ) -> PeakProposals:
+        assert self.field is not None and self.peak_map is not None
+        times_samples, channels = deduplicate_globally(
+            self.field,
+            peak_sign_to_pos(self.field, "pos"),
+            self.peak_map,
+            self.threshold,
+            peak_sign="pos",
+            dedup_temporal_radius=self.detect_dedup_radius,
+            trough_priority=None,
+            remove_exact_duplicates=self.remove_exact_duplicates,
+            detection_mask=None if detection_mask is None else detection_mask[:, :-1],
+        )
+        return PeakProposals(
+            times_samples=times_samples,
+            channels=channels,
+            voltages=residual[times_samples, channels],
+        )
+
+    def score_from_responses(self, responses: Tensor) -> Tensor:
+        scores = responses.square_()
+        if self.reduction == "sum":
+            return scores.sum(1)
+        elif self.reduction == "max":
+            return scores.amax(1)
+        else:
+            panic(self.reduction)
+
+    def dense(self, traces: Tensor) -> Tensor:
+        n_out = traces.shape[0] - self.receptive_field + 1
+        out = traces.new_empty((n_out, traces.shape[1]))
+        chunk = self.time_chunk or n_out
+        for i0 in range(0, n_out, chunk):
+            i1 = min(n_out, i0 + chunk)
+            block = traces[i0 : i1 + self.receptive_field - 1]
+            responses = F.conv1d(block.T[:, None], self.filters[:, None])
+            out[i0:i1] = self.score_from_responses(responses).T
+        return out
+
+    # -- the patch
+
+    def _patch_field(self, residual: Tensor, peaks: AcceptedPeaks) -> Tensor:
+        assert self.field is not None
+        n_samples, n_pad_channels = self.field.shape
+        n_channels = n_pad_channels - 1
+        n = len(peaks)
+        device = peaks.times_samples.device
+
+        out_width = self.field_patch_length
+        in_width = out_width + self.receptive_field - 1
+
+        trace_starts = (
+            peaks.times_samples - self.field_patch_offset - self.trough_offset
+        ).clamp_(0, n_samples - in_width)
+        time_ix = trace_starts[:, None] + torch.arange(in_width, device=device)
+        chan_ix = self.field_patch_channel_index[peaks.channels]
+        chan_width = chan_ix.shape[1]
+        chan_read = chan_ix.clamp(max=n_channels - 1)
+
+        traces = residual[time_ix[:, :, None], chan_read[:, None, :]]
+        traces = traces.permute(0, 2, 1).reshape(n * chan_width, 1, in_width)
+        responses = F.conv1d(traces, self.filters[:, None])
+        scores = self.score_from_responses(responses).view(n, chan_width, out_width)
+
+        trough_ix = (
+            trace_starts[:, None]
+            + self.trough_offset
+            + torch.arange(out_width, device=device)
+        )
+        self.field[trough_ix[:, :, None], chan_ix[:, None, :]] = scores.permute(0, 2, 1)
+        return trace_starts + self.trough_offset
+
+    # -- for audit
+
+    def _full_field(self, residual: Tensor) -> Tensor:
+        field = residual.new_full(residual.shape, -torch.inf)
+        dense = self.dense(residual[:, :-1])
+        field[self.trough_offset : self.trough_offset + dense.shape[0], :-1] = dense
+        return field
+
+    def _full_peak_map(self) -> Tensor:
+        assert self.field is not None
+        return is_extreme_transpose_no_pad(
+            peak_sign_to_pos(self.field, "pos"),
+            dt=self.relative_peak_radius,
+            neighbors=self.peak_channel_index,
+        )
+
+    def _check(self, residual: Tensor) -> None:
+        assert self.field is not None and self.peak_map is not None
+        reference = self._full_field(residual)
+        off = reference.isfinite().logical_and_(
+            torch.isclose(reference, self.field, rtol=1e-4, atol=1e-5).logical_not_()
+        )
+        bad = int(off.sum())
+        if bad:
+            worst = (reference - self.field).abs().nan_to_num().max()
+            panic(f"patched linear field differs at {bad} sites, worst {worst:.3e}")
+        bad = int((self._full_peak_map() != self.peak_map).sum())
+        if bad:
+            panic(f"patched linear peak map differs from full recompute at {bad} sites")
+
+
+def find_score_net(pipeline: "WaveformPipeline"):
+    for transformer in pipeline:
+        net = getattr(transformer, "score_net", None)
+        if net is not None:
+            return transformer, net
+    return None, None
+
+
 def make_peak_proposer(
     p: SubtractionConfig,
     spike_length_samples: int,
     trough_offset_samples: int,
     peak_channel_index: Tensor | None,
     sub_dedup_channel_index: Tensor,
+    channel_index: Tensor | None = None,
+    denoising_pipeline: "WaveformPipeline | None" = None,
+    proposal_filters: Tensor | None = None,
+    proposal_filter_trough_offset: int | None = None,
     audit: bool = False,
 ) -> PeakProposer:
+    if p.detection_proposal not in ("voltage", "tpca", "vq", "score_net"):
+        panic(f"unknown {p.detection_proposal=}")
+
+    if p.detection_proposal in ("tpca", "vq") and proposal_filters is not None:
+        assert channel_index is not None
+        assert proposal_filter_trough_offset is not None
+        return LinearMatchedFilterProposer(
+            filters=proposal_filters,
+            filter_trough_offset=proposal_filter_trough_offset,
+            threshold=p.score_proposal_threshold**2,
+            reduction="sum" if p.detection_proposal == "tpca" else "max",
+            relative_peak_radius=p.relative_peak_radius_samples,
+            detect_dedup_radius=spike_length_samples,
+            peak_channel_index=peak_channel_index,
+            remove_exact_duplicates=p.remove_exact_duplicates,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            field_patch_channel_index=channel_index,
+            audit=audit,
+        )
+
+    if p.detection_proposal == "score_net":
+        assert denoising_pipeline is not None and channel_index is not None
+        denoiser, score_net = find_score_net(denoising_pipeline)
+        if score_net is None:
+            panic(
+                "detection_proposal='score_net' but the denoising pipeline has no "
+                "score net. Set score_filter_radius_um so one gets trained."
+            )
+        score_channel_index = denoiser.b.score_channel_index
+        return MatchedFilterProposer(
+            score_net=score_net,
+            score_channel_index=score_channel_index,
+            score_mask=score_channel_index < denoiser.n_channels,
+            threshold=p.score_proposal_threshold,
+            relative_peak_radius=p.relative_peak_radius_samples,
+            detect_dedup_radius=spike_length_samples,
+            peak_channel_index=peak_channel_index,
+            remove_exact_duplicates=p.remove_exact_duplicates,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            field_patch_channel_index=compose_channel_index(
+                channel_index, score_channel_index
+            ),
+            audit=audit,
+        )
     if p.subtract_global_dedup:
         return GlobalPeakProposer(
-            threshold=p.detection_threshold,
+            threshold=p.voltage_threshold,
             peak_sign=p.peak_sign,
             relative_peak_radius=p.relative_peak_radius_samples,
             detect_dedup_radius=spike_length_samples,
@@ -262,7 +666,7 @@ def make_peak_proposer(
             audit=audit,
         )
     return LocalPeakProposer(
-        threshold=p.detection_threshold,
+        threshold=p.voltage_threshold,
         peak_sign=p.peak_sign,
         relative_peak_radius=p.relative_peak_radius_samples,
         detect_dedup_radius=spike_length_samples,
@@ -422,7 +826,7 @@ class ChunkSubtracter(BModule):
 
             self._subtract(peaks)
             assert self.residual is not None
-            self.proposer.update(self.residual, peaks.times_samples)
+            self.proposer.update(self.residual, peaks)
             iter_peaks.append(peaks)
 
         return iter_peaks

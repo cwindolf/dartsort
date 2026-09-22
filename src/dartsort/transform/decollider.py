@@ -13,7 +13,8 @@ from ..util.internal_config import WaveformConfig
 from ..util.logging_util import get_logger, progrange
 from ..util.multiprocessing_util import handle_negative_jobs
 from ..util.py_util import panic
-from ..util.spiketorch import reindex, spawn_torch_rg
+from ..util.spiketorch import get_relative_index, reindex, spawn_torch_rg
+from ..util.waveform_util import make_channel_index, regularize_channel_index
 from ._multichan_denoiser_kit import (
     AOTIndicesWeightedRandomBatchSampler,
     AsyncSameChannelHDF5NoiseDataset,
@@ -22,6 +23,7 @@ from ._multichan_denoiser_kit import (
     NoneDataset,
     get_noise,
 )
+from .matched_filter_net import ScoreNet, signed_sqrt
 
 logger = get_logger(__name__)
 
@@ -105,6 +107,19 @@ class Decollider(BaseMultichannelDenoiser):
         ),
         whiten_loss_temporal=True,
         whitener=None,
+        score_radius_um: float | None = None,
+        score_n_before=12,
+        score_n_after=19,
+        score_n_temporal=8,
+        score_n_moments=4,
+        score_spatial_mode="full",
+        score_hidden_dims=(32, 32),
+        score_half_square=False,
+        score_energy_powers=(),
+        score_loss_alpha=1.0,
+        score_target_clamp=30.0,
+        score_learning_rate=None,
+        score_start_epoch=10,
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
         assert inference_kind in ("raw", "exz", "exz_fromz", "amortized", "exy_fake")
@@ -174,8 +189,39 @@ class Decollider(BaseMultichannelDenoiser):
         self.whiten_loss = whiten_loss
         self.whiten_loss_terms = tuple(whiten_loss_terms)
         self.whiten_loss_temporal = whiten_loss_temporal
+        self.score_radius_um = score_radius_um
+        self.score_n_before = score_n_before
+        self.score_n_after = score_n_after
+        self.score_n_temporal = score_n_temporal
+        self.score_n_moments = score_n_moments
+        self.score_spatial_mode = score_spatial_mode
+        self.score_hidden_dims = tuple(score_hidden_dims)
+        self.score_half_square = score_half_square
+        self.score_energy_powers = tuple(score_energy_powers)
+        self.score_loss_alpha = score_loss_alpha
+        self.score_target_clamp = score_target_clamp
+        self.score_learning_rate = score_learning_rate
+        self.score_start_epoch = score_start_epoch
         # weak reference, only used in training
         self._whitener_holder = [whitener]
+
+        if self.score_radius_um:
+            assert self.score_radius_um is not None
+            score_channel_index = regularize_channel_index(
+                geom=self.geom,
+                channel_index=make_channel_index(self.b.geom, self.score_radius_um),
+                depth_only=pad_depth_only,
+            )
+            score_channel_index = torch.from_numpy(score_channel_index)
+            self.register_buffer("score_channel_index", score_channel_index)
+            self.register_buffer(
+                "score_relative_index",
+                get_relative_index(self.b.model_channel_index, score_channel_index),
+            )
+            valid = score_channel_index < self.n_channels
+            found = self.b.score_relative_index < self.b.model_channel_index.shape[1]
+            if not torch.equal(valid, found):
+                panic("score_channel_index not contained in model_channel_index")
         if self.svd_projection_rank:
             self.submodule_names = ["tpca"]
 
@@ -227,25 +273,68 @@ class Decollider(BaseMultichannelDenoiser):
             self.tpca.initialize_spike_length_dependent_params()
         else:
             self.tpca = None
-        self.initialize_loss_whitener()
+        if self.score_radius_um:
+            self.score_net: ScoreNet | None = ScoreNet(
+                n_before=self.score_n_before,
+                n_after=self.score_n_after,
+                n_score_channels=self.b.score_channel_index.shape[1],
+                n_temporal=self.score_n_temporal,
+                n_moments=self.score_n_moments,
+                spatial_mode=self.score_spatial_mode,
+                hidden_dims=self.score_hidden_dims,
+                half_square=self.score_half_square,
+                energy_powers=self.score_energy_powers,
+                random_seed=self.random_seed,
+            )
+        else:
+            self.score_net = None
+        self.initialize_whiteners()
         self.to(self.device)
 
-    def initialize_loss_whitener(self):
+    def _other_pre_load_state(self, state_dict, prefix):
+        if not self.score_radius_um:
+            return
+        if getattr(self, "score_net", None) is None:
+            self.initialize_spike_length_dependent_params()
+        assert self.score_net is not None
+        self.score_net.attach_persistent_buffers(state_dict, f"{prefix}score_net.")
+
+    def needs_whiteners(self):
+        return self.whiten_loss or bool(self.score_radius_um)
+
+    def initialize_whiteners(self):
         whitener = self._whitener_holder[0]
-        if not self.whiten_loss or whitener is None:
+        if not self.needs_whiteners() or whitener is None:
             return
-        if hasattr(self, "loss_local_whiteners"):
-            return
-        lw = whitener.local_whiteners(self.b.model_channel_index.cpu())
-        self.register_buffer(
-            "loss_local_whiteners", lw.to(self.device), persistent=False
-        )
-        kernel = None
-        if self.whiten_loss_temporal:
+
+        if not hasattr(self, "loss_local_whiteners"):
+            lw = whitener.local_whiteners(self.b.model_channel_index.cpu())
+            self.register_buffer(
+                "loss_local_whiteners", lw.to(self.device), persistent=False
+            )
             kernel = whitener.b.temporal_kernel
             if kernel is not None:
                 kernel = kernel.clone().to(self.device)
-        self.register_buffer_or_none("loss_whitening_kernel", kernel, persistent=False)
+            self.register_buffer_or_none(
+                "gate_whitening_kernel", kernel, persistent=False
+            )
+            self.register_buffer_or_none(
+                "loss_whitening_kernel",
+                kernel if self.whiten_loss_temporal else None,
+                persistent=False,
+            )
+
+        if self.score_radius_um and not hasattr(self, "score_local_whiteners"):
+            sw = whitener.local_whiteners(self.b.score_channel_index.cpu())
+            self.register_buffer(
+                "score_local_whiteners", sw.to(self.device), persistent=False
+            )
+
+        if getattr(self, "score_net", None) is not None:
+            assert self.score_net is not None
+            self.score_net.set_whiteners(
+                self.b.score_local_whiteners, self.b.gate_whitening_kernel
+            )
 
     def fit(
         self,
@@ -258,12 +347,12 @@ class Decollider(BaseMultichannelDenoiser):
         **spike_data,
     ):
         weights = spike_data.get("weights")
-        if self.whiten_loss and self._whitener_holder[0] is None:
+        if self.needs_whiteners() and self._whitener_holder[0] is None:
             self._whitener_holder[0] = self._estimate_loss_whitener(hdf5_filename)
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
-        self.initialize_loss_whitener()
+        self.initialize_whiteners()
         if self.tpca is not None and self.tpca.needs_fit():
             self.tpca.fit(
                 recording=recording,
@@ -284,6 +373,9 @@ class Decollider(BaseMultichannelDenoiser):
                 self.tpca.eval()
             res = self._fit(train_data, val_data)
         self._needs_fit = False
+        if self.score_net is not None:
+            self.score_net.eval()
+            self.score_net.bake()
         return res
 
     def _estimate_loss_whitener(self, hdf5_filename):
@@ -300,15 +392,50 @@ class Decollider(BaseMultichannelDenoiser):
             whiten_cfg=WhiteningConfig(strategy="prewhiten_postapply"),
         )
 
-    def whiten_for_loss(self, d, channels):
+    def _whiten(self, d, channels, kernel):
         w = self.b.loss_local_whiteners[channels].to(d)
-        dw = w.bmm(d.mT)
-        kernel = self.b.loss_whitening_kernel
+        dw = w.bmm(d.nan_to_num().mT)
         if kernel is not None:
             n, c, t = dw.shape
             k = kernel[None, None].to(dw)
             dw = F.conv1d(dw.reshape(n * c, 1, t), k, padding="same").view(n, c, t)
         return dw
+
+    def whiten_for_loss(self, d, channels):
+        return self._whiten(d, channels, self.b.loss_whitening_kernel)
+
+    def whiten_for_detection_score(self, d, channels):
+        return self._whiten(d, channels, self.b.gate_whitening_kernel)
+
+    def denoiser_detection_score(self, waveforms, denoised, channels):
+        x = self.whiten_for_detection_score(waveforms, channels).reshape(
+            len(waveforms), -1
+        )
+        xhat = self.whiten_for_detection_score(denoised, channels).reshape(
+            len(denoised), -1
+        )
+        reduction = 2.0 * (x * xhat).sum(1) - xhat.square().sum(1)
+        return signed_sqrt(reduction)
+
+    def score_input(self, waveforms, channels):
+        """Rework waveforms onto the score_net's input window"""
+        assert self.score_net is not None
+        assert self.trough_offset_samples is not None
+        net = self.score_net
+        start = self.trough_offset_samples - net.trough_offset
+        assert start >= 0
+        stop = start + net.receptive_field
+        assert stop <= waveforms.shape[1]
+        wfs = reindex(
+            channels, waveforms[:, start:stop], self.b.score_relative_index, 0.0
+        )
+        mask = self.b.score_channel_index[channels] < self.n_channels
+        return wfs.nan_to_num().mT, mask
+
+    def score_forward(self, waveforms, channels):
+        assert self.score_net is not None
+        wfs, mask = self.score_input(waveforms, channels)
+        return self.score_net(wfs, channels, mask).squeeze(1)
 
     def masked_mse(self, a, b, mask, term, channels):
         d = (a - b).mul(mask)
@@ -388,7 +515,7 @@ class Decollider(BaseMultichannelDenoiser):
 
         return pred
 
-    def train_forward(self, y, m, ell, mask):
+    def train_forward(self, y, m, ell, mask, channels=None, with_score=True):
         z = y + m
 
         # predictions given z
@@ -431,6 +558,12 @@ class Decollider(BaseMultichannelDenoiser):
             kernel_base = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
             cycle_kernel_output = self.den_net((y - kernel_base, mask.unsqueeze(1)))
 
+        score_pred = score_target = None
+        if with_score and self.score_net is not None and channels is not None:
+            score_pred, score_target = self.score_train_forward(
+                y, ell, mask, channels, e_exz_y, cycle_null_output
+            )
+
         return dict(
             exz=exz,
             eyz=eyz,
@@ -439,7 +572,25 @@ class Decollider(BaseMultichannelDenoiser):
             cycle_output=cycle_output,
             cycle_null_output=cycle_null_output,
             cycle_kernel_output=cycle_kernel_output,
+            score_pred=score_pred,
+            score_target=score_target,
         )
+
+    def score_train_forward(self, y, ell, mask, channels, e_exz_y, cycle_null_output):
+        assert e_exz_y is not None
+        preds = [self.score_forward(y, channels)]
+        targets = [self.denoiser_detection_score(y, e_exz_y.detach(), channels)]
+
+        if ell is not None:
+            null_output = cycle_null_output
+            if null_output is None:
+                null_output = self.den_net((ell, mask.unsqueeze(1)))
+            preds.append(self.score_forward(ell, channels))
+            targets.append(
+                self.denoiser_detection_score(ell, null_output.detach(), channels)
+            )
+
+        return torch.cat(preds), torch.cat(targets).detach()
 
     def loss(
         self,
@@ -527,7 +678,44 @@ class Decollider(BaseMultichannelDenoiser):
                 loss_dict["cycle_l1"] = (coef * l1_alpha) * (
                     (cycle_targ - cycle_output).mul_(mask).abs_().mean()
                 )
+        score_pred = net_outputs.get("score_pred")
+        if score_pred is not None:
+            clamp = self.score_target_clamp
+            target = net_outputs["score_target"]
+            if clamp:
+                out = target.abs() > clamp
+                score_pred = torch.where(
+                    out, score_pred.clamp(-clamp, clamp), score_pred
+                )
+                target = target.clamp(-clamp, clamp)
+            loss_dict["score"] = self.score_loss_alpha * F.mse_loss(score_pred, target)
         return loss_dict
+
+    def clip_parameter_groups(self):
+        return [g for g in self.parameter_groups() if g]
+
+    def parameter_groups(self):
+        """(denoiser parameters, score net parameters)."""
+        if self.score_net is None:
+            return list(self.parameters()), []
+        score_params = set(map(id, self.score_net.parameters()))
+        rest = [p for p in self.parameters() if id(p) not in score_params]
+        return rest, list(self.score_net.parameters())
+
+    def get_optimizer(self, params=None, lr=None):
+        if params is None and self.score_net is not None:
+            params = self.parameter_groups()[0]
+        return super().get_optimizer(params=params, lr=lr)
+
+    def get_score_optimizer(self):
+        if self.score_net is None:
+            return None
+        lr = (
+            self.learning_rate
+            if self.score_learning_rate is None
+            else (self.score_learning_rate)
+        )
+        return super().get_optimizer(params=self.parameter_groups()[1], lr=lr)
 
     def _fit(
         self,
@@ -712,6 +900,7 @@ class Decollider(BaseMultichannelDenoiser):
     def _run_train_loop(self, train_data, val_data):
         optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)
+        score_optimizer = self.get_score_optimizer()
 
         loss = 0.0
         last_val_loss = None
@@ -719,6 +908,8 @@ class Decollider(BaseMultichannelDenoiser):
 
         with progrange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
+                score_active = epoch >= self.score_start_epoch
+
                 # deal with random indices...
                 train_data.refresh()
 
@@ -755,11 +946,15 @@ class Decollider(BaseMultichannelDenoiser):
                     )
 
                     optimizer.zero_grad()
+                    if score_optimizer is not None:
+                        score_optimizer.zero_grad()
 
                     mask = self.get_masks(channels_b).to(
                         dtype=waveform_b.dtype, device=self.device, non_blocking=True
                     )
-                    fres = self.train_forward(waveform_b, m, ell, mask)
+                    fres = self.train_forward(
+                        waveform_b, m, ell, mask, channels_b, with_score=score_active
+                    )
                     loss_dict = self.loss(
                         mask,
                         waveform_b,
@@ -778,10 +973,11 @@ class Decollider(BaseMultichannelDenoiser):
                             self.parameters(), self.clip_value
                         )
                     if self.clip_norm is not None:
-                        torch.nn.utils.clip_grad_norm_(
-                            self.parameters(), self.clip_norm
-                        )
+                        for group in self.clip_parameter_groups():
+                            torch.nn.utils.clip_grad_norm_(group, self.clip_norm)
                     optimizer.step()
+                    if score_optimizer is not None and score_active:
+                        score_optimizer.step()
 
                     for k, v in loss_dict.items():
                         train_losses[k] = v + train_losses.get(k, 0.0)
@@ -817,7 +1013,9 @@ class Decollider(BaseMultichannelDenoiser):
                                 waveform_b, channels_b
                             )
                             m = noise_b.to(waveform_b)
-                            fres = self.train_forward(waveform_b, m, ell_b, mask)
+                            fres = self.train_forward(
+                                waveform_b, m, ell_b, mask, channels_b
+                            )
                             loss_dict = self.loss(
                                 mask,
                                 waveform_b,

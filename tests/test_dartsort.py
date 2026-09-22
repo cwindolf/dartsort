@@ -21,7 +21,7 @@ def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
             subtraction_denoising_cfg=dartsort.FeaturizationConfig(
                 denoise_only=True, do_nn_denoise=False
             ),
-            residnorm_decrease_threshold=16.0,
+            subtraction_threshold=16.0,
         ),
         peeler_sampling_cfg=dartsort.FitSamplingConfig(n_residual_snips=512),
         featurization_cfg=dartsort.FeaturizationConfig(),

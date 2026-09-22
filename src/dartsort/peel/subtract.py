@@ -12,7 +12,9 @@ import torch
 from spikeinterface.core import BaseRecording
 
 from ..transform import (
+    BaseTemporalPCA,
     Voltage,
+    VQMatchedFilter,
     Waveform,
     WaveformPipeline,
     WaveformWhitener,
@@ -91,7 +93,7 @@ class SubtractionPeeler(BasePeeler):
         if self.p.whiten:
             self.threshold = self.p.threshold_before_whitening
         else:
-            self.threshold = self.p.residnorm_decrease_threshold
+            self.threshold = self.p.subtraction_threshold
 
         geom = recording.get_channel_locations()
         sub_channel_index = make_channel_index(
@@ -144,10 +146,13 @@ class SubtractionPeeler(BasePeeler):
         can_thin = recording.get_total_duration() > fit_sampling_cfg.n_seconds_fit / _p
         self.first_denoiser_thinning = p.first_denoiser_thinning if can_thin else 0.0
 
-        # this may be overwritten after featurization fit
+        # these may be overwritten after featurization fit
         self.register_buffer_or_none("local_whiteners", None)
         self.register_buffer_or_none("whitening_kernel", None)
+        self.register_buffer_or_none("proposal_filters", None)
+        self.proposal_filter_trough_offset: int | None = None
 
+        self._subtracter_generation = 0
         self._subtracters: local = local()
 
     # -- thread-local chunk subtracters. one per worker, and locals can't be pickled
@@ -167,7 +172,7 @@ class SubtractionPeeler(BasePeeler):
         signature = (
             self.b.sub_channel_index.device,
             id(self.subtraction_denoising_pipeline),
-            self.threshold,
+            self._subtracter_generation,
             self.audit_patches,
         )
         if getattr(self._subtracters, "signature", None) != signature:
@@ -182,6 +187,10 @@ class SubtractionPeeler(BasePeeler):
             trough_offset_samples=self.trough_offset_samples,
             peak_channel_index=self.b.peak_channel_index,
             sub_dedup_channel_index=self.b.sub_dedup_channel_index,
+            channel_index=self.b.sub_channel_index,
+            denoising_pipeline=self.subtraction_denoising_pipeline,
+            proposal_filters=self.b.proposal_filters,
+            proposal_filter_trough_offset=self.proposal_filter_trough_offset,
             audit=self.audit_patches,
         )
         return ChunkSubtracter(
@@ -232,8 +241,13 @@ class SubtractionPeeler(BasePeeler):
         return self.subtraction_denoising_pipeline.needs_precompute()
 
     def post_fit(self):
-        if not self.p.whiten:
-            return
+        if self.p.whiten:
+            self._install_whitener()
+        if self.p.detection_proposal in ("tpca", "vq"):
+            self._install_proposal_filters()
+        self._subtracter_generation += 1
+
+    def _install_whitener(self):
         assert self.featurization_pipeline is not None
         assert not self.featurization_pipeline.needs_fit()
         whitener = [
@@ -250,7 +264,37 @@ class SubtractionPeeler(BasePeeler):
         if whitener.temporal:
             self.del_none_buffer("whitening_kernel")
             self.register_buffer("whitening_kernel", whitener.b.temporal_kernel.clone())
-        self.threshold = self.p.residnorm_decrease_threshold
+        self.threshold = self.p.subtraction_threshold
+
+    def _install_proposal_filters(self):
+        assert self.featurization_pipeline is not None
+        assert not self.featurization_pipeline.needs_fit()
+        if self.p.detection_proposal == "vq":
+            nodes = [
+                t
+                for t in self.featurization_pipeline.transformers
+                if isinstance(t, VQMatchedFilter)
+            ]
+        else:
+            nodes = [
+                t
+                for t in self.featurization_pipeline.transformers
+                if type(t) is BaseTemporalPCA
+            ]
+        if len(nodes) != 1:
+            panic(
+                f"detection_proposal={self.p.detection_proposal!r} needs exactly one "
+                f"proposal model in the featurization pipeline, found {len(nodes)}."
+            )
+        node = nodes[0]
+        filters = node.b.components[: self.p.proposal_filters]
+        filters = filters.to(self.b.sub_channel_index.device).clone()
+        if self.b.proposal_filters is None:
+            self.del_none_buffer("proposal_filters")
+            self.register_buffer("proposal_filters", filters)
+        else:
+            self.proposal_filters = filters
+        self.proposal_filter_trough_offset = node.filter_trough_offset
 
     def save_models(self, save_folder: str | Path):
         sub_denoise_pt = Path(save_folder) / "subtraction_denoising_pipeline.pt"
@@ -290,6 +334,36 @@ class SubtractionPeeler(BasePeeler):
                 featurization_cfg,
                 fit_disabled_whitener=True,
                 whiten_cfg=subtraction_cfg.whiten_cfg,
+            )
+
+        # handle peak proposal models
+        proposal = subtraction_cfg.detection_proposal
+        denoising_cfg = subtraction_cfg.subtraction_denoising_cfg
+        if proposal == "score_net":
+            if not denoising_cfg.score_filter_radius_um:
+                panic(
+                    "detection_proposal='score_net' needs score_filter_radius_um "
+                    "set in the subtraction denoising config."
+                )
+        else:
+            subtraction_cfg = replace(
+                subtraction_cfg,
+                subtraction_denoising_cfg=replace(
+                    denoising_cfg, score_filter_radius_um=None
+                ),
+            )
+        if proposal == "tpca":
+            if subtraction_cfg.proposal_filters > featurization_cfg.tpca_rank:
+                panic(
+                    f"proposal_filters={subtraction_cfg.proposal_filters} exceeds "
+                    f"tpca_rank={featurization_cfg.tpca_rank}."
+                )
+            featurization_cfg = replace(
+                featurization_cfg, learn_cleaned_tpca_basis=True
+            )
+        elif proposal == "vq":
+            featurization_cfg = replace(
+                featurization_cfg, vq_proposal_filters=subtraction_cfg.proposal_filters
             )
 
         # construct denoising and featurization pipelines
@@ -567,7 +641,7 @@ class SubtractionPeeler(BasePeeler):
 
     def _threshold_to_fit(self, tmp_dir, fit_pipeline, computation_cfg):
         threshold_cfg = ThresholdingConfig(
-            detection_threshold=self.p.detection_threshold,
+            detection_threshold=self.p.voltage_threshold,
             peak_sign=self.p.peak_sign,
             relative_peak_radius_um=self.p.relative_peak_radius_um,
             relative_peak_radius_samples=self.p.relative_peak_radius_samples,

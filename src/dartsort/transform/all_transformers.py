@@ -24,6 +24,7 @@ from .temporal_pca import (
     TemporalPCAFeaturizer,
 )
 from .transform_base import BaseWaveformModule, Passthrough, Waveform
+from .vq_matched_filter import VQMatchedFilter
 from .whiten import WaveformWhitener
 
 all_transformers: list[type[BaseWaveformModule]] = [
@@ -47,6 +48,7 @@ all_transformers: list[type[BaseWaveformModule]] = [
     TemporalPCADenoiser,
     TemporalPCAFeaturizer,
     TruncatedMixtureModelTransformer,
+    VQMatchedFilter,
     Voltage,
     WaveformInterpolator,
     WaveformWhitener,
