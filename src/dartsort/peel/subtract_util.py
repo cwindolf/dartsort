@@ -352,7 +352,7 @@ class MatchedFilterProposer:
 
         traces = residual[time_ix.reshape(-1), :n_channels]
         conv = F.conv1d(traces.T[:, None], net.effective_temporal()[:, None])
-        conv = F.pad(conv, (0, rf - 1)).view(n_channels, net.n_temporal, n, in_width)
+        conv = F.pad(conv, (0, rf - 1)).view(n_channels, net.p.n_temporal, n, in_width)
         conv = conv[..., :out_width]
 
         neighborhoods = self.score_channel_index[chan_read]
@@ -361,7 +361,7 @@ class MatchedFilterProposer:
         features = conv[neighborhoods.clamp(max=n_channels - 1), :, slab_ix]
         features = features.mul_(valid[..., None, None])
         scores = net.score_from_features(
-            features.reshape(n * chan_width, -1, net.n_temporal, out_width),
+            features.reshape(n * chan_width, -1, net.p.n_temporal, out_width),
             chan_read.reshape(-1),
             self.score_mask[chan_read].reshape(n * chan_width, -1),
         )

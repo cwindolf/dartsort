@@ -23,7 +23,12 @@ from ._multichan_denoiser_kit import (
     NoneDataset,
     get_noise,
 )
-from .matched_filter_net import ScoreNet, signed_sqrt
+from .matched_filter_net import (
+    ScoreNet,
+    ScoreNetParams,
+    default_score_net_params,
+    signed_sqrt,
+)
 
 logger = get_logger(__name__)
 
@@ -75,7 +80,6 @@ class Decollider(BaseMultichannelDenoiser):
         warmup_lr=3e-4,
         # my args. todo: port over common ones.
         inference_z_samples=10,
-        detach_amortizer=True,
         exz_estimator="n3n",
         inference_kind="amortized",
         eyz_res_type="none",
@@ -87,8 +91,6 @@ class Decollider(BaseMultichannelDenoiser):
         cycle_loss_alpha=1.0,
         cycle_null_alpha=0.0,
         cycle_kernel_alpha=1.0,
-        separate_cycle_net=False,
-        detach_cycle_loss=False,
         val_noise_random_seed=0,
         inf_net_hidden_dims=None,
         eyz_net_hidden_dims=None,
@@ -108,18 +110,7 @@ class Decollider(BaseMultichannelDenoiser):
         whiten_loss_temporal=True,
         whitener=None,
         score_radius_um: float | None = None,
-        score_n_before=12,
-        score_n_after=19,
-        score_n_temporal=8,
-        score_n_moments=4,
-        score_spatial_mode="full",
-        score_hidden_dims=(32, 32),
-        score_half_square=False,
-        score_energy_powers=(),
-        score_loss_alpha=1.0,
-        score_target_clamp=30.0,
-        score_learning_rate=None,
-        score_start_epoch=10,
+        score_net_params: ScoreNetParams = default_score_net_params,
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
         assert inference_kind in ("raw", "exz", "exz_fromz", "amortized", "exy_fake")
@@ -167,7 +158,6 @@ class Decollider(BaseMultichannelDenoiser):
         self.n_data_workers = n_data_workers
 
         self.inference_z_samples = inference_z_samples
-        self.detach_amortizer = detach_amortizer
         self.exz_estimator = exz_estimator
         self.inference_kind = inference_kind
         self.eyz_res_type = eyz_res_type
@@ -182,26 +172,13 @@ class Decollider(BaseMultichannelDenoiser):
         self.cycle_loss_alpha = cycle_loss_alpha
         self.cycle_null_alpha = cycle_null_alpha
         self.cycle_kernel_alpha = cycle_kernel_alpha
-        self.separate_cycle_net = separate_cycle_net
-        self.detach_cycle_loss = detach_cycle_loss
         self.clip_value = clip_value
         self.clip_norm = clip_norm
         self.whiten_loss = whiten_loss
         self.whiten_loss_terms = tuple(whiten_loss_terms)
         self.whiten_loss_temporal = whiten_loss_temporal
         self.score_radius_um = score_radius_um
-        self.score_n_before = score_n_before
-        self.score_n_after = score_n_after
-        self.score_n_temporal = score_n_temporal
-        self.score_n_moments = score_n_moments
-        self.score_spatial_mode = score_spatial_mode
-        self.score_hidden_dims = tuple(score_hidden_dims)
-        self.score_half_square = score_half_square
-        self.score_energy_powers = tuple(score_energy_powers)
-        self.score_loss_alpha = score_loss_alpha
-        self.score_target_clamp = score_target_clamp
-        self.score_learning_rate = score_learning_rate
-        self.score_start_epoch = score_start_epoch
+        self.score_net_params = score_net_params
         # weak reference, only used in training
         self._whitener_holder = [whitener]
 
@@ -224,9 +201,6 @@ class Decollider(BaseMultichannelDenoiser):
                 panic("score_channel_index not contained in model_channel_index")
         if self.svd_projection_rank:
             self.submodule_names = ["tpca"]
-
-        if separate_cycle_net:
-            assert cycle_loss_alpha > 0
 
     def initialize_spike_length_dependent_params(self):
         if hasattr(self, "inf_net"):
@@ -252,14 +226,6 @@ class Decollider(BaseMultichannelDenoiser):
                     hidden_dims=self.inf_net_hidden_dims,
                     message="inf",
                 )
-            if self.separate_cycle_net:
-                self.den_net: torch.nn.Module = self.get_mlp(
-                    res_type=self.e_exz_y_res_type,
-                    hidden_dims=self.inf_net_hidden_dims,
-                    message="den",
-                )
-            else:
-                self.den_net: torch.nn.Module = self.inf_net
         if self.svd_projection_rank:
             from .temporal_pca import BaseTemporalPCA
 
@@ -275,15 +241,8 @@ class Decollider(BaseMultichannelDenoiser):
             self.tpca = None
         if self.score_radius_um:
             self.score_net: ScoreNet | None = ScoreNet(
-                n_before=self.score_n_before,
-                n_after=self.score_n_after,
                 n_score_channels=self.b.score_channel_index.shape[1],
-                n_temporal=self.score_n_temporal,
-                n_moments=self.score_n_moments,
-                spatial_mode=self.score_spatial_mode,
-                hidden_dims=self.score_hidden_dims,
-                half_square=self.score_half_square,
-                energy_powers=self.score_energy_powers,
+                p=self.score_net_params,
                 random_seed=self.random_seed,
             )
         else:
@@ -451,7 +410,7 @@ class Decollider(BaseMultichannelDenoiser):
         net_input = waveforms, masks.unsqueeze(1)
 
         if self.inference_kind == "amortized":
-            pred = self.den_net(net_input)
+            pred = self.inf_net(net_input)
         elif self.inference_kind == "raw":
             if hasattr(self, "emz"):
                 emz = self.emz(net_input)
@@ -545,18 +504,16 @@ class Decollider(BaseMultichannelDenoiser):
 
         if self.cycle_loss_alpha:
             assert e_exz_y is not None
-            cycle_targ = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
-            cycle_input = cycle_targ + ell
-            cycle_output = self.den_net((cycle_input, mask.unsqueeze(1)))
+            cycle_input = e_exz_y + ell
+            cycle_output = self.inf_net((cycle_input, mask.unsqueeze(1)))
 
         if self.cycle_null_alpha:
             assert ell is not None
-            cycle_null_output = self.den_net((ell, mask.unsqueeze(1)))
+            cycle_null_output = self.inf_net((ell, mask.unsqueeze(1)))
 
         if self.cycle_kernel_alpha:
             assert e_exz_y is not None
-            kernel_base = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
-            cycle_kernel_output = self.den_net((y - kernel_base, mask.unsqueeze(1)))
+            cycle_kernel_output = self.inf_net((y - e_exz_y, mask.unsqueeze(1)))
 
         score_pred = score_target = None
         if with_score and self.score_net is not None and channels is not None:
@@ -584,7 +541,7 @@ class Decollider(BaseMultichannelDenoiser):
         if ell is not None:
             null_output = cycle_null_output
             if null_output is None:
-                null_output = self.den_net((ell, mask.unsqueeze(1)))
+                null_output = self.inf_net((ell, mask.unsqueeze(1)))
             preds.append(self.score_forward(ell, channels))
             targets.append(
                 self.denoiser_detection_score(ell, null_output.detach(), channels)
@@ -632,10 +589,8 @@ class Decollider(BaseMultichannelDenoiser):
             if l4_alpha:
                 loss_dict["emz_l4"] = l4_alpha * ((emz - m).mul_(mask) ** 4).mean()
         if e_exz_y is not None:
-            to_amortize = exz
-            if self.detach_amortizer:
-                # should amortize-ability affect the learning of eyz, emz?
-                to_amortize = to_amortize.detach()
+            # amortize-ability should not affect the learning of eyz, emz?
+            to_amortize = exz.detach()
             am_mask = mask * to_amortize
             loss_dict["e_exz_y"] = self.masked_mse(
                 e_exz_y, to_amortize, mask, "e_exz_y", channels
@@ -669,18 +624,17 @@ class Decollider(BaseMultichannelDenoiser):
                 channels,
             )
         if cycle_output is not None:
-            coef = 1 if self.separate_cycle_net else self.cycle_loss_alpha
-            cycle_targ = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
+            coef = self.cycle_loss_alpha
             loss_dict["cycle"] = coef * self.masked_mse(
-                cycle_output, cycle_targ, mask, "cycle", channels
+                cycle_output, e_exz_y, mask, "cycle", channels
             )
             if l1_alpha:
                 loss_dict["cycle_l1"] = (coef * l1_alpha) * (
-                    (cycle_targ - cycle_output).mul_(mask).abs_().mean()
+                    (e_exz_y - cycle_output).mul_(mask).abs_().mean()
                 )
         score_pred = net_outputs.get("score_pred")
         if score_pred is not None:
-            clamp = self.score_target_clamp
+            clamp = self.score_net_params.target_clamp
             target = net_outputs["score_target"]
             if clamp:
                 out = target.abs() > clamp
@@ -688,34 +642,42 @@ class Decollider(BaseMultichannelDenoiser):
                     out, score_pred.clamp(-clamp, clamp), score_pred
                 )
                 target = target.clamp(-clamp, clamp)
-            loss_dict["score"] = self.score_loss_alpha * F.mse_loss(score_pred, target)
+            loss_dict["score"] = self.score_net_params.loss_alpha * F.mse_loss(
+                score_pred, target
+            )
         return loss_dict
 
     def clip_parameter_groups(self):
         return [g for g in self.parameter_groups() if g]
 
     def parameter_groups(self):
-        """(denoiser parameters, score net parameters)."""
-        if self.score_net is None:
-            return list(self.parameters()), []
-        score_params = set(map(id, self.score_net.parameters()))
-        rest = [p for p in self.parameters() if id(p) not in score_params]
-        return rest, list(self.score_net.parameters())
+        """(n2n net parameters, inf_net parameters, score net parameters)."""
+        inf_params = list(self.inf_net.parameters()) if self.has_inf_net() else []
+        score_params = [] if self.score_net is None else list(self.score_net.parameters())
+        other = set(map(id, inf_params + score_params))
+        rest = [p for p in self.parameters() if id(p) not in other]
+        return rest, inf_params, score_params
+
+    def has_inf_net(self):
+        return hasattr(self, "inf_net")
 
     def get_optimizer(self, params=None, lr=None):
-        if params is None and self.score_net is not None:
+        if params is None:
             params = self.parameter_groups()[0]
         return super().get_optimizer(params=params, lr=lr)
+
+    def get_inf_optimizer(self):
+        if not self.has_inf_net():
+            return None
+        return super().get_optimizer(params=self.parameter_groups()[1])
 
     def get_score_optimizer(self):
         if self.score_net is None:
             return None
-        lr = (
-            self.learning_rate
-            if self.score_learning_rate is None
-            else (self.score_learning_rate)
-        )
-        return super().get_optimizer(params=self.parameter_groups()[1], lr=lr)
+        lr = self.score_net_params.learning_rate
+        if lr is None:
+            lr = self.learning_rate
+        return super().get_optimizer(params=self.parameter_groups()[2], lr=lr)
 
     def _fit(
         self,
@@ -900,6 +862,10 @@ class Decollider(BaseMultichannelDenoiser):
     def _run_train_loop(self, train_data, val_data):
         optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)
+        inf_optimizer = self.get_inf_optimizer()
+        inf_scheduler = None
+        if inf_optimizer is not None:
+            inf_scheduler = self.get_scheduler(inf_optimizer)
         score_optimizer = self.get_score_optimizer()
 
         loss = 0.0
@@ -908,7 +874,7 @@ class Decollider(BaseMultichannelDenoiser):
 
         with progrange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
-                score_active = epoch >= self.score_start_epoch
+                score_active = epoch >= self.score_net_params.start_epoch
 
                 # deal with random indices...
                 train_data.refresh()
@@ -946,6 +912,8 @@ class Decollider(BaseMultichannelDenoiser):
                     )
 
                     optimizer.zero_grad()
+                    if inf_optimizer is not None:
+                        inf_optimizer.zero_grad()
                     if score_optimizer is not None:
                         score_optimizer.zero_grad()
 
@@ -976,6 +944,8 @@ class Decollider(BaseMultichannelDenoiser):
                         for group in self.clip_parameter_groups():
                             torch.nn.utils.clip_grad_norm_(group, self.clip_norm)
                     optimizer.step()
+                    if inf_optimizer is not None:
+                        inf_optimizer.step()
                     if score_optimizer is not None and score_active:
                         score_optimizer.step()
 
@@ -1058,6 +1028,7 @@ class Decollider(BaseMultichannelDenoiser):
                 pbar.set_description(f"Epochs [{loss_str}]")
 
                 self.step_scheduler(scheduler, loss, val_loss)
+                self.step_scheduler(inf_scheduler, loss, val_loss)
         return train_records
 
 

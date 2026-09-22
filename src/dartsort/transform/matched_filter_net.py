@@ -1,55 +1,60 @@
+from typing import Literal
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
 from ..util.logging_util import get_logger
-from ..util.py_util import panic
+from ..util.py_util import cfg_dataclass, panic
 
 logger = get_logger(__name__)
+
+
+@cfg_dataclass
+class ScoreNetParams:
+    # architecture
+    n_before: int = 12
+    n_after: int = 19
+    n_temporal: int = 8
+    n_moments: int = 4
+    spatial_mode: Literal["full", "diag"] = "full"
+    hidden_dims: tuple[int, ...] = (32, 32)
+    half_square: bool = False
+    signed_moments: bool = True
+    mask_features: bool = True
+    energy_powers: tuple[Literal["abs", "log1p"], ...] = ()
+
+    # training
+    loss_alpha: float = 1.0
+    target_clamp: float = 30.0
+    learning_rate: float | None = None
+    start_epoch: int = 10
+
+
+default_score_net_params = ScoreNetParams()
 
 
 class ScoreNet(torch.nn.Module):
     def __init__(
         self,
-        n_before: int,
-        n_after: int,
         n_score_channels: int,
-        n_temporal: int = 8,
-        n_moments: int = 4,
-        spatial_mode: str = "full",
-        hidden_dims: tuple[int, ...] = (32, 32),
-        half_square: bool = False,
-        signed_moments: bool = True,
-        mask_features: bool = True,
-        energy_powers: tuple[str, ...] = (),
+        p: ScoreNetParams = default_score_net_params,
         random_seed: int = 0,
     ):
         super().__init__()
-        if spatial_mode not in ("full", "diag"):
-            panic(f"{spatial_mode=}")
-        for p in energy_powers:
-            if p not in ("abs", "log1p"):
-                panic(f"unknown energy power {p}")
-
-        self.n_before = n_before
-        self.n_after = n_after
-        self.window = n_before + n_after
-        self.n_temporal = n_temporal
-        self.n_moments = n_moments
+        self.p = p
+        self.window = p.n_before + p.n_after
         self.n_score_channels = n_score_channels
-        self.spatial_mode = spatial_mode
-        self.half_square = half_square
-        self.signed_moments = signed_moments
-        self.mask_features = mask_features
-        self.energy_powers = tuple(energy_powers)
+        n_temporal = p.n_temporal
+        n_moments = p.n_moments
 
-        self.n_energies = n_temporal * (1 + half_square)
+        self.n_energies = n_temporal * (1 + p.half_square)
         self.n_quad_features = n_moments * self.n_energies
         self.n_head_features = (
             self.n_quad_features
-            + len(self.energy_powers) * self.n_quad_features
-            + signed_moments * (n_moments * n_temporal)
-            + mask_features * n_moments
+            + len(p.energy_powers) * self.n_quad_features
+            + p.signed_moments * (n_moments * n_temporal)
+            + p.mask_features * n_moments
         )
 
         with torch.random.fork_rng(devices=[]):
@@ -63,14 +68,14 @@ class ScoreNet(torch.nn.Module):
             )
             # shape stats for decay estimation
             pool_powers = torch.randn(
-                len(self.energy_powers), n_moments, n_score_channels
+                len(p.energy_powers), n_moments, n_score_channels
             ).div_(n_score_channels)
 
         self.temporal_weight = torch.nn.Parameter(temporal)
         self.pool = torch.nn.Parameter(pool)
         self.pool_signed = torch.nn.Parameter(pool_signed)
         self.pool_powers = torch.nn.Parameter(pool_powers)
-        if spatial_mode == "full":
+        if p.spatial_mode == "full":
             self.spatial_weight = torch.nn.Parameter(torch.eye(n_score_channels))
         else:
             self.spatial_weight = torch.nn.Parameter(torch.ones(n_score_channels))
@@ -80,10 +85,10 @@ class ScoreNet(torch.nn.Module):
         )
         self.bias = torch.nn.Parameter(torch.zeros(()))
 
-        if hidden_dims:
+        if p.hidden_dims:
             layers: list[torch.nn.Module] = []
             dim = self.n_head_features
-            for h in hidden_dims:
+            for h in p.hidden_dims:
                 layers += [torch.nn.Conv1d(dim, h, 1), torch.nn.PReLU()]
                 dim = h
             layers.append(torch.nn.Conv1d(dim, 1, 1))
@@ -139,7 +144,7 @@ class ScoreNet(torch.nn.Module):
     @property
     def trough_offset(self) -> int:
         """Output time t aligned to input trough at index t + trough_offset"""
-        return self.n_before + self.temporal_pad
+        return self.p.n_before + self.temporal_pad
 
     @property
     def receptive_field(self) -> int:
@@ -162,7 +167,7 @@ class ScoreNet(torch.nn.Module):
         if w is None:
             panic()
         w = w.to(self.spatial_weight)
-        if self.spatial_mode == "diag":
+        if self.p.spatial_mode == "diag":
             return self.spatial_weight[None] * torch.diagonal(w, dim1=1, dim2=2)
         return torch.einsum("ab,cbd->cad", self.spatial_weight, w)
 
@@ -173,32 +178,32 @@ class ScoreNet(torch.nn.Module):
         n, c, t = waveforms.shape
         weight = self.effective_temporal()
         out = F.conv1d(waveforms.reshape(n * c, 1, t), weight[:, None])
-        return out.view(n, c, self.n_temporal, -1)
+        return out.view(n, c, self.p.n_temporal, -1)
 
     def apply_spatial(self, features: Tensor, spatial_op: Tensor) -> Tensor:
-        if self.spatial_mode == "diag":
+        if self.p.spatial_mode == "diag":
             return features * spatial_op[:, :, None, None]
         return torch.einsum("nab,nbkt->nakt", spatial_op, features)
 
     def apply_moments(self, features: Tensor, mask: Tensor | None) -> Tensor:
         """(n, c, k, t) -> (n, n_head_features, t)"""
-        if self.half_square:
+        if self.p.half_square:
             rectified = torch.cat((features.relu(), (-features).relu()), dim=2)
         else:
             rectified = features
         energies = torch.einsum("mc,nckt->nmkt", self.pool, rectified.square())
         out = energies.flatten(1, 2)
-        for i, power in enumerate(self.energy_powers):
+        for i, power in enumerate(self.p.energy_powers):
             if power == "abs":
                 g = rectified.abs()
             else:
                 g = torch.log1p(rectified.square())
             moments = torch.einsum("mc,nckt->nmkt", self.pool_powers[i], g)
             out = torch.cat((out, moments.flatten(1, 2)), dim=1)
-        if self.signed_moments:
+        if self.p.signed_moments:
             signed = torch.einsum("mc,nckt->nmkt", self.pool_signed, features)
             out = torch.cat((out, signed.flatten(1, 2)), dim=1)
-        if self.mask_features:
+        if self.p.mask_features:
             if mask is None:
                 mask = features.new_ones(len(features), self.n_score_channels)
             pooled = torch.einsum("mc,nc->nm", self.pool, mask.to(features))
