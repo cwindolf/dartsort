@@ -171,6 +171,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         chunk_starts = np.arange(0, T_samples, dt)
         chunk_ends = np.minimum(chunk_starts + dt, T_samples)
         chunk_centers_samples = (chunk_starts + chunk_ends) / 2
+        chunk_centers_samples = chunk_centers_samples.clip(0, T_samples - 1)
         chunk_centers_s = recording.sample_index_to_time(chunk_centers_samples)
         geom = recording.get_channel_locations()
         pconv_td = template_data

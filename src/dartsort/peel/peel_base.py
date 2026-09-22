@@ -599,9 +599,9 @@ class BasePeeler(BModule):
             peel_result["times_seconds"] = torch.asarray(t_s)
         features = {}
         if peel_result["n_spikes"] > 0 and return_waveforms:
-            dt_samples = chunk_end_samples - chunk_start_samples
-            center_samples = chunk_start_samples + dt_samples // 2
-            chunk_center_s = self.recording.sample_index_to_time(center_samples)
+            chunk_center_s = self._chunk_center_seconds(
+                chunk_start_samples, chunk_end_samples
+            )
             fixed_properties = {k: peel_result[k] for k in self.fixed_property_keys}
             for kind in self.waveform_kinds:
                 features |= self.featurize_waveforms(
@@ -1020,7 +1020,9 @@ class BasePeeler(BModule):
             try:
                 pipeline.load_state_dict(state_dict)
             except RuntimeError as e:
-                raise ValueError(f"Error loading state dict for pipeline {pipeline}") from e
+                raise ValueError(
+                    f"Error loading state dict for pipeline {pipeline}"
+                ) from e
 
     def check_resuming(
         self,
@@ -1191,7 +1193,9 @@ class BasePeeler(BModule):
                         chunks=(chunk_size, *ds.shape_per_spike),
                     )
                 else:
-                    logger.dartsortdebug(f"Create {ds} in {output_h5.name} with known count {known_spike_count}.")
+                    logger.dartsortdebug(
+                        f"Create {ds} in {output_h5.name} with known count {known_spike_count}."
+                    )
                     dset = output_h5.create_dataset(
                         ds.name,
                         dtype=ds.dtype,
@@ -1250,6 +1254,24 @@ class BasePeeler(BModule):
         factors = divisors(self.chunk_length_samples + 2 * self.chunk_margin_samples)
         factors = np.array(factors)
         return factors[np.abs(factors - target).argmin()]
+
+    def _chunk_center_seconds(
+        self, chunk_start_samples: int, chunk_end_samples: int | None = None
+    ) -> float:
+        ns = self.recording.get_num_samples()
+        if chunk_end_samples is None:
+            chunk_end_samples = chunk_start_samples + self.chunk_length_samples
+            chunk_end_samples = min(chunk_end_samples, ns)
+        assert chunk_start_samples >= 0
+        assert chunk_start_samples <= chunk_end_samples
+        assert chunk_end_samples <= ns
+        dt_samples = chunk_end_samples - chunk_start_samples
+        center_samples = chunk_start_samples + dt_samples // 2
+        center_samples = min(center_samples, ns - 1)
+        assert 0 <= center_samples < ns
+        chunk_center_s = self.recording.sample_index_to_time(center_samples)
+        chunk_center_s = float(chunk_center_s)
+        return chunk_center_s
 
 
 # -- batch result type stub

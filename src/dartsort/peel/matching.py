@@ -257,10 +257,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return_clean_waveforms=False,
     ) -> PeelingBatchResult:
         assert self.matching_templates is not None
-        # get chunk center time and template info at that time
-        chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2
-        segment = self.recording._recording_segments[0]
-        chunk_center_seconds = float(segment.sample_index_to_time(chunk_center_samples))
+        chunk_center_seconds = self._chunk_center_seconds(chunk_start_samples)
         if self.whiten_features:
             resid_offset = self.whiten_pad
         else:
