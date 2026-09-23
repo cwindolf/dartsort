@@ -53,6 +53,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         signal_gates=True,
         step_callback=None,
         fused_opt=True,
+        conv_fullheight_width_mult=1,
+        conv_fullheight_depth=1,
+        conv_fullheight_channel_mix=False,
     ):
         super().__init__(
             geom=geom,
@@ -90,6 +93,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.epoch_size = epoch_size
         self.svd_projection_rank = svd_projection_rank
         self.fused_opt = fused_opt
+        self.conv_fullheight_width_mult = conv_fullheight_width_mult
+        self.conv_fullheight_depth = conv_fullheight_depth
+        self.conv_fullheight_channel_mix = conv_fullheight_channel_mix
 
         model_channel_index = regularize_channel_index(
             geom=self.geom, channel_index=channel_index, depth_only=pad_depth_only
@@ -139,7 +145,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.wf_dim = dim0 * self.b.model_channel_index.shape[1]
         self.output_dim = self.wf_dim
 
-    def get_optimizer(self):
+    def get_optimizer(self, params=None, lr=None):
         opt = self.optimizer
         okw = self.optimizer_kwargs
         if isinstance(opt, str):
@@ -152,8 +158,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         if "fused" not in okw and self.fused_opt:
             okw["fused"] = True
         return opt(
-            self.parameters(),
-            lr=self.learning_rate,
+            self.parameters() if params is None else params,
+            lr=self.learning_rate if lr is None else lr,
             weight_decay=self.weight_decay,
             **okw,
         )
@@ -171,8 +177,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         sched = lr_schedule(optimizer, **sched_kw)
 
         if self.warmup_epochs:
-            warm_sched = torch.optim.lr_scheduler.ConstantLR(
-                optimizer, self.warmup_lr, total_iters=self.warmup_epochs
+            warmup_factor = self.warmup_lr / self.learning_rate
+            warm_sched = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lambda _: warmup_factor
             )
             sched = torch.optim.lr_scheduler.SequentialLR(
                 optimizer, [warm_sched, sched], milestones=[self.warmup_epochs]
@@ -227,6 +234,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             nonlinearity=self.nonlinearity,
             log_transform=log_transform,
             scaling=self.scaling,
+            conv_fullheight_width_mult=self.conv_fullheight_width_mult,
+            conv_fullheight_depth=self.conv_fullheight_depth,
+            conv_fullheight_channel_mix=self.conv_fullheight_channel_mix,
         )
 
     def to_nn_channels(self, waveforms, channels):
@@ -568,7 +578,6 @@ class AsyncBatchDataset(RefreshableDataset):
         self._cur_data_ix = None
         self._cur_chunk = None
         self._cur_chunk_ix = None
-        self._pin_buf = None
         self.bye = False
 
     def __len__(self):
@@ -621,11 +630,8 @@ class AsyncBatchDataset(RefreshableDataset):
         # need to batch up the chunks...
         if self._cur_chunk is None:
             self._cur_chunk = self._queue.get()
-            if self.pin_memory and self._pin_buf is None:
-                self._pin_buf = self._cur_chunk = self._cur_chunk.pin_memory()
-            elif self.pin_memory:
-                assert isinstance(self._pin_buf, torch.Tensor)
-                self._cur_chunk = self._pin_buf.copy_(self._cur_chunk)
+            if self.pin_memory:
+                self._cur_chunk = self._cur_chunk.pin_memory()
             self._cur_chunk_ix = 0
         assert self._cur_chunk_ix is not None
 

@@ -302,7 +302,7 @@ def test_static_templates(tmp_path):
     motion = MotionInfo.from_motion_est(geom=geom)
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
-        rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"))
+        rec1 = rec0.save(format="binary", folder=Path(tdir) / "rec")
         for rec in [rec0, rec1]:
             res = get_templates(
                 recording=rec,
@@ -335,7 +335,7 @@ def test_drifting_templates(tmp_path):
     waveform_cfg = WaveformConfig.from_samples(0, 3, 1)
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
-        rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"), n_jobs=1)
+        rec1 = rec0.save(format="binary", folder=Path(tdir) / "rec", n_jobs=1)
         for rec in [rec0, rec1]:
             motion = MotionInfo.from_motion_est(
                 geom=geom,

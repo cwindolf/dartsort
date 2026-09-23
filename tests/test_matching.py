@@ -428,7 +428,6 @@ def tiny_up_sim():
             ] += temp
         rec0 = si.NumpyRecording(rec0, 30_000)
         rec0.set_dummy_probe_from_locations(geom)
-        # rec1 = rec0.save_to_folder(tmp_path / "rec")
 
         sim[(up_factor, up_offset)] = (
             rec0,
@@ -608,7 +607,7 @@ def test_static(tmp_path, up_factor, cd_iter):
     rec0.set_dummy_probe_from_locations(geom)
     no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
 
-    rec1 = rec0.save_to_folder(tmp_path / "rec")
+    rec1 = rec0.save(format="binary", folder=tmp_path / "rec")
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
             denoising_method="none", template_min_channel_amplitude=0.0
@@ -808,7 +807,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
     )
     no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
 
-    rec1 = rec0.save_to_folder(tmp_path / "rec")
+    rec1 = rec0.save(format="binary", folder=tmp_path / "rec")
     for rec in [rec1, rec0]:
         (tmp_path / "match").mkdir()
         st = dartsort.match(
@@ -821,6 +820,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
             sampling_cfg=sampconf,
             matching_cfg=matchconf,
         )
+        assert st is not None
         assert st.scores is not None  # type: ignore[reportAttributeAccessIssue]
         assert np.all(st.scores > 0)  # type: ignore[reportAttributeAccessIssue]
 
@@ -852,6 +852,7 @@ def test_with_simkit(tmp_path, simulations, sim_name, threshold):
                 threshold=threshold, whitening=dartsort.WhiteningConfig()
             ),
         )
+        assert st is not None
         print(f"{threshold=} {st=}")
         assert len(st) > 0.9 * len(gt_st)
         # assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.3

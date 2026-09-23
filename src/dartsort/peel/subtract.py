@@ -5,13 +5,16 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import local
 
 import numpy as np
 import torch
 from spikeinterface.core import BaseRecording
 
 from ..transform import (
+    BaseTemporalPCA,
     Voltage,
+    VQMatchedFilter,
     Waveform,
     WaveformPipeline,
     WaveformWhitener,
@@ -37,11 +40,15 @@ from ..util.waveform_util import (
     relative_channel_subset_index,
 )
 from .peel_base import BasePeeler, PeelingBatchResult
-from .peel_lib import subtract_chunk, threshold_to_fit
+from .peel_lib import threshold_to_fit
+from .subtract_util import ChunkSubtracter, make_peak_proposer
 
 
 class SubtractionPeeler(BasePeeler):
     peel_kind = "Subtraction"
+
+    # validate detections against direct impl
+    audit_patches = False
 
     def __init__(
         self,
@@ -86,7 +93,7 @@ class SubtractionPeeler(BasePeeler):
         if self.p.whiten:
             self.threshold = self.p.threshold_before_whitening
         else:
-            self.threshold = self.p.residnorm_decrease_threshold
+            self.threshold = self.p.subtraction_threshold
 
         geom = recording.get_channel_locations()
         sub_channel_index = make_channel_index(
@@ -139,9 +146,76 @@ class SubtractionPeeler(BasePeeler):
         can_thin = recording.get_total_duration() > fit_sampling_cfg.n_seconds_fit / _p
         self.first_denoiser_thinning = p.first_denoiser_thinning if can_thin else 0.0
 
-        # this may be overwritten after featurization fit
+        # these may be overwritten after featurization fit
         self.register_buffer_or_none("local_whiteners", None)
         self.register_buffer_or_none("whitening_kernel", None)
+        self.register_buffer_or_none("proposal_filters", None)
+        self.proposal_filter_trough_offset: int | None = None
+
+        self._subtracter_generation = 0
+        self._subtracters: local = local()
+
+    # -- thread-local chunk subtracters. one per worker, and locals can't be pickled
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        del state["_subtracters"]
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._subtracters = local()
+
+    @property
+    def chunk_subtracter(self) -> ChunkSubtracter:
+        """This thread's subtracter, rebuilt when the peeler has moved or refit."""
+        signature = (
+            self.b.sub_channel_index.device,
+            id(self.subtraction_denoising_pipeline),
+            self._subtracter_generation,
+            self.audit_patches,
+        )
+        if getattr(self._subtracters, "signature", None) != signature:
+            self._subtracters.subtracter = self._build_chunk_subtracter()
+            self._subtracters.signature = signature
+        return self._subtracters.subtracter
+
+    def _build_chunk_subtracter(self) -> ChunkSubtracter:
+        proposer = make_peak_proposer(
+            self.p,
+            spike_length_samples=self.spike_length_samples,
+            trough_offset_samples=self.trough_offset_samples,
+            peak_channel_index=self.b.peak_channel_index,
+            sub_dedup_channel_index=self.b.sub_dedup_channel_index,
+            channel_index=self.b.sub_channel_index,
+            denoising_pipeline=self.subtraction_denoising_pipeline,
+            proposal_filters=self.b.proposal_filters,
+            proposal_filter_trough_offset=self.proposal_filter_trough_offset,
+            audit=self.audit_patches,
+        )
+        return ChunkSubtracter(
+            channel_index=self.b.sub_channel_index,
+            denoising_pipeline=self.subtraction_denoising_pipeline,
+            proposer=proposer,
+            trough_offset_samples=self.trough_offset_samples,
+            spike_length_samples=self.spike_length_samples,
+            residnorm_decrease_threshold=self.threshold,
+            extract_index=None if self.extract_subtract_same else self.b.channel_index,
+            extract_mask=self.extract_subtract_mask,
+            dedup_channel_index=self.b.dedup_channel_index,
+            subtract_rel_inds=self.b.subtract_index_rel_inds,
+            local_whiteners=self.b.local_whiteners,
+            whitening_kernel=self.b.whitening_kernel,
+            peak_sign=self.p.peak_sign,
+            exclusion_time_radius=self.p.temporal_dedup_radius_samples,
+            pos_exclusion_time_radius=self.p.positive_temporal_dedup_radius_samples,
+            realign_to_denoiser=self.p.realign_to_denoiser,
+            denoiser_realignment_shift=self.p.denoiser_realignment_shift,
+            max_iter=self.p.max_iter,
+            save_iteration=self.save_iteration,
+            save_residnorm_decrease=self.save_residnorm_decrease,
+            compute_collidedness=self.save_collidedness,
+        )
 
     def out_datasets(self):
         datasets = super().out_datasets()
@@ -167,8 +241,13 @@ class SubtractionPeeler(BasePeeler):
         return self.subtraction_denoising_pipeline.needs_precompute()
 
     def post_fit(self):
-        if not self.p.whiten:
-            return
+        if self.p.whiten:
+            self._install_whitener()
+        if self.p.detection_proposal in ("tpca", "vq"):
+            self._install_proposal_filters()
+        self._subtracter_generation += 1
+
+    def _install_whitener(self):
         assert self.featurization_pipeline is not None
         assert not self.featurization_pipeline.needs_fit()
         whitener = [
@@ -185,7 +264,37 @@ class SubtractionPeeler(BasePeeler):
         if whitener.temporal:
             self.del_none_buffer("whitening_kernel")
             self.register_buffer("whitening_kernel", whitener.b.temporal_kernel.clone())
-        self.threshold = self.p.residnorm_decrease_threshold
+        self.threshold = self.p.subtraction_threshold
+
+    def _install_proposal_filters(self):
+        assert self.featurization_pipeline is not None
+        assert not self.featurization_pipeline.needs_fit()
+        if self.p.detection_proposal == "vq":
+            nodes = [
+                t
+                for t in self.featurization_pipeline.transformers
+                if isinstance(t, VQMatchedFilter)
+            ]
+        else:
+            nodes = [
+                t
+                for t in self.featurization_pipeline.transformers
+                if type(t) is BaseTemporalPCA
+            ]
+        if len(nodes) != 1:
+            panic(
+                f"detection_proposal={self.p.detection_proposal!r} needs exactly one "
+                f"proposal model in the featurization pipeline, found {len(nodes)}."
+            )
+        node = nodes[0]
+        filters = node.b.components[: self.p.proposal_filters]
+        filters = filters.to(self.b.sub_channel_index.device).clone()
+        if self.b.proposal_filters is None:
+            self.del_none_buffer("proposal_filters")
+            self.register_buffer("proposal_filters", filters)
+        else:
+            self.proposal_filters = filters
+        self.proposal_filter_trough_offset = node.filter_trough_offset
 
     def save_models(self, save_folder: str | Path):
         sub_denoise_pt = Path(save_folder) / "subtraction_denoising_pipeline.pt"
@@ -225,6 +334,36 @@ class SubtractionPeeler(BasePeeler):
                 featurization_cfg,
                 fit_disabled_whitener=True,
                 whiten_cfg=subtraction_cfg.whiten_cfg,
+            )
+
+        # handle peak proposal models
+        proposal = subtraction_cfg.detection_proposal
+        denoising_cfg = subtraction_cfg.subtraction_denoising_cfg
+        if proposal == "score_net":
+            if not denoising_cfg.score_filter_radius_um:
+                panic(
+                    "detection_proposal='score_net' needs score_filter_radius_um "
+                    "set in the subtraction denoising config."
+                )
+        else:
+            subtraction_cfg = replace(
+                subtraction_cfg,
+                subtraction_denoising_cfg=replace(
+                    denoising_cfg, score_filter_radius_um=None
+                ),
+            )
+        if proposal == "tpca":
+            if subtraction_cfg.proposal_filters > featurization_cfg.tpca_rank:
+                panic(
+                    f"proposal_filters={subtraction_cfg.proposal_filters} exceeds "
+                    f"tpca_rank={featurization_cfg.tpca_rank}."
+                )
+            featurization_cfg = replace(
+                featurization_cfg, learn_cleaned_tpca_basis=True
+            )
+        elif proposal == "vq":
+            featurization_cfg = replace(
+                featurization_cfg, vq_proposal_filters=subtraction_cfg.proposal_filters
             )
 
         # construct denoising and featurization pipelines
@@ -282,40 +421,12 @@ class SubtractionPeeler(BasePeeler):
             return_waveforms and "denoised" in self.featurization_pipelines
         )
 
-        extract_index = None if self.extract_subtract_same else self.b.channel_index
         traces = traces.to(self.dtype)
 
-        subtraction_result = subtract_chunk(
+        subtraction_result = self.chunk_subtracter.subtract_chunk(
             traces,
-            self.b.sub_channel_index,
-            self.subtraction_denoising_pipeline,
-            sub_dedup_channel_index=self.b.sub_dedup_channel_index,
-            extract_index=extract_index,
-            extract_mask=self.extract_subtract_mask,
-            trough_offset_samples=self.trough_offset_samples,
-            spike_length_samples=self.spike_length_samples,
             left_margin=left_margin,
             right_margin=right_margin,
-            detection_threshold=self.p.detection_threshold,
-            relative_peak_radius=self.p.relative_peak_radius_samples,
-            peak_sign=self.p.peak_sign,
-            peak_channel_index=self.b.peak_channel_index,
-            dedup_channel_index=self.b.dedup_channel_index,
-            dedup_temporal_radius=self.p.temporal_dedup_radius_samples,
-            remove_exact_duplicates=self.p.remove_exact_duplicates,
-            subtract_global_dedup=self.p.subtract_global_dedup,
-            pos_dedup_temporal_radius=self.p.positive_temporal_dedup_radius_samples,
-            residnorm_decrease_threshold=self.threshold,
-            trough_priority=self.p.trough_priority,
-            save_iteration=self.save_iteration,
-            save_residnorm_decrease=self.save_residnorm_decrease,
-            max_iter=self.p.max_iter,
-            subtract_rel_inds=self.b.subtract_index_rel_inds,
-            realign_to_denoiser=self.p.realign_to_denoiser,
-            denoiser_realignment_shift=self.p.denoiser_realignment_shift,
-            compute_collidedness=self.save_collidedness,
-            local_whiteners=self.b.local_whiteners,
-            whitening_kernel=self.b.whitening_kernel,
             return_denoised_waveforms=return_denoised,
         )
 
@@ -331,7 +442,7 @@ class SubtractionPeeler(BasePeeler):
         if return_denoised:
             assert subtraction_result.denoised_waveforms is not None
             peel_result["denoised_waveforms"] = subtraction_result.denoised_waveforms
-        peel_result.update(subtraction_result.features)
+        peel_result.update(subtraction_result.features)  # ty: ignore[invalid-argument-type]
         if return_residual:
             peel_result["residual"] = subtraction_result.residual
 
@@ -530,7 +641,7 @@ class SubtractionPeeler(BasePeeler):
 
     def _threshold_to_fit(self, tmp_dir, fit_pipeline, computation_cfg):
         threshold_cfg = ThresholdingConfig(
-            detection_threshold=self.p.detection_threshold,
+            detection_threshold=self.p.voltage_threshold,
             peak_sign=self.p.peak_sign,
             relative_peak_radius_um=self.p.relative_peak_radius_um,
             relative_peak_radius_samples=self.p.relative_peak_radius_samples,

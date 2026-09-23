@@ -7,10 +7,6 @@ from torch import Tensor
 from ..util.py_util import panic
 from ..util.torch_util import torch_compile
 
-# holds values used for deduplicating identical peaks
-_salt = {}
-_pepper = {}
-
 
 @torch.inference_mode()
 def detect_and_deduplicate(
@@ -28,7 +24,6 @@ def detect_and_deduplicate(
     detection_mask: Tensor | None = None,
     exclude_edges=True,
     return_energies=False,
-    dedup_salt_eps=1e-4,
 ):
     """Detect and deduplicate peaks
 
@@ -51,6 +46,9 @@ def detect_and_deduplicate(
     dedup_temporal_radius : int
         Only the largest peak within this sliding radius
         will be kept
+    remove_exact_duplicates : bool
+        When peaks tie exactly, keep only the one which comes first
+        in (time, channel) order rather than all of them
 
     Returns
     -------
@@ -58,42 +56,12 @@ def detect_and_deduplicate(
         peak times in samples relative to start of traces, along
         with corresponding channels
     """
-    T, C = traces.shape
+    T = traces.shape[0]
     all_peaks = torch.zeros_like(traces, dtype=torch.bool)
     will_dedup = bool(dedup_temporal_radius) or dedup_neighborhoods is not None
     pad = relative_peak_radius + dedup_temporal_radius
     batch_size = batch_size - 2 * pad
     assert batch_size > 0
-
-    if dedup_neighborhoods is not None and remove_exact_duplicates:
-        key = (traces.device.type, traces.device.index, C)
-        if key in _salt:
-            dedup_chans_salt = _salt[key]
-        else:
-            # favor earlier channels when deduplicating identical values (at float16 prec)
-            dedup_chans_salt = torch.linspace(
-                dedup_salt_eps, 0.0, steps=C, device=traces.device
-            )
-            _salt[key] = dedup_chans_salt = dedup_chans_salt.unsqueeze(1)
-    else:
-        dedup_chans_salt = None
-
-    if dedup_temporal_radius and remove_exact_duplicates:
-        slen = 2 * dedup_temporal_radius
-        nrep = (T // slen) + 1
-        Tp = slen * nrep
-        key = (traces.device.type, traces.device.index, Tp, dedup_temporal_radius)
-        if key in _pepper:
-            dedup_time_pepper = _pepper[key]
-        else:
-            # favor earlier times when deduplicating identical values (at float16 prec)
-            dedup_time_pepper = torch.linspace(
-                dedup_salt_eps, 0.0, steps=slen, device=traces.device
-            )
-            dedup_time_pepper = dedup_time_pepper.repeat(nrep)
-            _pepper[key] = dedup_time_pepper
-    else:
-        dedup_time_pepper = None
 
     for i0 in range(0, T, batch_size):
         i1 = min(T, i0 + batch_size)
@@ -140,17 +108,18 @@ def detect_and_deduplicate(
             continue
 
         # -- deduplicate peaks
-        if dedup_chans_salt is not None:
-            Xdd[:-1] += dedup_chans_salt
-        if dedup_time_pepper is not None:
-            Xdd[:-1] += dedup_time_pepper[i00:i11]
         mask_out = torch.logical_not(detect, out=tmp)
         Xdd[:-1].masked_fill_(mask_out, 0.0)
 
         # no-threshold max pool for deduplication
-        dedup = _is_extreme(
-            Xdd, dt=dedup_temporal_radius, neighbors=dedup_neighborhoods
-        )
+        if remove_exact_duplicates:
+            dedup = _is_unique_extreme(
+                Xdd, dt=dedup_temporal_radius, neighbors=dedup_neighborhoods
+            )
+        else:
+            dedup = _is_extreme(
+                Xdd, dt=dedup_temporal_radius, neighbors=dedup_neighborhoods
+            )
         all_peaks[i0:i1] = detect.logical_and_(dedup)[:, istart:iend].T
 
     if exclude_edges:
@@ -192,7 +161,39 @@ def _is_extreme(
 
 
 @torch_compile
-def _is_extreme_transpose_no_pad(
+def _is_unique_extreme(
+    X: Tensor,
+    dt: int = 5,
+    neighbors: Tensor | None = None,
+):
+    if neighbors is not None:
+        # CT -> C, n_neighbors, T
+        Xneighb = X[neighbors]
+        Xmax, neighb_pos = Xneighb.max(dim=1)
+        argchan = neighbors.gather(1, neighb_pos)
+    else:
+        Xmax = X[:-1]
+        argchan = None
+
+    Xmax, argtime = F.max_pool1d_with_indices(
+        Xmax[None],
+        stride=(1,),
+        kernel_size=(2 * dt + 1,),
+        padding=(dt,),
+    )
+    argtime = argtime[0]
+
+    tref = torch.arange(argtime.shape[1], device=X.device)
+    peak = argtime == tref
+    if argchan is not None:
+        cref = torch.arange(argchan.shape[0], device=X.device).unsqueeze(1)
+        peak = peak.logical_and_(argchan == cref)
+
+    return peak
+
+
+@torch_compile
+def is_extreme_transpose_no_pad(
     X: Tensor,
     dt: int = 5,
     neighbors: Tensor | None = None,
@@ -239,26 +240,85 @@ def detect_and_globally_deduplicate(
     detection_mask: Tensor | None = None,
     exclude_edges=True,
 ):
-    # copy data for threshold criterion
+    Xth = peak_sign_to_pos(traces, peak_sign)
+    peak_map = is_extreme_transpose_no_pad(
+        Xth, dt=relative_peak_radius, neighbors=peak_channel_index
+    )
+    return deduplicate_globally(
+        traces,
+        Xth,
+        peak_map,
+        threshold,
+        peak_sign=peak_sign,
+        dedup_temporal_radius=dedup_temporal_radius,
+        trough_priority=trough_priority,
+        remove_exact_duplicates=remove_exact_duplicates,
+        detection_mask=detection_mask,
+        exclude_edges=exclude_edges,
+    )
+
+
+def peak_sign_to_pos(
+    traces: Tensor, peak_sign: Literal["pos", "neg", "both"] = "neg"
+) -> Tensor:
     if peak_sign == "neg":
         Xth = traces.neg()
     elif peak_sign == "pos":
         Xth = traces.clone()
     elif peak_sign == "both":
         Xth = traces.abs()
+    else:
+        panic(peak_sign)
     Xth[:, -1].fill_(-torch.inf)
+    return Xth
 
-    detect = Xth[:, :-1] > threshold
-    peak = _is_extreme_transpose_no_pad(
-        Xth,
-        dt=relative_peak_radius,
-        neighbors=peak_channel_index,
+
+def update_peak_map(
+    peak_map: Tensor,
+    traces: Tensor,
+    starts: Tensor,
+    width: int,
+    margin: int,
+    peak_sign: Literal["pos", "neg", "both"] = "neg",
+    relative_peak_radius: int = 5,
+    peak_channel_index: Tensor | None = None,
+) -> None:
+    """Update peak_map in place where needed"""
+    T = traces.shape[0]
+    n = starts.numel()
+    offsets = torch.arange(width, device=traces.device)
+    time_ix = starts[:, None] + offsets
+
+    Xth = peak_sign_to_pos(traces[time_ix].reshape(n * width, -1), peak_sign)
+    slab_map = is_extreme_transpose_no_pad(
+        Xth, dt=relative_peak_radius, neighbors=peak_channel_index
     )
-    detect = detect.logical_and_(peak)
+    slab_map = slab_map.view(n, width, -1)
+
+    keep = ((offsets >= margin) & (offsets < width - margin)).expand(n, width).clone()
+    keep[starts == 0, :margin] = True
+    keep[starts + width == T, width - margin :] = True
+    peak_map[time_ix[keep]] = slab_map[keep]
+
+
+def deduplicate_globally(
+    traces: Tensor,
+    Xth: Tensor,
+    peak_map: Tensor,
+    threshold: float,
+    peak_sign: Literal["pos", "neg", "both"] = "neg",
+    dedup_temporal_radius=11,
+    trough_priority: float | None = None,
+    *,
+    remove_exact_duplicates=True,
+    detection_mask: Tensor | None = None,
+    exclude_edges=True,
+):
+    detect = Xth[:, :-1] > threshold
+    detect = detect.logical_and_(peak_map)
     if detection_mask is not None:
         detect.logical_and_(detection_mask)
-    tmp = peak
-    del peak
+    tmp = torch.empty_like(detect)
 
     if peak_sign == "both" and trough_priority:
         # Xdd = F.leaky_relu(traces, negative_slope=-trough_priority)

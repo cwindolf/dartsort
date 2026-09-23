@@ -91,16 +91,19 @@ from ..util.py_util import databag, panic
 from ..util.spiketorch import (
     _nonzero_static,
     cosine_distance,
+    csr_members_ordered,
     ecl,
     entropy,
     mean_elbo_dim1,
     normeuc_distance,
     scaled_normeuc_distance,
     sign,
+    sort_to_csr,
     spawn_torch_rg,
+    stratified_subsample,
 )
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage, torch_compiler
-from .cluster_util import decrumb, linkage, maximal_leaf_groups
+from .cluster_util import decrumb, linkage, maximal_leaf_groups, violation_statistics
 from .clustering_features import StableWaveformFeatures
 from .kmeans import _one_gumbel_nolog, batched_kmeans, kmeans
 
@@ -198,7 +201,14 @@ def tmm_demix(
                     min_iters=tmm.p.main_min_iters,
                 )
             elif step_type == "merge":
-                run_merge(tmm, train_data, val_data, prog_level)
+                run_merge(
+                    tmm,
+                    train_data,
+                    val_data,
+                    prog_level,
+                    full_data=full_data,
+                    original_sorting=sorting,
+                )
                 tmm.em(
                     train_data,
                     show_progress=prog_level,
@@ -830,6 +840,11 @@ class TMMParams:
     fix_responsibilities: bool
     scale_dist_args: tuple[float, float, float]
     whiten_dist: bool
+    merge_violation_threshold: float | None
+    merge_violation_ms: float
+    merge_jitter_ms: float
+    merge_censor_ms: float
+    merge_min_violation_evidence: float
 
     @classmethod
     def from_refinement_cfg(cls, refinement_cfg: RefinementConfig):
@@ -867,6 +882,11 @@ class TMMParams:
             fix_responsibilities=refinement_cfg.fix_responsibilities_in_split,
             scale_dist_args=refinement_cfg.scale_dist_args,
             whiten_dist=refinement_cfg.whiten_dist,
+            merge_violation_threshold=refinement_cfg.glom_violation_threshold,
+            merge_violation_ms=refinement_cfg.glom_violation_ms,
+            merge_jitter_ms=refinement_cfg.glom_jitter_ms,
+            merge_censor_ms=refinement_cfg.censor_ms,
+            merge_min_violation_evidence=refinement_cfg.glom_min_violation_evidence,
         )
 
 
@@ -1895,6 +1915,8 @@ class TruncatedSpikeData(BatchedSpikeData):
         gen: torch.Generator,
         labels: Tensor | None,
         min_count: int = 0,
+        min_per_neighborhood: int = 0,
+        min_per_unit: int = 0,
     ) -> DenseSpikeData | None:
         assert self.candidates is not None
         assert unit_ids is not None
@@ -1915,9 +1937,30 @@ class TruncatedSpikeData(BatchedSpikeData):
         (ixs,) = mask.nonzero(as_tuple=True)
         if min_count and ixs.numel() < min_count:
             return None
-        if (nixs := ixs.numel()) > self.dense_slice_size_per_unit * n_ids:
+        n_target = self.dense_slice_size_per_unit * n_ids
+        nixs = ixs.numel()
+        assert not (min_per_neighborhood and min_per_unit)
+        if nixs > n_target and min_per_neighborhood:
+            ixs = stratified_subsample(
+                ixs,
+                self.neighborhood_ids[ixs],
+                n_groups=self.neighborhoods.n_neighborhoods,
+                n_target=n_target,
+                min_per_group=min_per_neighborhood,
+                gen=gen,
+            )
+        elif nixs > n_target and min_per_unit:
+            ixs = stratified_subsample(
+                ixs,
+                labels[ixs],
+                n_groups=int(unit_ids.max()) + 1,
+                n_target=n_target,
+                min_per_group=min_per_unit,
+                gen=gen,
+            )
+        elif nixs > n_target:
             perm = torch.randperm(nixs, generator=gen, device=ixs.device)
-            ixs = ixs[perm[: self.dense_slice_size_per_unit * n_ids]]
+            ixs = ixs[perm[:n_target]]
             ixs = torch.msort(ixs)
 
         return self.dense_slice(ixs)
@@ -2001,17 +2044,28 @@ class TruncatedSpikeData(BatchedSpikeData):
         split_mask: Tensor,
         split_labels: Tensor,
         distances: Tensor,
-    ) -> NeighborhoodLUT:
-        """Erase candidates for spikes in the split, replace labels, re-bootstrap."""
+    ) -> tuple[NeighborhoodLUT, int]:
+        """Erase candidates for spikes in the split, replace labels, re-bootstrap.
+
+        Neighborhoods left uncovered by the split get new units, and their count is returned.
+        """
         assert self.candidates is not None
         self.candidates[:, 0].masked_fill_(unit_mask, -1)
         (split_ix,) = split_mask.nonzero(as_tuple=True)
         self.candidates[split_ix, 0] = split_labels[split_ix]
 
+        n_units = distances.shape[0]
+        n_new = self.ensure_coverage(allow_new_units=True, next_label=n_units)
+        if n_new:
+            d = distances.new_full((n_units + n_new, n_units + n_new), torch.inf)
+            d[:n_units, :n_units] = distances
+            d[n_units:, n_units:].fill_diagonal_(0.0)
+            distances = d
+
         # have to do a full bootstrap, bc it's hard to figure out what to do with
         # spikes whose candidates contain the units that were split. this way, the
         # lut invariants are maintained, and at least the top labels are the same.
-        return self.bootstrap_candidates(distances, allow_uncovered=True)
+        return self.bootstrap_candidates(distances), n_new
 
     def full_proposal_view(self, un_adj_lut: NeighborhoodLUT):
         return FullProposalDataView.from_truncated_spike_data(self, un_adj_lut)
@@ -3085,7 +3139,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # get dense train set slice in group
         split_data = train_data.dense_slice_by_unit(
-            group, gen=self.rg, min_count=self.p.min_count, labels=train_labels
+            group,
+            gen=self.rg,
+            min_count=self.p.min_count,
+            labels=train_labels,
+            min_per_neighborhood=self.p.min_channel_count,
         )
         if split_data is None and debug:
             return None, SplitCaseDebugInfo(bailed=True, bail_reason="count")
@@ -3434,7 +3492,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         view = self.unit_slice(group)
         group_train_data = train_data.dense_slice_by_unit(
-            group, gen=self.rg, labels=train_labels
+            group, gen=self.rg, labels=train_labels, min_per_unit=self.p.min_count
         )
         assert group_train_data is not None
         if pnoid:
@@ -3470,6 +3528,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_scores: Scores,
         eval_scores: Scores,
         *,
+        pair_mask: Tensor | None = None,
         show_progress: bool = True,
     ) -> UnitRemapping:
         """Break into subgroups and merge those. This will also modify data objects."""
@@ -3490,6 +3549,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             groups = progbar(groups, desc="Merge", smoothing=0.0)
 
         for group in groups:
+            group_pair_mask = None
+            if pair_mask is not None:
+                group_pair_mask = pair_mask[group[:, None], group[None, :]]
+
             group_res = self.try_merge_group(
                 group=group,
                 train_data=train_data,
@@ -3497,6 +3560,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 eval_scores=eval_scores,
                 train_labels=train_labels,
                 eval_labels=eval_labels,
+                pair_mask=group_pair_mask,
             )
 
             # no-merge cases
@@ -3523,6 +3587,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # log(new_props) = props[group].sum() * sub_props)
             group_log_prop = self.b.log_proportions[group].logsumexp(dim=0)
             new_log_props = group_res.sub_proportions.log().add_(group_log_prop)
+            new_log_props = new_log_props.clamp_(min=self.LP_MIN)
+            if pnoid and not new_log_props[groups_kept].isfinite().all():
+                raise AssertionError(
+                    f"Non-finite log proportions in merge of group {group.tolist()} "
+                    f"with partition {group_ids.tolist()}: {new_log_props=}, "
+                    f"{group_res.sub_proportions=}, {group_log_prop=}."
+                )
 
             # demolish case. throw these away.
             ids_discard = group[group_ids == -1]
@@ -3538,6 +3609,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 # else, move component to first id in group and throw rest away
                 first = ids_in_group[0]
                 rest = ids_in_group[1:]
+                if pnoid:
+                    assert first == ids_in_group.min()
 
                 # first retains id (for now, cleanup below remaps to flat)
                 result_map.mapping[ids_in_group] = first
@@ -3889,6 +3962,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             self.b.bases.resize_(new_n_units, *self.b.bases.shape[1:])
             self.b.bases[self.n_units :].zero_()
         self.n_units = new_n_units
+        self.unit_ids = torch.arange(new_n_units)
 
     def _apply_splits(
         self,
@@ -4052,9 +4126,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if pnoid:
             assert discard.mapping.max() < distances.shape[0]
             assert train_labels.max() < distances.shape[0]
-        lut = train_data.update_from_split(
+        lut, n_new = train_data.update_from_split(
             train_candidate_mask, train_labels_mask, train_labels, distances
         )
+        self.add_new_blank_units(n_new)
         self.update_lut(lut)
         assert self.lut_params is not None
         self.lut_params.check()
@@ -4641,9 +4716,9 @@ def instantiate_and_bootstrap_tmm(
     save_kwargs: dict | None = None,
 ) -> MixtureModelAndDatasets:
     global pnoid
-    pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
+    pnoid = pnoid or logger.isEnabledFor(DARTSORTVERBOSE)
     if pnoid:
-        logger.dartsortverbose("Extra TMM asserts are on.")
+        logger.info("Extra TMM asserts are on.")
 
     rg = np.random.default_rng(seed)
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -4831,7 +4906,7 @@ def truncated_kmeanspp(
     cent_visible = visible[:, cent_neighbs]
 
     full_labels = torch.full(x.shape[:1], -1, dtype=torch.long, device=device)
-    order, indptr, _ = _sort_to_compressed_neighborhood_sparse(
+    order, indptr, _ = sort_to_csr(
         neighb_ids, neighborhoods.n_neighborhoods
     )
     indptr_list = indptr.tolist()
@@ -4921,7 +4996,7 @@ def _truncated_kmeanspp_inner(
     # Initialize
     train_centroid_ixs = X.new_full((max_k,), n, dtype=torch.long)
     distsq = X.new_full((n,), torch.inf)
-    order, indptr, counts = _sort_to_compressed_neighborhood_sparse(
+    order, indptr, counts = sort_to_csr(
         Xneighbixs, n_neighb
     )
 
@@ -5046,7 +5121,7 @@ def _truncated_kmeanspp_propose(
 ) -> tuple[Tensor, Tensor | None]:
     cent_neighb = Xneighbixs[centroid_ix]
     (vis_neighbs,) = visible[cent_neighb].nonzero(as_tuple=True)
-    ix = _neighborhood_members_ordered(order, indptr, counts, vis_neighbs)
+    ix = csr_members_ordered(order, indptr, counts, vis_neighbs)
     if not ix.numel():
         return ix, None
 
@@ -5068,27 +5143,6 @@ def _truncated_kmeanspp_commit_(distsq: Tensor, ix: Tensor, d: Tensor) -> None:
     """Min-update distsq in place with a proposal's distances. Destroys d."""
     torch.minimum(distsq[ix], d, out=d)
     distsq[ix] = d
-
-
-def _sort_to_compressed_neighborhood_sparse(
-    neighborhood_ids: Tensor, n_neighborhoods: int
-) -> tuple[Tensor, Tensor, Tensor]:
-    counts = torch.bincount(neighborhood_ids, minlength=n_neighborhoods)
-    order = torch.argsort(neighborhood_ids, stable=True)
-    indptr = F.pad(counts.cumsum(0), (1, 0))
-    return order, indptr, counts
-
-
-def _neighborhood_members_ordered(
-    order: Tensor, indptr: Tensor, counts: Tensor, neighbs: Tensor
-) -> Tensor:
-    sizes = counts[neighbs]
-    total = int(sizes.sum())
-    if not total:
-        return order[:0]
-    # ragged arange over the selected CSR rows
-    starts = torch.repeat_interleave(indptr[neighbs] - sizes.cumsum(0) + sizes, sizes)
-    return order[starts + torch.arange(total, device=order.device)]
 
 
 def run_split(
@@ -5140,7 +5194,15 @@ def run_merge(
     train_data: TruncatedSpikeData,
     val_data: TruncatedSpikeData | None,
     prog_level: int,
+    full_data: BatchedSpikeData | None = None,
+    original_sorting: DARTsortSorting | None = None,
 ):
+    pair_mask = violation_pair_mask(
+        tmm=tmm,
+        full_data=full_data,
+        original_sorting=original_sorting,
+        prog_level=prog_level,
+    )
     train_scores = tmm.soft_assign(
         data=train_data,
         full_proposal_view=True,
@@ -5161,9 +5223,67 @@ def run_merge(
         val_data,
         eval_scores=eval_scores,
         train_scores=train_scores,
+        pair_mask=pair_mask,
         show_progress=prog_level > 0,
     )
     logger.info(f"Merge {merge_map.mapping.shape[0]} -> {merge_map.nuniq()} units.")
+
+
+def violation_pair_mask(
+    *,
+    tmm: TruncatedMixtureModel,
+    full_data: BatchedSpikeData | None,
+    original_sorting: DARTsortSorting | None,
+    prog_level: int,
+) -> Tensor | None:
+    """Which pairs of units are allowed to merge by the refractory violation check
+
+    Units are assigned over the whole dataset, rather than just the training
+    subset, so that the violation counts get as much evidence as possible.
+    Pairs whose jittered chance level is too small to say anything are filled
+    with a ratio of 0, which allows their merge.
+    """
+    if tmm.p.merge_violation_threshold is None:
+        return None
+    if full_data is None or original_sorting is None:
+        return None
+
+    full_scores = tmm.soft_assign(
+        data=full_data,
+        full_proposal_view=True,
+        needs_bootstrap=False,
+        show_progress=prog_level - 1,
+    )
+    sorting = original_sorting.ephemeral_replace(labels=labels_from_scores(full_scores))
+    violation = violation_statistics(
+        sorting,
+        censor_ms=tmm.p.merge_censor_ms,
+        viol_ms=tmm.p.merge_violation_ms,
+        jitter_ms=tmm.p.merge_jitter_ms,
+    )
+    assert violation.jitter_counts is not None
+    ratio = violation.jitter_viol_ratio(
+        tmm.p.merge_min_violation_evidence, fill_value=0.0
+    )
+
+    # violation_statistics sizes its matrices by the largest label present, so
+    # dead units at the end of the id range are missing. they can merge.
+    allowed = np.ones((tmm.n_units, tmm.n_units), dtype=bool)
+    nu = ratio.shape[0]
+    assert nu <= tmm.n_units
+    allowed[:nu, :nu] = ratio < tmm.p.merge_violation_threshold
+
+    # singleton parts are checked against the diagonal in allowed_partitions
+    np.fill_diagonal(allowed, True)
+
+    n_blocked = np.triu(np.logical_not(allowed), k=1).sum()
+    logger.dartsortdebug(
+        "Violation check blocks %d of %d unit pairs from merging.",
+        n_blocked,
+        (tmm.n_units * (tmm.n_units - 1)) // 2,
+    )
+
+    return torch.from_numpy(allowed)
 
 
 def save_tmm_labels(
@@ -5663,6 +5783,10 @@ def all_demolished_partitions(
             assert (
                 can_demolish_mask.shape == part.unit_ids.shape == part.group_ids.shape
             )
+        if part.subset_ids:
+            allp.append(part)
+            continue
+
         single_ixs = torch.tensor(part.single_ixs, dtype=torch.long)
         npart = single_ixs.numel()
         (part_demo_ix,) = can_demolish_mask[single_ixs].nonzero(as_tuple=True)
@@ -6875,7 +6999,7 @@ def _fill_blank_labels(
             if pnoid:
                 Kold = labels.max().item() + 1 + int(Nblank > 0)
                 _lshp = labels.unique().shape
-                assert _lshp == (Kold,), f"{Kold=} {_lshp=}"
+                assert _lshp[0] <= Kold, f"{Kold=} {_lshp=}"
             for j, nid in enumerate(uncovered_neighbs):
                 (in_nid,) = (neighborhood_ids == nid).nonzero(as_tuple=True)
                 n_spikes += in_nid.numel()

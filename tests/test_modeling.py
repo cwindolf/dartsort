@@ -10,7 +10,7 @@ from dartsort.util.internal_config import ClusteringFeaturesConfig, RefinementCo
 from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
 from dartsort.util.motion import MotionInfo
-from dartsort.util.spiketorch import get_relative_index, spawn_torch_rg
+from dartsort.util.spiketorch import get_relative_index, sort_to_csr, spawn_torch_rg
 from dartsort.util.testing_util import mixture_testing_util
 
 logger = get_logger(__name__)
@@ -263,8 +263,20 @@ def test_truncated_mixture(
             logger.info("Merge.")
             assert train_scores is not None
             assert eval_scores is not None
+            pair_mask = mixture.violation_pair_mask(
+                tmm=tmm,
+                full_data=full_data,
+                original_sorting=init_sorting,
+                prog_level=1,
+            )
+            assert pair_mask is not None
+            assert pair_mask.shape == (tmm.n_units, tmm.n_units)
             merge_map = tmm.merge(
-                train_data, val_data, train_scores=train_scores, eval_scores=eval_scores
+                train_data,
+                val_data,
+                train_scores=train_scores,
+                eval_scores=eval_scores,
+                pair_mask=pair_mask,
             )
             logger.info(f"{gt_cosines=}.")
             logger.info(f"{true_labels.unique(return_counts=True)=}.")
@@ -483,6 +495,10 @@ def test_tree_groups(K, dist_kind, max_group_size, max_distance, link):
     # check group sizes
     assert all(g.numel() <= max_group_size for g in groups)
 
+    # check ids within each group are sorted
+    for g in groups:
+        assert torch.equal(g, g.sort().values)
+
     # check that there is SOME grouping happening, if possible...
     if K > 1 and max_group_size > 1:
         min_dist = dist[*torch.triu_indices(*dist.shape, offset=1)].amin()
@@ -516,22 +532,6 @@ def test_neighb_relative_index():
             assert torch.equal(rel_inds[b][neighborhoods[a]], expected)
 
 
-def test_index_spikes_by_neighborhood():
-    ids = torch.tensor([2, 0, 2, 1, 2, 0])
-    order, indptr, counts = mixture._sort_to_compressed_neighborhood_sparse(ids, 4)
-
-    assert counts.tolist() == [2, 1, 3, 0]
-    assert indptr.tolist() == [0, 2, 3, 6, 6]
-    for j in range(4):
-        members = order[indptr[j] : indptr[j + 1]]
-        assert members.tolist() == (ids == j).nonzero()[:, 0].tolist()
-
-    got = mixture._neighborhood_members_ordered(order, indptr, counts, torch.tensor([2, 0]))
-    assert got.tolist() == [0, 2, 4, 1, 5]
-    empty = mixture._neighborhood_members_ordered(order, indptr, counts, torch.tensor([3]))
-    assert empty.numel() == 0
-
-
 def _reference_overlap_distsq(X, neighborhoods, neighborhood_ids, feat_rank, i, j):
     ci = neighborhoods[neighborhood_ids[i]].tolist()
     cj = neighborhoods[neighborhood_ids[j]].tolist()
@@ -558,7 +558,7 @@ def test_truncated_kmeanspp_step():
     rel_inds = mixture._neighb_relative_index(neighborhoods, nc)
     obs = (rel_inds < width).to(X)
     visible = (obs @ obs.T) > 0
-    order, indptr, counts = mixture._sort_to_compressed_neighborhood_sparse(ids, n_neighb)
+    order, indptr, counts = sort_to_csr(ids, n_neighb)
 
     centroids = (0, n_neighb)
     distsq = X.new_full((n,), torch.inf)

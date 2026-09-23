@@ -1010,7 +1010,8 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             recording = None
         if recording is None:
             with warnings.catch_warnings(record=True) as ws:
-                recording = self.save_to_folder(
+                recording = self.save(
+                    format="binary",
                     folder=recording_dir,
                     overwrite=True,
                     n_jobs=n_jobs or 1,

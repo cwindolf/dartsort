@@ -45,6 +45,7 @@ def test_mixture_classifier(tmp_path, simulations, drift):
                 gmm_refinement_cfg=RefinementConfig(mixture_steps=()),
             ),
         )
+        assert st is not None
         assert len(st) > 0
         assert hasattr(st, "labels")
         assert st.labels is not None
@@ -104,6 +105,7 @@ def test_mixture_classifier_motion(tmp_path, simulations, drift):
                 gmm_refinement_cfg=refinement_cfg,
             ),
         )
+        assert sorting is not None
         assert len(sorting) > 0
         assert sorting.labels is not None
 

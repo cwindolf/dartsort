@@ -602,7 +602,8 @@ def _plan_vis(
             allow_qda=allow_qda,
         )
 
-    if make_mixture_summaries is None and hasattr(sorting, "gmm_candidates"):
+    gks = ["gmm_candidates", "collisioncleaned_tpca_features"]
+    if make_mixture_summaries is None and all(hasattr(sorting, gk) for gk in gks):
         assert sorting.labels is not None
         c0 = sorting.gmm_candidates[:, 0]
         lk = np.flatnonzero(sorting.labels >= 0)

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import spikeinterface.core as sc
 import torch
+from conftest import cheap_decollider_kwargs
 from test_util import dense_layout
 
 from dartsort.localize.localize_torch import point_source_amplitude_at
@@ -108,7 +109,7 @@ def test_fakedata_nonn(fakedata, tmp_path):
     # generate fake neuropixels data with artificial templates
 
     subconf = SubtractionConfig(
-        detection_threshold=20.0,
+        voltage_threshold=20.0,
         peak_sign="both",
         subtraction_denoising_cfg=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
@@ -311,7 +312,7 @@ def test_resume(fakedata, tmp_path):
     rec, geom, T_s, fs = fakedata
 
     subconf = SubtractionConfig(
-        detection_threshold=20.0,
+        voltage_threshold=20.0,
         peak_sign="both",
         subtraction_denoising_cfg=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
@@ -405,7 +406,7 @@ def little_recording(T_samples=30_200, n_channels=50):
 
 def smallcfgs(denoise_before_localization=False, nn_localization=True):
     subconf = SubtractionConfig(
-        detection_threshold=40.0,
+        voltage_threshold=40.0,
         subtraction_denoising_cfg=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
         ),
@@ -509,6 +510,109 @@ def test_denoise_before_localization(tmp_path, nn_localization):
             assert h5["point_source_localizations"].shape in [(ns, 4), (ns, 3)]  # type: ignore[reportAttributeAccessIssue]
             assert "collisioncleaned_tpca_features" in h5
             assert "denoised_ptp_amplitudes" in h5
+
+
+def score_net_cfgs(score_net_pt, score_proposal_threshold):
+    subconf = SubtractionConfig(
+        subtraction_denoising_cfg=FeaturizationConfig(
+            denoise_only=True,
+            do_nn_denoise=True,
+            nn_denoiser_class_name="Decollider",
+            nn_denoiser_pretrained_path=str(score_net_pt),
+            score_filter_radius_um=35.0,
+            do_tpca_denoise=False,
+            **cheap_decollider_kwargs,  # ty: ignore[invalid-argument-type]
+        ),
+        detection_proposal="score_net",
+        score_proposal_threshold=score_proposal_threshold,
+        first_denoiser_thinning=0.0,
+        max_iter=15,
+        whiten=False,
+    )
+    return subconf, FeaturizationConfig(nn_localization=False)
+
+
+def test_score_net_proposals(tmp_path, mini_simulations, score_net_pt):
+    rec = mini_simulations["driftn_szmini"]["recording"]
+    subconf, featconf = score_net_cfgs(score_net_pt, score_proposal_threshold=4.0)
+
+    peeler = SubtractionPeeler.from_config(
+        recording=rec,
+        waveform_cfg=WaveformConfig(),
+        subtraction_cfg=subconf,
+        featurization_cfg=featconf,
+        sampling_cfg=FitSamplingConfig(n_residual_snips=512),
+    )
+    assert not peeler.peeling_needs_fit()
+    peeler.audit_patches = True
+    peeler.eval()
+
+    proposer = peeler.chunk_subtracter.proposer
+    assert type(proposer).__name__ == "MatchedFilterProposer"
+
+    chunk, _, left_margin, right_margin = peeler.get_chunk(0)
+    with torch.no_grad():
+        result = peeler.peel_chunk(
+            chunk,
+            left_margin=left_margin,
+            right_margin=right_margin,
+            return_waveforms=False,
+        )
+    assert result["n_spikes"] > 0
+    assert proposer.field is None and proposer.peak_map is None
+
+
+@pytest.mark.parametrize("proposal", ["tpca", "vq"])
+def test_linear_filter_proposals(fakedata, tmp_path, proposal):
+    rec, _geom, _T_s, _fs = fakedata
+    subconf = SubtractionConfig(
+        detection_proposal=proposal,
+        proposal_filters=2,
+        voltage_threshold=20.0,
+        score_proposal_threshold=20.0,
+        subtraction_denoising_cfg=FeaturizationConfig(
+            do_nn_denoise=False, denoise_only=True, score_filter_radius_um=35.0
+        ),
+        first_denoiser_thinning=0.0,
+        first_denoiser_spatial_jitter=0,
+        first_denoiser_temporal_jitter=0,
+        whiten=False,
+        max_iter=15,
+    )
+    featconf = FeaturizationConfig(do_nn_denoise=False, do_localization=False)
+    peeler = SubtractionPeeler.from_config(
+        recording=rec,
+        waveform_cfg=WaveformConfig(),
+        subtraction_cfg=subconf,
+        featurization_cfg=featconf,
+        sampling_cfg=FitSamplingConfig(n_residual_snips=8),
+    )
+    assert peeler.p.subtraction_denoising_cfg.score_filter_radius_um is None
+    assert type(peeler.chunk_subtracter.proposer).__name__ == "GlobalPeakProposer"
+
+    peeler.load_or_fit_and_save_models(tmp_path)
+    filters = peeler.b.proposal_filters
+    assert filters is not None
+    assert 1 <= filters.shape[0] <= 2
+    assert filters.shape[1] == 61
+    assert torch.allclose(filters.norm(dim=1), torch.ones(len(filters)), atol=1e-5)
+
+    peeler.audit_patches = True
+    peeler.eval()
+    proposer = peeler.chunk_subtracter.proposer
+    assert type(proposer).__name__ == "LinearMatchedFilterProposer"
+    assert proposer.reduction == ("sum" if proposal == "tpca" else "max")
+
+    chunk, _, left_margin, right_margin = peeler.get_chunk(0)
+    with torch.no_grad():
+        result = peeler.peel_chunk(
+            chunk,
+            left_margin=left_margin,
+            right_margin=right_margin,
+            return_waveforms=False,
+        )
+    assert result["n_spikes"] > 0
+    assert proposer.field is None and proposer.peak_map is None
 
 
 @pytest.mark.parametrize("nn_localization", [True])

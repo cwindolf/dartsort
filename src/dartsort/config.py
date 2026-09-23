@@ -32,13 +32,26 @@ class DARTsortUserConfig:
     do_motion_estimation: bool = True
     """Set this to false if your data is super stable or already motion-corrected."""
 
-    preprocessing: PreprocessingStrategy = "none"
-    """If other than `'none'`, dartsort will apply some preprocessing to the
-    recording. Leave as `'none'` if you are passing in an already-preprocesed
-    recording. If so, be aware that dartsort expects its input to be standardized on
-    each channel in addition to the usual highpass filtering, but that
-    whitening is handled internally. See util/preprocess_util.py if you're
-    curious about the details of the methods.
+    already_preprocessed: Literal["yes", "no", "assume_yes_if_float"] = (
+        "assume_yes_if_float"
+    )
+    """Is your data already preprocessed?
+
+    If so, the preprocessing flag below is ignored. By default, the recording is
+    assumed to be preprocessed already (including standardization) if its data
+    type is any floating point type.
+
+    dartsort will warn you if the data looks weird according to some simple checks
+    (see check_recording in data_util and warn_about_preprocessing in
+    preprocess_util).
+    """
+
+    preprocessing: PreprocessingStrategy = "ibllikecmr"
+    """If other than `'none'`, and following the already_preprocessed flag above,
+    dartsort will apply some preprocessing to the recording. Be aware that
+    dartsort expects its input to be standardized on each channel in addition to
+    the usual highpass filtering, but that whitening is handled internally. See
+    util/preprocess_util.py if you're curious about the details of the methods.
 
     Options: `'ibllikecmr', 'ibllike', 'standardize', 'none'`
     """
@@ -263,6 +276,10 @@ class DeveloperConfig(DARTsortUserConfig):
     nn_denoiser_max_waveforms_fit: int = 512_000
     nn_denoiser_noise_waveforms: int = 100 * 256
     nn_denoiser_extra_kwargs: dict | None = None
+    score_filter_radius_um: float = 0.0
+    detection_proposal: Literal["voltage", "tpca", "vq", "score_net"] = "voltage"
+    proposal_filters: int = 1
+    score_proposal_threshold: float = 5.0
     do_tpca_denoise: bool = True
     first_denoiser_thinning: float = 0.0
     first_denoiser_spatial_dedup_radius: float = 100.0

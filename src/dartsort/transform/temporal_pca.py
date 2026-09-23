@@ -104,44 +104,17 @@ class BaseTemporalPCA(BaseWaveformModule):
         channels,
         **spike_data,
     ):
-        weights = spike_data.get("weights")
-        time_shifts = spike_data.get("time_shifts")
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
-        del spike_data
-        rg = np.random.default_rng(self.random_seed)
-        if weights is not None and waveforms.shape[0] > self.max_waveforms:
-            weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
-            weights = weights.astype(np.float64)
-            weights = weights / weights.sum()
-            choices = rg.choice(len(weights), p=weights, size=self.max_waveforms)
-            choices.sort()
-            choices = torch.from_numpy(choices)
-            waveforms = waveforms[choices]
-            channels = channels[choices]
-        elif waveforms.shape[0] > self.max_waveforms:
-            choices = rg.choice(len(channels), size=self.max_waveforms)
-            choices.sort()
-            choices = torch.from_numpy(choices)
-            waveforms = waveforms[choices]
-            channels = channels[choices]
-        waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
-        self.dtype = waveforms.dtype
-        channels = channels.to(device=waveforms.device)
-        if self.fit_radius is not None:
-            waveforms, train_channel_index = channel_subset_by_radius(
-                waveforms,
-                channels,
-                self.channel_index.to(device=waveforms.device),
-                self.geom.to(device=waveforms.device),
-                self.fit_radius,
-            )
-        else:
-            train_channel_index = self.b.channel_index.to(waveforms.device)
-        _, waveforms_fit = get_channels_in_probe(
-            waveforms, channels, train_channel_index
+        waveforms_fit = self.extract_snippets(
+            waveforms,
+            channels,
+            weights=spike_data.get("weights"),
+            time_shifts=spike_data.get("time_shifts"),
         )
+        del spike_data
+        self.dtype = waveforms_fit.dtype
 
         if self.centered:
             mean = waveforms_fit.mean(0)
@@ -176,6 +149,49 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def needs_fit(self):
         return self._needs_fit
+
+    def extract_snippets(
+        self, waveforms, channels, *, weights=None, time_shifts=None
+    ) -> torch.Tensor:
+        rg = np.random.default_rng(self.random_seed)
+        if waveforms.shape[0] > self.max_waveforms:
+            if weights is not None:
+                weights = (
+                    weights.numpy(force=True) if torch.is_tensor(weights) else weights
+                )
+                weights = weights.astype(np.float64)
+                weights = weights / weights.sum()
+                choices = rg.choice(len(weights), p=weights, size=self.max_waveforms)
+            else:
+                choices = rg.choice(len(channels), size=self.max_waveforms)
+            choices.sort()
+            choices = torch.from_numpy(choices)
+            waveforms = waveforms[choices]
+            channels = channels[choices]
+            if time_shifts is not None:
+                time_shifts = time_shifts[choices.to(time_shifts.device)]
+        waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
+        channels = channels.to(device=waveforms.device)
+        if self.fit_radius is not None:
+            waveforms, train_channel_index = channel_subset_by_radius(
+                waveforms,
+                channels,
+                self.channel_index.to(device=waveforms.device),
+                self.geom.to(device=waveforms.device),
+                self.fit_radius,
+            )
+        else:
+            train_channel_index = self.b.channel_index.to(waveforms.device)
+        _, snippets = get_channels_in_probe(waveforms, channels, train_channel_index)
+        return snippets
+
+    @property
+    def filter_trough_offset(self) -> int:
+        assert self.trough_offset_samples is not None
+        start = 0
+        if self.temporal_slice is not None and self.temporal_slice.start is not None:
+            start = self.temporal_slice.start
+        return self.trough_offset_samples - start
 
     def _temporal_slice(
         self, waveforms: torch.Tensor, time_shifts=None

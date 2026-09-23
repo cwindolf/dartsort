@@ -271,6 +271,33 @@ def get_channel_index_rel_inds(channel_index: torch.Tensor):
     return index_inds
 
 
+def channel_index_to_mask(channel_index: torch.Tensor) -> torch.Tensor:
+    n_channels = channel_index.shape[0]
+    mask = torch.zeros(
+        n_channels, n_channels + 1, dtype=torch.bool, device=channel_index.device
+    )
+    mask.scatter_(1, channel_index, True)
+    return mask[:, :n_channels]
+
+
+def compose_channel_index(
+    left: torch.Tensor, right: torch.Tensor
+) -> torch.Tensor:
+    n_channels = left.shape[0]
+    assert right.shape[0] == n_channels
+
+    meets = channel_index_to_mask(left).float() @ channel_index_to_mask(right).float().T
+    meets = meets > 0
+
+    width = int(meets.sum(1).max())
+    composed = torch.full(
+        (n_channels, width), n_channels, dtype=left.dtype, device=left.device
+    )
+    rows, cols = meets.nonzero(as_tuple=True)
+    composed[rows, meets.cumsum(1)[rows, cols] - 1] = cols.to(left.dtype)
+    return composed
+
+
 def make_regular_channel_index(geom, radius, p=2, to_torch=False, depth_only=True):
     """Channel index for multi-channel models
 

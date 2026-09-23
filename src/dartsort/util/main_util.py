@@ -3,7 +3,7 @@ import shutil
 from collections.abc import Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import numpy as np
 from spikeinterface.core import BaseRecording, get_global_job_kwargs
@@ -171,7 +171,10 @@ def ds_all_to_workdir(
                 "set_global_job_kwargs() for better control of this step."
             )
             job_kw = {}
-        recording = recording.save_to_folder(str(rec_dir), **job_kw)
+        recording = cast(
+            BaseRecording,
+            recording.save(format="binary", folder=rec_dir, **job_kw),
+        )
 
     if not internal_cfg.work_in_tmpdir:
         return recording, None
@@ -465,7 +468,7 @@ def ds_fast_forward(
 
 
 def _matching_step_cfgs(
-    is_final: bool, is_subsampling: bool, cfg: DARTsortInternalConfig
+    is_final: bool, cfg: DARTsortInternalConfig
 ) -> tuple[
     ClusteringConfig | None,
     ClusteringFeaturesConfig,
@@ -473,48 +476,21 @@ def _matching_step_cfgs(
     FeaturizationConfig,
     FitSamplingConfig,
 ]:
-    clus_cfg = cfg.clustering_cfg if cfg.recluster_after_matching else None
-    gmm_as_classifier = (
-        is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "tmm"
-    )
     ref_cfgs: list[RefinementConfig | None]
-    if gmm_as_classifier:
-        gmm_clus_cfg = clus_cfg
+    if cfg.use_gmm_classifier(is_final):
         clus_cfg = None
+        clfeat_cfg = cfg.matching_classifier_clustering_features_cfg
         ref_cfgs = list(cfg.final_refinement_cfgs)
+        feat_cfg = cfg.matching_classifier_featurization_cfg
+        samp_cfg = cfg.refinement_cfg.sampling_cfg
     else:
-        gmm_clus_cfg = None
+        clus_cfg = cfg.clustering_cfg if cfg.recluster_after_matching else None
+        clfeat_cfg = cfg.clustering_features_cfg
         ref_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg]
         if is_final:
             ref_cfgs.extend(cfg.final_refinement_cfgs)
         else:
             ref_cfgs.extend(cfg.post_refinement_cfgs)
-    clfeat_cfg = cfg.clustering_features_cfg
-
-    if gmm_as_classifier and ref_cfgs:
-        still_need_projs_saved = (
-            cfg.recluster_after_matching or cfg.always_save_detailed_features
-        )
-        feat_cfg = replace(
-            cfg.featurization_cfg,
-            save_input_tpca_projs=still_need_projs_saved,
-            compute_input_tpca_projs_regardless=True,
-            use_gmm_classifier=True,
-            pre_gmm_clustering_cfg=gmm_clus_cfg,
-            gmm_clustering_features_cfg=cfg.clustering_features_cfg,
-            save_amplitude_vectors=cfg.always_save_detailed_features,
-            pre_gmm_refinement_cfgs=[cfg.pre_refinement_cfg],
-            gmm_refinement_cfg=cfg.refinement_cfg,
-        )
-        samp_cfg = cfg.refinement_cfg.sampling_cfg
-        assert clus_cfg is None
-        if not still_need_projs_saved:
-            clfeat_cfg = replace(
-                cfg.clustering_features_cfg,
-                n_main_channel_pcs=0,
-                n_multi_channel_pcs=0,
-            )
-    else:
         feat_cfg = cfg.featurization_cfg
         samp_cfg = cfg.peeler_sampling_cfg
 

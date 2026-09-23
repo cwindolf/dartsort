@@ -419,6 +419,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             )
         sampler = BatchSampler(sampler, batch_size=self.batch_size, drop_last=True)
         dataloader = DataLoader(dataset, sampler=sampler)
+        self.train()
+        for param in self.parameters():
+            param.requires_grad = True
         optimizer = torch.optim.Adam(
             self.parameters(), lr=self.learning_rate, fused=self.fused_opt
         )
@@ -429,7 +432,6 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         val_dataset = TensorDataset(val_amps, val_channels)
         val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
 
-        self.train()
         best_val = None
         best_state = None
         n_no_improve = 0
