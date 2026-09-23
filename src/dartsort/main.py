@@ -140,7 +140,7 @@ def dartsort(
     ds_handle_link_from(cfg, output_dir)
 
     # preprocess
-    copy_rec_flag = ds_will_copy_recording(cfg)
+    copy_rec_flag = ds_will_copy_recording(cfg, recording)
     recording = preprocess(
         recording, cfg.preprocessing, cfg.already_preprocessed, cfg.preprocessing_dtype
     )

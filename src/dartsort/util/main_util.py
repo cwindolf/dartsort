@@ -118,8 +118,17 @@ def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
     logger.info(f"Recorded config to {json_path}.")
 
 
-def ds_will_copy_recording(internal_cfg: DARTsortInternalConfig):
+def ds_will_copy_recording(internal_cfg: DARTsortInternalConfig, recording: BaseRecording):
     if internal_cfg.copy_recording_to_tmpdir == "if_preprocessing":
+        if internal_cfg.already_preprocessed == "yes":
+            return False
+        elif internal_cfg.already_preprocessed == "assume_yes_if_float":
+            if recording.dtype.kind == "f":
+                return False
+        elif internal_cfg.already_preprocessed == "no":
+            return True
+        else:
+            panic(internal_cfg.already_preprocessed)
         return internal_cfg.preprocessing != "none"
     elif internal_cfg.copy_recording_to_tmpdir == "yes":
         return True
@@ -140,7 +149,7 @@ def ds_all_to_workdir(
     sort_subdir="dartsort",
 ) -> tuple[BaseRecording, Path | None]:
     """Copy stuff to temporary working directory, if there is one."""
-    copy_rec = ds_will_copy_recording(internal_cfg)
+    copy_rec = ds_will_copy_recording(internal_cfg, recording)
 
     if work_dir is None:
         assert not internal_cfg.work_in_tmpdir
