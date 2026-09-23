@@ -145,8 +145,8 @@ def ensure_path(
     p = p.absolute()
     if resolve:
         p = p.resolve(strict=strict)
-    elif strict:
-        assert p.exists()
+    elif strict and not p.exists():
+        raise FileNotFoundError(f"{p} does not exist.")
     if mkdir:
         p.mkdir(parents=parents, exist_ok=True)
     return p

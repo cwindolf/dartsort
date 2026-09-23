@@ -132,7 +132,7 @@ def dartsort(
         return ds_res
 
     # convert cfg to internal format and store it for posterity
-    cfg = to_internal_config(cfg, recording.get_num_channels())
+    cfg = to_internal_config(cfg)
     ds_dump_config(cfg, output_dir)
 
     # in benchmarking, it can be useful to resume from initial detection
@@ -254,7 +254,7 @@ def _dartsort_impl(
 
     if next_step == 0:
         # first step: initial detection and motion estimation
-        is_final = cfg.detect_only or cfg.dredge_only or not cfg.matching_iterations
+        is_final = cfg.dredge_only or not cfg.matching_iterations
         with timer("initial_detection", ret["timing"]):
             sorting = initial_detection(
                 output_dir=store_dir,
@@ -269,10 +269,6 @@ def _dartsort_impl(
         assert sorting is not None
         logger.info(f"Initial detection: {sorting}")
         ds_save_features(cfg, sorting, output_dir, work_dir, is_final=is_final)
-
-        if cfg.detect_only:
-            ret["sorting"] = sorting
-            return ret
 
         with timer("motion", ret["timing"]):
             if motion is None:
