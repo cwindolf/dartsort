@@ -55,7 +55,8 @@ def get_background_recording(
         return recording.save_to_memory(n_jobs=1)
     if noise_kind == "white":
         assert noise_recording_folder is not None
-        return recording.save_to_folder(
+        return recording.save(
+            format="binary",
             folder=noise_recording_folder,
             n_jobs=1,
             overwrite=overwrite,
@@ -83,12 +84,14 @@ def get_background_recording(
 
     # white noise must be cached before convolving
     with tempfile.TemporaryDirectory() as tdir:
-        recording = recording.save_to_folder(
+        recording = recording.save(
+            format="binary",
             folder=Path(tdir) / "noiserecording",
             n_jobs=1,
         )
         recording = UnwhitenPreprocessor(noise, recording)
-        recording = recording.save_to_folder(
+        recording = recording.save(
+            format="binary",
             folder=noise_recording_folder,
             n_jobs=n_jobs or 1,
             pool_engine="thread",
