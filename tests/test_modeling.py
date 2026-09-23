@@ -51,6 +51,25 @@ def moppca_simulations():
     return simulations
 
 
+low_k_values = (1, 2)
+
+
+@pytest.fixture(scope="module")
+def low_k_simulations():
+    return {
+        K: mixture_testing_util.simulate_moppca(
+            K=K,
+            t_mu="smooth",
+            t_cov="eye",
+            t_w="smooth",
+            t_missing="by_cluster",
+            rank=TEST_RANK,
+            rg=SEED,
+        )
+        for K in low_k_values
+    }
+
+
 @pytest.mark.parametrize("t_mu", ["smooth"])
 @pytest.mark.parametrize("t_cov_zrad", [("eye", 2.0), ("random", None)])
 # @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
@@ -381,6 +400,126 @@ def test_truncated_mixture(
             wcmask = cmask[:, None, :, None, None] * cmask[:, None, None, None, :]
             diff.mul_(wcmask)
         assert torch.all(diff.abs().view(K, -1).amax(dim=1) <= zw * standard_error)
+
+
+@pytest.mark.parametrize("K", low_k_values)
+def test_truncated_mixture_low_k(low_k_simulations, K):
+    mixture.pnoid = True
+
+    sim = low_k_simulations[K]
+    assert sim["K"] == K
+    true_labels = sim["labels"]
+    init_sorting = sim["init_sorting"]
+    n_candidates = K + 3
+
+    rg = np.random.default_rng(0)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+    clu_feat_cfg = ClusteringFeaturesConfig(feature_rank=TEST_RANK)
+    ref_cfg = RefinementConfig(
+        refinement_strategy="tmm",
+        signal_rank=sim["M"],
+        n_candidates=n_candidates,
+        em_converged_atol=1e-4,
+    )
+    no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
+
+    neighb_cov, erp, train_data, val_data, full_data, noise, *_ = (
+        mixture.get_truncated_datasets(
+            sorting=init_sorting,
+            motion=no_motion,
+            clustering_features_cfg=clu_feat_cfg,
+            refinement_cfg=ref_cfg,
+            device=device,
+            rg=rg,
+            noise=sim["noise"],
+            stable_features=sim["data"],
+        )
+    )
+    assert full_data is not None
+    tmm = mixture.TruncatedMixtureModel.from_config(
+        noise=noise,
+        erp=erp,
+        neighb_cov=neighb_cov,
+        train_data=train_data,
+        refinement_cfg=ref_cfg,
+        seed=rg,
+    )
+    lut = train_data.bootstrap_candidates(tmm.unit_distance_matrix())
+    tmm.update_lut(lut)
+
+    # em, split, merge
+    for step in ("em", "split", "merge"):
+        if step != "em":
+            train_scores = tmm.soft_assign(
+                data=train_data, full_proposal_view=True, needs_bootstrap=False
+            )
+            assert val_data is not None
+            eval_scores = tmm.soft_assign(
+                data=val_data, full_proposal_view=True, needs_bootstrap=False
+            )
+        if step == "split":
+            split_res = tmm.split(
+                train_data, val_data, train_scores=train_scores, eval_scores=eval_scores
+            )
+            assert split_res.n_new_units == 0
+        if step == "merge":
+            pair_mask = mixture.violation_pair_mask(
+                tmm=tmm,
+                full_data=full_data,
+                original_sorting=init_sorting,
+                prog_level=1,
+            )
+            assert pair_mask is not None
+            assert pair_mask.shape == (K, K)
+            merge_map = tmm.merge(
+                train_data,
+                val_data,
+                train_scores=train_scores,
+                eval_scores=eval_scores,
+                pair_mask=pair_mask,
+            )
+            assert merge_map.nuniq() == K
+
+        em_res = tmm.em(train_data)
+        assert tmm.n_units == K
+        assert tmm.unit_ids.shape[0] == K
+        assert np.diff(em_res.elbos).min(initial=0.0) >= -TMM_ELBO_ATOL
+
+        scores = tmm.soft_assign(
+            data=full_data, full_proposal_view=True, needs_bootstrap=False
+        )
+        soft_assign_labels = scores.candidates[:, 0].cpu()
+        acc = (true_labels == soft_assign_labels).double().mean().item()
+        assert acc >= 0.995
+
+    # code path which is hit in mixture classifier
+    neighborhood_ids = full_data.neighborhood_ids.to(device)
+    neighb_candidates = tmm.lut.full_proposal_candidates().to(device)
+    assert neighb_candidates.shape[1] < n_candidates
+    candidates = neighb_candidates[neighborhood_ids]
+    labels, scores = tmm.score_features(
+        features=full_data.x.to(device),
+        candidates=candidates,
+        neighborhood_ids=neighborhood_ids,
+        n_candidates=n_candidates,
+        candidate_count=int((candidates >= 0).sum().item()),
+        duties=None,
+    )
+    N = true_labels.shape[0]
+    assert scores.candidates.shape == (N, n_candidates)
+    assert scores.log_liks.shape == (N, n_candidates + 1)
+    assert scores.responsibilities.shape == (N, n_candidates + 1)
+    assert torch.equal(
+        scores.candidates >= 0, scores.log_liks[:, :-1].isfinite()
+    )
+    assert not scores.log_liks.isnan().any()
+    assert not scores.log_liks.isposinf().any()
+    assert not scores.responsibilities.isnan().any()
+    resp_sums = scores.responsibilities.sum(dim=1)
+    assert torch.allclose(resp_sums, torch.ones_like(resp_sums))
+    assert torch.equal(scores.candidates[:, 0].cpu(), soft_assign_labels)
+    assert torch.equal(labels.cpu(), mixture.labels_from_scores_(scores).cpu())
 
 
 

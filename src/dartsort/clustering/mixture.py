@@ -5518,11 +5518,10 @@ def tree_groups(
     distances: Tensor, max_group_size: int, max_distance: float, link="complete"
 ) -> list[Tensor]:
     """Extract groups up to size max_group_size and (@link-linked) distances out to size max_distance."""
-    device = distances.device
     k = distances.shape[0]
     if k <= max_group_size and distances.max() <= max_distance:
         # this would be common when splitting.
-        return [torch.arange(k, device=device)]
+        return [torch.arange(k)]
 
     if pnoid:
         assert not distances.isnan().any()
@@ -7054,6 +7053,9 @@ def _bootstrap_top(
     gen: torch.Generator,
     batch_size: int = 1024,
 ):
+    if n_candidates == 1:
+        return
+
     # use a un_adj_lut index-dependent probability here to avoid re-using
     # the current label
     p = un_adj.T[un_adj_lut.b.neighb_ids]
@@ -7751,8 +7753,13 @@ def _score_batch(
         )
 
     if do_resp:
-        toplls, topinds = torch.topk(lls[:, :-1], n_candidates, dim=1)
+        n_top = min(n_candidates, Ctot)
+        toplls, topinds = torch.topk(lls[:, :-1], n_top, dim=1)
         candidates = candidates.take_along_dim(indices=topinds, dim=1)
+        if n_top < n_candidates:
+            n_pad = n_candidates - n_top
+            toplls = F.pad(toplls, (0, n_pad), value=-torch.inf)
+            candidates = F.pad(candidates, (0, n_pad), value=-1)
         toplls = torch.concatenate((toplls, lls[:, -1:]), dim=1)
     else:
         toplls = lls
