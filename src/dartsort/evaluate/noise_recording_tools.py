@@ -52,7 +52,7 @@ def get_background_recording(
         return recording
 
     if noise_kind == "white" and in_memory:
-        return recording.save_to_memory(n_jobs=1)
+        return recording.save(format="memory", n_jobs=1)
     if noise_kind == "white":
         assert noise_recording_folder is not None
         return recording.save(
