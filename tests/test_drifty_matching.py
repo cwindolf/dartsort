@@ -4,9 +4,13 @@ import torch
 import torch.nn.functional as F
 
 from dartsort.peel.matching_util import drifty
+from dartsort.peel.matching_util.matching_base import (
+    MatchingPeaks,
+    subtract_precomputed_pconv,
+)
 from dartsort.util.testing_util import matching_debug_util
 
-test_K = 11
+test_K = 11  # noqa: N816
 test_template_nc = [1, 4]
 
 
@@ -28,7 +32,7 @@ def test_shared_temporal_pconv(K, up):
 @pytest.mark.parametrize("nc", [1, 5, -1])
 @pytest.mark.parametrize("up", [1, 2, 4, 16])
 @pytest.mark.parametrize("K", [1, 2, 5])
-def test_full_shared_pconv(K, up, nc, rank, t):
+def test_kron_pconv(K, up, nc, rank, t):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rg = np.random.default_rng(0)
 
@@ -93,9 +97,10 @@ def test_full_shared_pconv(K, up, nc, rank, t):
         "ipc,pqul,jqc->ijul", spatial_sing_, tconv1_, spatial_sing_
     )
     full_pconv1 = full_pconv1_.numpy(force=True)
-    full_pconv2_ = drifty.full_shared_pconv(
-        tconv1_, spatial_sing_, batch_size=max(2, K // 2)
-    )
+    sgram_ = drifty.spatial_gram(spatial_sing_, batch_size=max(2, K // 2))
+    assert sgram_.shape == (K, K, rank * rank)
+    up_major_tconv_ = tconv1_.permute(2, 0, 1, 3).reshape(up, rank * rank, -1)
+    full_pconv2_ = torch.einsum("bak,jkl->abjl", sgram_, up_major_tconv_)
     full_pconv2 = full_pconv2_.numpy(force=True)
 
     if ortho:
@@ -112,6 +117,54 @@ def test_full_shared_pconv(K, up, nc, rank, t):
     np.testing.assert_allclose(
         full_pconv0, full_pconv2, atol=4 * max(pconv_atol, gpu_pconv_atol, 5e-7)
     )
+
+    # conv updates agree with dense pconv
+    n_spikes = 6
+    conv_len = 8 * t
+    conv_lags = torch.arange(-t + 1, t, device=device)
+    for with_up_scale in (False, True):
+        times = rg.integers(0, conv_len - 2 * t, size=n_spikes)
+        peaks = MatchingPeaks(
+            times=torch.asarray(times, device=device),
+            template_inds=torch.asarray(rg.integers(K, size=n_spikes), device=device),
+            up_inds=(
+                torch.asarray(rg.integers(up, size=n_spikes), device=device)
+                if with_up_scale
+                else None
+            ),
+            scalings=(
+                torch.asarray(rg.uniform(0.5, 1.5, size=n_spikes), device=device).float()
+                if with_up_scale
+                else None
+            ),
+            scores=torch.zeros(n_spikes, device=device),
+        )
+        conv_dense = torch.zeros((K, conv_len), device=device)
+        subtract_precomputed_pconv(
+            conv=conv_dense,
+            pconv=full_pconv1_,
+            peaks=peaks,
+            conv_lags=conv_lags,
+            sign=-1,
+            padding=t,
+            batch_size=max(2, K // 2),
+        )
+        conv_kron = torch.zeros((K, conv_len), device=device)
+        drifty._subtract_kron_pconv(
+            conv=conv_kron,
+            sgram=sgram_,
+            up_major_tconv=up_major_tconv_,
+            peaks=peaks,
+            padded_conv_lags=t + conv_lags,
+            sign=-1,
+            batch_size=max(2, K // 2),
+        )
+        conv_dense = conv_dense.numpy(force=True)
+        conv_kron = conv_kron.numpy(force=True)
+        assert np.abs(conv_dense).max() > 0
+        np.testing.assert_allclose(
+            conv_kron, conv_dense, atol=1e-5 * np.abs(conv_dense).max()
+        )
 
 
 @pytest.mark.parametrize("deg", [1, 2, 3])

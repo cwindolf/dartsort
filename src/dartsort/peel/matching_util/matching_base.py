@@ -209,12 +209,8 @@ class ChunkTemplateData:
     def unsubtract(self, traces: Tensor, peaks: "MatchingPeaks"):
         return self.subtract(traces, peaks, sign=1)
 
-    def unsubtract_conv(
-        self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=256
-    ):
-        return self.subtract_conv(
-            conv=conv, peaks=peaks, padding=padding, batch_size=batch_size, sign=1
-        )
+    def unsubtract_conv(self, conv: Tensor, peaks: "MatchingPeaks", padding=0):
+        return self.subtract_conv(conv=conv, peaks=peaks, padding=padding, sign=1)
 
     def obj_from_conv(
         self,
