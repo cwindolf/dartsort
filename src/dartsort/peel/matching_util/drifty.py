@@ -10,11 +10,12 @@ Features
 
 Strategy
  - Pre-compute the convolutions of all pairs of temporal basis elements
-   across all pairs of units
-   - This is shared if the template basis is shared
- - Read off the pairwise convolutions by multiplication with the spatial basis
-   as needed
-   - This can be precomputed if there's no drift
+   (shared across units, since the template basis is shared)
+ - Pre-compute all pairs of units' inner products spatial components,
+   for each rank pair
+   - This is recomputed per chunk if there's drift
+ - Form the pairwise convolutions needed by each subtraction from these
+   two factors
 
 Coarse-to-fine approach
  - Objective is amplitude-scaled but not temporally upsampled
@@ -56,15 +57,10 @@ from ...util.logging_util import get_logger
 from ...util.motion import MotionInfo
 from ...util.noise_util import Whitener
 from ...util.py_util import databag, panic
-from ...util.spiketorch import full_shared_pconv, shared_temporal_pconv
+from ...util.spiketorch import shared_temporal_pconv, spatial_gram
 from ...util.torch_util import torch_compiler
 from ...util.waveform_util import upsample_singlechan_torch
-from .matching_base import (
-    ChunkTemplateData,
-    MatchingPeaks,
-    MatchingTemplates,
-    subtract_precomputed_pconv,
-)
+from .matching_base import ChunkTemplateData, MatchingPeaks, MatchingTemplates
 
 logger = get_logger(__name__)
 
@@ -149,6 +145,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
             conv_up_temporal_comps = up_temporal_comps
             norm_discount = None
         tconv = shared_temporal_pconv(conv_temporal_comps, conv_up_temporal_comps)
+        # up, rank * rank, lags
+        up_major_tconv = tconv.permute(2, 0, 1, 3).reshape(up_factor, rank * rank, -1)
 
         assert temporal_comps.shape == (rank, self.spike_length_samples)
         self.register_buffer("conv_temporal_comps", conv_temporal_comps.contiguous())
@@ -161,7 +159,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         up_major_temporal_comps = up_temporal_comps.permute(1, 0, 2).contiguous()
         self.register_buffer_or_none("up_major_temporal_comps", up_major_temporal_comps)
         self.register_buffer("spatial_sing", spatial_sing.contiguous())
-        self.register_buffer("tconv", tconv)
+        self.register_buffer("up_major_tconv", up_major_tconv.contiguous())
         if unit_ids is None:
             unit_ids = torch.arange(self.n_units, device=device)
         self.register_buffer("unit_ids", unit_ids)
@@ -188,17 +186,14 @@ class DriftyMatchingTemplates(MatchingTemplates):
             conv_spatial_sing = conv_spatial_sing.contiguous()
         self.register_buffer_or_none("conv_spatial_sing", conv_spatial_sing)
 
-        # full pconv can be precomputed when not interpolating
-        if not self.interpolating:
-            if self.whiten_strategy == "postwhiten":
-                pconv = full_shared_pconv(self.b.tconv, self.b.spatial_sing)
-            elif self.whiten_strategy == "prewhiten_postapply":
-                pconv = full_shared_pconv(self.b.tconv, self.b.conv_spatial_sing)
-            else:
-                pconv = full_shared_pconv(self.b.tconv, self.b.spatial_sing)
+        # spatial gram can be precomputed when not interpolating
+        if self.interpolating:
+            sgram = None
+        elif self.whiten_strategy == "prewhiten_postapply":
+            sgram = spatial_gram(self.b.conv_spatial_sing)
         else:
-            pconv = None
-        self.register_buffer_or_none("pconv", pconv)
+            sgram = spatial_gram(self.b.spatial_sing)
+        self.register_buffer_or_none("sgram", sgram)
 
         # indexing helpers
         t = self.spike_length_samples
@@ -325,15 +320,15 @@ class DriftyMatchingTemplates(MatchingTemplates):
         normsq = normsq_by_chan.sum(dim=1)
 
         # normsq is always the pconv one
-        if self.b.pconv is None:
-            pconv = full_shared_pconv(self.b.tconv, normsq_spatial_sing)
+        if self.b.sgram is None:
+            sgram = spatial_gram(normsq_spatial_sing)
         else:
-            pconv = self.b.pconv
+            sgram = self.b.sgram
 
         # padded spatial sing is used for clean wfs only
         padded_spatial_sing = F.pad(spatial_sing, (0, 1))
 
-        return conv_spatial_sing, normsq, main_channels, padded_spatial_sing, pconv
+        return conv_spatial_sing, normsq, main_channels, padded_spatial_sing, sgram
 
     def data_at_time(
         self,
@@ -346,7 +341,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         scale_max: float,
         resid_offset: int,
     ) -> ChunkTemplateData:
-        spatial_sing, normsq, main_channels, padded_spatial_sing, pconv = (
+        spatial_sing, normsq, main_channels, padded_spatial_sing, sgram = (
             self.spatial_at_time(t_s=t_s)
         )
         obj_normsq_plus_inv_lambda = normsq[:, None] + inv_lambda
@@ -374,7 +369,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
             conv_temporal_comps=self.b.conv_temporal_comps,
             up_major_temporal_comps=self.b.up_major_temporal_comps,
             spatial_sing=spatial_sing,
-            pconv=pconv,
+            sgram=sgram,
+            up_major_tconv=self.b.up_major_tconv,
             time_ix=self.b.time_ix,
             sub_time_ix=self.b.sub_time_ix + resid_offset,
             chan_ix=self.b.chan_ix,
@@ -412,7 +408,8 @@ class DriftyChunkTemplateData(ChunkTemplateData):
     up_major_temporal_comps: Tensor
     spatial_sing: Tensor
     padded_spatial_sing: Tensor
-    pconv: Tensor
+    sgram: Tensor
+    up_major_tconv: Tensor
     spatial_whitener: Whitener | None
 
     time_ix: Tensor
@@ -479,14 +476,14 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         )
 
     def subtract_conv(
-        self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=256, sign=-1
+        self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=128, sign=-1
     ):
-        subtract_precomputed_pconv(
+        _subtract_kron_pconv(
             conv=conv,
-            pconv=self.pconv,
+            sgram=self.sgram,
+            up_major_tconv=self.up_major_tconv,
             peaks=peaks,
-            padding=padding,
-            conv_lags=self.conv_lags,
+            padded_conv_lags=padding + self.conv_lags,
             sign=sign,
             batch_size=batch_size,
         )
@@ -703,6 +700,42 @@ def convolve_lowrank_shared(
             out.addmm_(spatial_singular[:, q, :], tconv)
 
     return out
+
+
+def _subtract_kron_pconv(
+    *,
+    conv: Tensor,
+    sgram: Tensor,
+    up_major_tconv: Tensor,
+    peaks: MatchingPeaks,
+    padded_conv_lags: Tensor,
+    sign: int,
+    batch_size: int,
+):
+    assert sign in (-1, 1)
+    if not peaks.n_spikes:
+        return
+    assert peaks.times is not None
+    assert peaks.template_inds is not None
+    n_units = conv.shape[0]
+    n_spikes = peaks.n_spikes
+    _, rank_sq, n_lags = up_major_tconv.shape
+    assert sgram.shape == (n_units, n_units, rank_sq)
+    assert padded_conv_lags.shape == (n_lags,)
+
+    if peaks.up_inds is None:
+        spike_tconv = up_major_tconv[0].broadcast_to(n_spikes, rank_sq, n_lags)
+    else:
+        spike_tconv = up_major_tconv[peaks.up_inds]
+    if peaks.scalings is not None:
+        spike_tconv = spike_tconv * peaks.scalings[:, None, None]
+
+    ix_time = (peaks.times[:, None] + padded_conv_lags).view(-1)
+    for i0 in range(0, n_units, batch_size):
+        i1 = min(n_units, i0 + batch_size)
+        batch = torch.bmm(sgram[peaks.template_inds, i0:i1], spike_tconv)
+        batch = batch.permute(1, 0, 2).reshape(i1 - i0, n_spikes * n_lags)
+        conv[i0:i1].index_add_(dim=1, index=ix_time, source=batch, alpha=sign)
 
 
 # -- fine matching

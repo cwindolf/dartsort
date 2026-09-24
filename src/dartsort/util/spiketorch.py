@@ -263,26 +263,18 @@ def shared_temporal_pconv(temporal_comps: Tensor, up_temporal_comps: Tensor) -> 
 
 
 @torch_compile
-def full_shared_pconv(
-    tconv: Tensor, spatial_sing: Tensor, batch_size: int = 64
-) -> Tensor:
-    rank, rank_, up, conv_len = tconv.shape
-    n_units, rank__, chans = spatial_sing.shape
-    assert rank == rank_ == rank__
-    out = spatial_sing.new_empty((n_units, n_units, up, conv_len))
-    spatial_sing_flat = spatial_sing.view(n_units * rank, chans)
-    tconv_flat = tconv.view(rank * rank, up * conv_len)
+def spatial_gram(spatial_sing: Tensor, batch_size: int = 128) -> Tensor:
+    n_units, rank, chans = spatial_sing.shape
+    spatial_sing_flat = spatial_sing.reshape(n_units * rank, chans)
+    gram = spatial_sing.new_empty((n_units, n_units, rank * rank))
 
     for i0 in range(0, n_units, batch_size):
         i1 = min(n_units, i0 + batch_size)
-        chunksz = (i1 - i0) * n_units
-        spatial_left = spatial_sing[i0:i1]
-        spatial_outer = spatial_left.view((i1 - i0) * rank, chans) @ spatial_sing_flat.T
-        spatial_outer = spatial_outer.view(i1 - i0, rank, n_units, rank)
-        spatial_outer = spatial_outer.permute(0, 2, 1, 3).reshape(chunksz, rank * rank)
-        torch.mm(spatial_outer, tconv_flat, out=out[i0:i1].view(chunksz, up * conv_len))
+        outer = spatial_sing_flat[i0 * rank : i1 * rank] @ spatial_sing_flat.T
+        outer = outer.view(i1 - i0, rank, n_units, rank).permute(0, 2, 3, 1)
+        gram[i0:i1].view(i1 - i0, n_units, rank, rank).copy_(outer)
 
-    return out
+    return gram
 
 
 @torch_compile

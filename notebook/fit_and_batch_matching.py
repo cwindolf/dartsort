@@ -118,10 +118,21 @@ plt.xlabel('time (samples')
 plt.ylabel('channels');
 
 # %% [markdown]
+# # Configuration
+
+# %%
+# use defaults, except for the pipeline change
+cfg = dartsort.DARTsortUserConfig(fit_matching_models_only=True)
+
+# %%
+# process into an internal config object for later use
+internal_cfg = dartsort.to_internal_config(cfg)
+
+# %% [markdown]
 # # Fit models
 
 # %%
-dartsort.dartsort(rec, ds_dir, cfg=dartsort.DARTsortUserConfig(fit_matching_models_only=True))
+dartsort.dartsort(rec, ds_dir, cfg=cfg)
 
 # %%
 # !ls {ds_dir}
@@ -153,7 +164,7 @@ for batch_ix, batch_start_samples in enumerate(range(0, duration_samples, 60 * 3
         hdf5_filename=f"matching1_batch{batch_ix:05}.h5",
         chunk_starts_samples=np.arange(batch_start_samples, batch_end_samples, 30_000),
         load_simple_features=False,  # ignoring the output, so don't load up extra stuff
-        featurization_cfg=dartsort.default_matching_streaming_classifier_cfg,
+        featurization_cfg=internal_cfg.matching_classifier_featurization_cfg,
         motion=dartsort.try_load_motion_info(ds_dir),
     )
     del res
@@ -163,11 +174,13 @@ for batch_ix, batch_start_samples in enumerate(range(0, duration_samples, 60 * 3
 #
 # In this section, I'm grabbing all of the matching outputs and concatenating them.
 # Then, I'm running *dartsort*'s standard postprocessing: a final merge step and a spike-train
-# cleaning step (duplicate detection removal).
+# cleaning step (duplicate detection removal). This is controlled by the `DARTsortUserConfig` flag `postprocessing`,
+# which is `"agglomerate_and_clean"` by default.
 #
-# Users can change this. If you don't want to merge, remove that config from the list. In that case, you could
-# run the cleaning step on each chunk before concatenating: the merge needs to agree across the batched matching
-# output, but the output of cleaning is the same when run batchwise or on the full result.
+# Users can change this. If you don't want to merge, set `postprocessing="clean"` in the configuration
+# section above. In that case, you could run the cleaning step on each chunk before concatenating: the
+# merge needs to agree across the batched matching output, but the output of cleaning is the same when
+# run batchwise or on the full result.
 #
 # Here, extra features (amplitudes, localizations) are loaded by the default behavior of `dartsort.load`,
 # which can be turned off for users who don't need them.
@@ -181,7 +194,7 @@ sorting = dartsort.cluster(
     sorting,
     motion=dartsort.try_load_motion_info(ds_dir),
     clustering_cfg=None,
-    refinement_cfgs=[dartsort.default_agglomerate_cfg, dartsort.default_clean_cfg],
+    refinement_cfgs=internal_cfg.final_refinement_cfgs,
 )
 
 # %%
