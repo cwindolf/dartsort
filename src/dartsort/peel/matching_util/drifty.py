@@ -188,12 +188,12 @@ class DriftyMatchingTemplates(MatchingTemplates):
 
         # spatial gram can be precomputed when not interpolating
         if self.interpolating:
-            gram = None
+            sgram = None
         elif self.whiten_strategy == "prewhiten_postapply":
-            gram = spatial_gram(self.b.conv_spatial_sing)
+            sgram = spatial_gram(self.b.conv_spatial_sing)
         else:
-            gram = spatial_gram(self.b.spatial_sing)
-        self.register_buffer_or_none("gram", gram)
+            sgram = spatial_gram(self.b.spatial_sing)
+        self.register_buffer_or_none("sgram", sgram)
 
         # indexing helpers
         t = self.spike_length_samples
@@ -320,10 +320,10 @@ class DriftyMatchingTemplates(MatchingTemplates):
         normsq = normsq_by_chan.sum(dim=1)
 
         # normsq is always the pconv one
-        if self.b.gram is None:
-            gram = spatial_gram(normsq_spatial_sing)
+        if self.b.sgram is None:
+            sgram = spatial_gram(normsq_spatial_sing)
         else:
-            gram = self.b.gram
+            sgram = self.b.sgram
 
         # padded spatial sing is used for clean wfs only
         padded_spatial_sing = F.pad(spatial_sing, (0, 1))
