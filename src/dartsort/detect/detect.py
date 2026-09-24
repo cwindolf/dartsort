@@ -209,13 +209,16 @@ def is_extreme_transpose_no_pad(
             torch.amax(Xneighb, dim=2, out=Xmax[i0:i1])
     else:
         Xmax = X[:, :-1]
-    Xmax = F.max_pool2d(
-        Xmax[None, None, :, :],
-        stride=(1, 1),
-        kernel_size=(2 * dt + 1, 1),
-        padding=(dt, 0),
-    )
-    Xmax = Xmax[0, 0]
+    # Transpose (T, C) -> (C, T) so max_pool1d slides along time with one row
+    # per channel, letting the CPU split channels across threads. The previous
+    # max_pool2d with a (2dt+1, 1) kernel saw one single-channel image and ran
+    # single-threaded on CPU (~30x slower there); GPU speed is unchanged.
+    Xmax = F.max_pool1d(
+        Xmax.T.contiguous(),
+        stride=1,
+        kernel_size=2 * dt + 1,
+        padding=dt,
+    ).T
 
     # if max pool made you grow, or if thresholding made you grow,
     # then you were not a peak
