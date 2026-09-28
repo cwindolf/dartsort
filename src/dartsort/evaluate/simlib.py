@@ -3,7 +3,7 @@ import sys
 import warnings
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import h5py
 import numpy as np
@@ -343,7 +343,7 @@ def add_features(h5_path, recording, featurization_cfg, computation_cfg):
             _, feats = gt_pipeline(
                 chunk, channels=cast(h5py.Dataset, h5["channels"])[sli]
             )
-            for k in f_dsets:  # noqa: PLC0206
+            for k in f_dsets:
                 f_dsets[k][sli] = feats[k].numpy(force=True)
 
 
@@ -834,11 +834,11 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
             # arrays discovered in batches below
             f_dt = self.features_dtype
-            inj_wf_shape = (
+            inj_wf_shape: tuple[int, int] = (
                 self.spike_length_samples,
                 self.extract_channel_index.shape[1],
             )
-            dataset_shapes = {
+            dataset_shapes: dict[str, tuple[tuple[int, ...], Any]] = {
                 "localizations": ((3,), f_dt),
                 "displacements": ((), f_dt),
                 "ptp_amplitudes": ((), f_dt),
@@ -1004,7 +1004,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             try:
                 recording = read_binary_folder(recording_dir)
                 logger.info("Loaded %s", recording_dir)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 recording = None
         else:
             recording = None

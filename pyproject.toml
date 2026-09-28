@@ -97,3 +97,4 @@ replace-imports-with-any = ["hdbscan"]
 [tool.ty.rules]
 "unsupported-base" = "ignore"
 "possibly-unresolved-reference" = "error"
+"invalid-key" = "ignore"

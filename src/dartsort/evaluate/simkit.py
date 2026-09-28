@@ -90,7 +90,7 @@ def generate_simulation(
     if folder is not None and not (overwrite or just_noise or no_save):
         try:
             return load_simulation(folder)
-        except Exception:  # noqa: BLE001, S110
+        except Exception:
             pass
 
     if noise_recording_folder is not None:

@@ -118,7 +118,7 @@ def precompute_displaced_registered_templates(
     geometry: np.ndarray,
     displacements: np.ndarray,
     sampling_frequency: float = 30000,
-    template_subset=slice(None),
+    template_subset=slice(None),  # noqa: B008
 ) -> DriftingTemplates:
     """Use spikeinterface tools to turn templates on registered geom into
     precomputed drifting templates on the regular geom.

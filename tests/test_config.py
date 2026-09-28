@@ -80,7 +80,7 @@ def test_shared_flags_agree(detection_type):
         "agglomerate template": agg_cfg.template_merge_cfg.template_cfg.whitening,  # ty: ignore[unresolved-attribute]
     }
     if detection_type == "subtract":
-        whitening_cfgs["subtraction"] = detection_cfg.whiten_cfg  # ty: ignore[unresolved-attribute]
+        whitening_cfgs["subtraction"] = detection_cfg.whiten_cfg  # ty: ignore[unresolved-attribute, invalid-assignment]
     for name, whitening_cfg in whitening_cfgs.items():
         assert whitening_cfg is not None
         assert whitening_cfg.estimator == "sparsechol", name

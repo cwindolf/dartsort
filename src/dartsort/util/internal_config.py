@@ -1544,6 +1544,8 @@ def _post_refinement_cfgs(
             collision_cleaning_error_threshold=cfg.collision_cleaning_error_threshold,
         )
         if cc_flag_active:
+            assert isinstance(initial_detection_cfg, SubtractionConfig)
+            temporal_dedup_radius = initial_detection_cfg.temporal_dedup_radius_samples
             filter_cfg = replace(
                 filter_cfg,
                 max_cc_flag_rate=cfg.max_cc_flag_rate,
@@ -1551,11 +1553,9 @@ def _post_refinement_cfgs(
                 cc_flag_excess_rate=cfg.cc_flag_excess_rate,
                 cc_flag_chance_jitter_samples=cfg.cc_flag_chance_jitter_samples,
                 cc_flag_chance_draws=cfg.cc_flag_chance_draws,
-                cc_flag_temporal_radius_samples=(
-                    cfg.cc_flag_temporal_radius_samples
-                    or initial_detection_cfg.temporal_dedup_radius_samples
-                ),
-                cc_flag_dedup_temporal_radius_samples=initial_detection_cfg.temporal_dedup_radius_samples,
+                cc_flag_temporal_radius_samples=cfg.cc_flag_temporal_radius_samples
+                or temporal_dedup_radius,
+                cc_flag_dedup_temporal_radius_samples=temporal_dedup_radius,
                 cc_flag_spatial_dedup_radius_um=initial_detection_cfg.spatial_dedup_radius_um,
                 cc_flag_radius_um=initial_detection_cfg.subtract_radius_um,
             )

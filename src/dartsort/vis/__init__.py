@@ -1,11 +1,11 @@
 "Vis helpers. Install with [vis]."
 try:
     import seaborn
-except ImportError:
+except ImportError as e:
     raise ImportError(
         'seaborn isn\'t installed; pip install "dartsort[vis]" or "dartsort[full]" to '
         "get the dartsort.vis dependencies."
-    )
+    ) from e
 
 from .analysis_plots import *
 from .colors import *

@@ -204,7 +204,7 @@ def distance_matrix_dendro(
         ax_dendro = panel.add_subplot(gs[:, 2], sharey=ax_im)
         ax_dendro.axis("off")
 
-        Z, labels = get_linkage(
+        Z, _labels = get_linkage(
             distances, method=dendrogram_linkage, threshold=dendrogram_threshold
         )
         dendro = dendrogram(

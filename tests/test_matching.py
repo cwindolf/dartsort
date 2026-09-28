@@ -634,7 +634,7 @@ def test_static(tmp_path, up_factor, cd_iter):
         )
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-            rec,
+            rec,  # ty:ignore[invalid-argument-type]
             waveform_cfg=dartsort.default_waveform_cfg,
             matching_cfg=matching_cfg,
             featurization_cfg=nofeatcfg,
@@ -702,7 +702,8 @@ def test_static(tmp_path, up_factor, cd_iter):
 
         res = matcher.peel_chunk(
             torch.asarray(
-                rec.get_traces().copy(), device=matcher.b.channel_index.device
+                rec.get_traces().copy(),  # ty:ignore[unresolved-attribute]
+                device=matcher.b.channel_index.device,
             ),
             return_residual=True,
             return_conv=True,
@@ -811,7 +812,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
     for rec in [rec1, rec0]:
         (tmp_path / "match").mkdir()
         st = dartsort.match(
-            recording=rec,
+            recording=rec,  # ty:ignore[invalid-argument-type]
             sorting=gts,
             output_dir=tmp_path / "match",
             motion=no_motion,

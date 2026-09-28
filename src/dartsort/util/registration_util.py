@@ -35,7 +35,7 @@ def dredge_estimate_motion(
 
     # features for registration
     z = z[valid]
-    t_s = getattr(sorting, "times_seconds")
+    t_s = sorting.times_seconds
     t_s = t_s[valid]
     a = a[valid]
 

@@ -153,7 +153,7 @@ class DARTsortSorting:
     ) -> NumpySorting:
         """Clean up and produce a spikeinterface NumpySorting object."""
         if drop_doubles:
-            self = self.drop_doubles()  # noqa: PLW0642
+            self = self.drop_doubles()
         assert self.labels is not None
         st = self.drop_missing()
         assert st.labels is not None
@@ -1096,7 +1096,7 @@ class DARTsortSorting:
                 yield chunk
 
     def slice_feature_by_name(
-        self, dataset_name: str, mask: np.ndarray | slice = slice(None)
+        self, dataset_name: str, mask: np.ndarray | slice = slice(None)  # noqa: B008
     ) -> np.ndarray:
         if hasattr(self, dataset_name):
             return getattr(self, dataset_name)[mask]
@@ -2279,7 +2279,7 @@ def fit_reweighting(
         if h5 is not None:
             voltages: np.ndarray = h5[voltages_dataset_name][:]
         elif hdf5_path is not None:
-            with h5py.File(hdf5_path) as h5:  # noqa: PLR1704
+            with h5py.File(hdf5_path) as h5:
                 voltages: np.ndarray = h5[voltages_dataset_name][:]
         else:
             panic()

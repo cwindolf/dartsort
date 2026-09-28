@@ -18,6 +18,7 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger, progrange
 from ..util.motion import MotionInfo
+from ..util.py_util import panic
 from ..util.spiketorch import ptp
 from ..util.torch_util import torch_compile
 from .templates import TemplateData
@@ -205,7 +206,7 @@ def estimate_offset(
         offsets = torch.round(offsets).long()
         return offsets - padded_trough_offset_samples
 
-    assert False
+    panic(strategy)
 
 
 def realign_templates(
@@ -236,7 +237,7 @@ def realign_templates(
         elif realign_strategy.startswith("ampsq_weighted"):
             main_channels = np.ptp(templates).max(1).argmax(1)
         else:
-            assert False
+            panic(realign_strategy)
     assert main_channels is not None
 
     # find template peak time
@@ -368,7 +369,7 @@ def dredge_realign(
         main_channels = snrs_by_channel.argmax(1)
 
     # start with trough alignment
-    main_channels, main_channel_traces, offsets = get_main_channels_and_alignments(
+    main_channels, _main_channel_traces, offsets = get_main_channels_and_alignments(
         None,
         trough_factor=trough_factor,
         templates=templates.numpy(force=True),
