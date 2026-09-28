@@ -134,6 +134,7 @@ def warn_about_preprocessing(rec: BaseRecording, will_preprocess: bool):
 
 def preprocess(
     rec: BaseRecording,
+    *,
     strategy: PreprocessingStrategy = "none",
     already_preprocessed: Literal[
         "yes", "no", "assume_yes_if_float"

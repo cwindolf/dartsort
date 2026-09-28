@@ -142,7 +142,10 @@ def dartsort(
     # preprocess
     copy_rec_flag = ds_will_copy_recording(cfg, recording)
     recording = preprocess(
-        recording, cfg.preprocessing, cfg.already_preprocessed, cfg.preprocessing_dtype
+        recording,
+        strategy=cfg.preprocessing,
+        already_preprocessed=cfg.already_preprocessed,
+        dtype=cfg.preprocessing_dtype,
     )
     check_recording(recording, copy_flag=copy_rec_flag)
 
