@@ -22,6 +22,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.motion import try_load_motion_info
+from ..util.py_util import ensure_path
 from . import gt, mixture, scatterplots, unit, unit_comparison, versus
 from .sorting import make_sorting_summary
 
@@ -63,6 +64,7 @@ def visualize_sorting(
     computation_cfg: ComputationConfig | None = None,
     errors_to_warnings=True,
 ):
+    output_directory = ensure_path(output_directory)
     output_directory.mkdir(exist_ok=True, parents=True)
     computation_cfg = ensure_computation_config(computation_cfg)
 
