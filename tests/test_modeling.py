@@ -458,12 +458,19 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
             eval_scores = tmm.soft_assign(
                 data=val_data, full_proposal_view=True, needs_bootstrap=False
             )
+        else:
+            train_scores = eval_scores = None
+
         if step == "split":
+            assert train_scores is not None
+            assert eval_scores is not None
             split_res = tmm.split(
                 train_data, val_data, train_scores=train_scores, eval_scores=eval_scores
             )
             assert split_res.n_new_units == 0
         if step == "merge":
+            assert train_scores is not None
+            assert eval_scores is not None
             pair_mask = mixture.violation_pair_mask(
                 tmm=tmm,
                 full_data=full_data,
