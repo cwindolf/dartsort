@@ -64,7 +64,7 @@ def kdtree_inliers(
 
 def get_smoothed_density(
     X,
-    inliers: np.ndarray | slice = slice(None),
+    inliers: np.ndarray | slice = slice(None),  # noqa: B008
     sigma: float = 1.0,
     sigma_low: float | None = None,
     sigma_ramp_ax=-1,
@@ -154,7 +154,7 @@ def get_smoothed_density(
 def get_smoothed_density_ratio(
     X,
     *,
-    inliers: np.ndarray | slice = slice(None),
+    inliers: np.ndarray | slice = slice(None),  # noqa: B008
     sigmas: list[float],
     sigma_lows: list[float] | list[None] | None = None,
     sigma_ramp_ax=-1,
@@ -504,7 +504,7 @@ def density_peaks(
     remove_borders=False,
     border_search_radius=10.0,
     border_search_neighbors=3,
-    inlier_dims=slice(0, 2),
+    inlier_dims=slice(0, 2),  # noqa: B008
     leafsize=24,
     density_strategy="sort",
     workers=-1,
@@ -599,7 +599,9 @@ def density_peaks(
         )
 
     if remove_clusters_smaller_than:
-        labels = decrumb_labels(labels, min_size=remove_clusters_smaller_than, in_place=True)
+        labels = decrumb_labels(
+            labels, min_size=remove_clusters_smaller_than, in_place=True
+        )
 
     return dict(density=density, nhdn=nhdn, labels=labels, kdtree=kdtree)
 
@@ -796,7 +798,9 @@ def gmm_density_peaks(
     if remove_clusters_smaller_than:
         if show_progress:
             logger.info("Clean...")
-        labels = decrumb_labels(labels, min_size=remove_clusters_smaller_than, in_place=True)
+        labels = decrumb_labels(
+            labels, min_size=remove_clusters_smaller_than, in_place=True
+        )
     res["labels"] = labels
 
     if mop:

@@ -305,7 +305,7 @@ def test_static_templates(tmp_path):
         rec1 = rec0.save(format="binary", folder=Path(tdir) / "rec")
         for rec in [rec0, rec1]:
             res = get_templates(
-                recording=rec,
+                recording=rec,  # ty:ignore[invalid-argument-type]
                 sorting=sorting,
                 waveform_cfg=waveform_cfg,
                 template_cfg=raw_template_cfg,
@@ -357,7 +357,7 @@ def test_drifting_templates(tmp_path):
             )
 
             res = get_templates(
-                recording=rec,
+                recording=rec,  # ty:ignore[invalid-argument-type]
                 sorting=sorting,
                 motion=motion,
                 waveform_cfg=waveform_cfg,

@@ -14,6 +14,7 @@ from ..util.internal_config import (
 )
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
+from ..util.py_util import panic
 from ..util.spikeio import read_waveforms_channel_index
 from ..util.waveform_util import make_channel_index
 
@@ -183,7 +184,7 @@ def denoising_weights(
     elif edge_behavior == "raw":
         snc = snrs
     else:
-        assert False
+        panic(edge_behavior)
 
     # pass it through a hand picked squashing function
     wntc = 1.0 / (1.0 + np.exp(d + a * vt[None, :, None] - b * snc[:, None, :]))

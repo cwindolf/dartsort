@@ -525,14 +525,14 @@ class EmbeddedNoise(BModule):
             return self.mean
         panic(self.mean_kind)
 
-    def whitener(self, channels=slice(None)):
+    def whitener(self, channels=slice(None)):  # noqa: B008
         cov = self.marginal_covariance(channels=channels)
         chol = cov.cholesky().to_dense()
         eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
         whitener = torch.linalg.solve_triangular(chol, eye, upper=False)
         return whitener.reshape(cov.shape)
 
-    def whiten(self, data, channels=slice(None)):
+    def whiten(self, data, channels=slice(None)):  # noqa: B008
         assert self.mean_kind == "zero"
         cov = self.marginal_covariance(channels=channels)
         assert data.ndim == 3
@@ -677,7 +677,7 @@ class EmbeddedNoise(BModule):
 
     def marginal_covariance(
         self,
-        channels: Tensor | slice = slice(None),
+        channels: Tensor | slice = slice(None),  # noqa: B008
         cache_prefix=None,
         cache_key=None,
         device=None,
@@ -717,7 +717,7 @@ class EmbeddedNoise(BModule):
         return cov
 
     def offdiag_covariance(
-        self, channels_left=slice(None), channels_right=slice(None), device=None
+        self, channels_left=slice(None), channels_right=slice(None), device=None  # noqa: B008
     ):
         odc = self._marginal_covariance(
             channels=channels_right, channels_left=channels_left
@@ -727,7 +727,7 @@ class EmbeddedNoise(BModule):
         return odc
 
     def _marginal_covariance(
-        self, channels: Tensor | slice = slice(None), channels_left=None
+        self, channels: Tensor | slice = slice(None), channels_left=None  # noqa: B008
     ):
         channels = self.b.chans_arange[channels]
         have_left = channels_left is not None

@@ -83,7 +83,7 @@ class TrimmedAgreementMatrix(ComparisonPlot):
     width = 3
     height = 2
 
-    def __init__(self, trim_kind="auto", ordered=True, cmap=table_cmap):
+    def __init__(self, trim_kind="auto", ordered=True, cmap=table_cmap):  # ty:ignore[possibly-unresolved-reference]
         self.trim_kind = trim_kind
         self.ordered = ordered
         self.cmap = cmap

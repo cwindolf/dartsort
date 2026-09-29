@@ -1,13 +1,14 @@
 import warnings
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
 import spikeinterface.full as si
-from spikeinterface.core import BaseRecording
+from spikeinterface.core import BaseRecording, load
 
 from .internal_config import PreprocessingStrategy
 from .logging_util import get_logger
-from .py_util import panic
+from .py_util import ensure_path, panic
 
 logger = get_logger(__name__)
 
@@ -134,10 +135,13 @@ def warn_about_preprocessing(rec: BaseRecording, will_preprocess: bool):
 
 def preprocess(
     rec: BaseRecording,
+    *,
+    output_dir: str | Path | None = None,
     strategy: PreprocessingStrategy = "none",
     already_preprocessed: Literal[
         "yes", "no", "assume_yes_if_float"
     ] = "assume_yes_if_float",
+    json_filename: str = "dartsort_preprocessed_recording.json",
     dtype: str = "float32",
 ) -> BaseRecording:
     if already_preprocessed == "yes":
@@ -157,6 +161,26 @@ def preprocess(
     else:
         panic(already_preprocessed)
 
+    if output_dir is not None:
+        json_path = ensure_path(output_dir) / json_filename
+        if json_path.exists():
+            extractor = load(json_path)
+            assert isinstance(extractor, BaseRecording)
+            return extractor
+    else:
+        json_path = None
+
     logger.info("applying preprocessing: %s", strategy)
     warn_about_preprocessing(rec=rec, will_preprocess=strategy != "none")
-    return preprocessing_strategies[strategy](rec, dtype)
+    rec = preprocessing_strategies[strategy](rec, dtype)
+
+    # save provenance
+    if json_path is not None:
+        rec.dump_to_json(
+            file_path=json_path,
+            include_extra_metadata=True,
+            include_properties=True,
+            include_annotations=True,
+        )
+
+    return rec

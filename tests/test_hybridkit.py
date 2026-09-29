@@ -422,7 +422,7 @@ def test_grid_sample_average(target_geom, simulator):
     avg_ptps = np.ptp(avg_temps, axis=1).max(1)
     plain_temps = plain.templates()[1]
     plain_ptps = np.ptp(plain_temps, axis=1).max(1)
-    assert not np.allclose(avg_temps, plain_temps, atol=1e-5 * scale)
+    assert not np.allclose(avg_temps, plain_temps, atol=1e-5 * scale)  # ty:ignore[possibly-unresolved-reference]
     assert (avg_ptps < plain_ptps).all()
     assert (avg_ptps > 0.9 * plain_ptps).all()
 

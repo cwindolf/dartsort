@@ -140,10 +140,19 @@ def dartsort(
     ds_handle_link_from(cfg, output_dir)
 
     # preprocess
-    copy_rec_flag = ds_will_copy_recording(cfg, recording)
+    # saves provenance info (lightweight) about the preprocessing, including
+    # noise levels in standardization etc to a json file
     recording = preprocess(
-        recording, cfg.preprocessing, cfg.already_preprocessed, cfg.preprocessing_dtype
+        recording,
+        output_dir=output_dir,
+        strategy=cfg.preprocessing,
+        already_preprocessed=cfg.already_preprocessed,
+        dtype=cfg.preprocessing_dtype,
     )
+
+    # determine if recording will be saved to a tmpdir and warn the user
+    # if they're going to hit a slow case
+    copy_rec_flag = ds_will_copy_recording(cfg, recording)
     check_recording(recording, copy_flag=copy_rec_flag)
 
     needs_dir = copy_rec_flag or cfg.work_in_tmpdir

@@ -164,7 +164,7 @@ class BaseWaveformModule(BModule):
             self.initialize_spike_length_dependent_params()
 
         if self.submodule_names:
-            for sn, smk in zip(self.submodule_names, all_submodule_keys):
+            for sn, smk in zip(self.submodule_names, all_submodule_keys, strict=True):
                 sn_dict = {smk: state_dict[smk]}
                 getattr(self, sn)._pre_load_state(sn_dict, prefix, *args, **kwargs)
 
