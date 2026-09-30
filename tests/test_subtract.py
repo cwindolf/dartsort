@@ -14,6 +14,8 @@ from test_util import dense_layout
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.main import subtract
 from dartsort.peel.subtract import SubtractionPeeler
+from dartsort.transform import Decollider, TemporalPCADenoiser
+from dartsort.transform.matched_filter_net import ScoreNetParams
 from dartsort.util import waveform_util
 from dartsort.util.internal_config import (
     ComputationConfig,
@@ -22,6 +24,7 @@ from dartsort.util.internal_config import (
     SubtractionConfig,
     WaveformConfig,
 )
+from dartsort.util.spiketorch import grab_spikes
 
 fixedlenkeys = (
     "subtract_channel_index",
@@ -560,6 +563,94 @@ def test_score_net_proposals(tmp_path, mini_simulations, score_net_pt):
         )
     assert result["n_spikes"] > 0
     assert proposer.field is None and proposer.peak_map is None
+
+
+@pytest.mark.parametrize("tpca_denoise_fit", ["peeling", "during_nn_training"])
+def test_decollider_tpca_denoise_fit(tmp_path, mini_simulations, tpca_denoise_fit):
+    rec = mini_simulations["driftn_szmini"]["recording"]
+    nn_kwargs = dict(
+        **cheap_decollider_kwargs["nn_denoiser_extra_kwargs"],  # ty: ignore[invalid-argument-type]
+        score_net_params=ScoreNetParams(n_epochs=10),
+    )
+    subconf = SubtractionConfig(
+        subtraction_denoising_cfg=FeaturizationConfig(
+            denoise_only=True,
+            do_nn_denoise=True,
+            nn_denoiser_class_name="Decollider",
+            tpca_denoise_fit=tpca_denoise_fit,
+            score_filter_radius_um=35.0,
+            **dict(cheap_decollider_kwargs, nn_denoiser_extra_kwargs=nn_kwargs),  # ty: ignore[invalid-argument-type]
+        ),
+        propose_with_score_net=True,
+        score_net_threshold=4.0,
+        first_denoiser_thinning=0.0,
+        max_iter=15,
+    )
+
+    def _peeler():
+        return SubtractionPeeler.from_config(
+            recording=rec,
+            waveform_cfg=WaveformConfig(),
+            subtraction_cfg=subconf,
+            featurization_cfg=FeaturizationConfig(nn_localization=False),
+            sampling_cfg=FitSamplingConfig(n_residual_snips=512),
+        )
+
+    peeler = _peeler()
+    peeler.load_or_fit_and_save_models(
+        tmp_path, computation_cfg=ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=1)
+    )
+    pipeline = peeler.subtraction_denoising_pipeline
+    denoiser = pipeline.transformers[0]
+    assert isinstance(denoiser, Decollider)
+    if tpca_denoise_fit == "peeling":
+        (tpca,) = pipeline.transformers[1:]
+        assert isinstance(tpca, TemporalPCADenoiser)
+        assert denoiser.tpca_denoiser is None
+    else:
+        assert len(pipeline.transformers) == 1
+        tpca = denoiser.tpca_denoiser
+        assert tpca is not None
+    assert not tpca.needs_fit()
+
+    chunk, _, left_margin, right_margin = peeler.get_chunk(0)
+    times = torch.arange(peeler.trough_offset_samples, 20_000, 101)
+    channels = times % rec.get_num_channels()
+    waveforms = grab_spikes(
+        chunk,
+        times,
+        channels,
+        peeler.b.sub_channel_index,
+        trough_offset=peeler.trough_offset_samples,
+        spike_length_samples=peeler.spike_length_samples,
+        already_padded=False,
+        pad_value=torch.nan,
+    )
+    with torch.no_grad():
+        denoised, _ = pipeline(waveforms.clone(), channels=channels)
+        projected = tpca(denoised.clone(), channels=channels)
+        torch.testing.assert_close(projected, denoised, equal_nan=True)
+
+        reloaded = _peeler()
+        reloaded.load_models(tmp_path)
+        assert not reloaded.needs_fit()
+        reloaded_pipeline = reloaded.subtraction_denoising_pipeline
+        redenoised, _ = reloaded_pipeline(waveforms.clone(), channels=channels)
+        torch.testing.assert_close(redenoised, denoised, equal_nan=True)
+        model_order, _ = denoiser.to_nn_channels(waveforms, channels)
+        torch.testing.assert_close(
+            reloaded_pipeline.transformers[0].score_forward(model_order, channels),
+            denoiser.score_forward(model_order, channels),
+        )
+
+        peeler.eval()
+        result = peeler.peel_chunk(
+            chunk,
+            left_margin=left_margin,
+            right_margin=right_margin,
+            return_waveforms=False,
+        )
+    assert result["n_spikes"] > 0
 
 
 @pytest.mark.parametrize("proposal", ["tpca", "vq"])

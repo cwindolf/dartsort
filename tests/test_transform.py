@@ -1,6 +1,7 @@
 import pickle
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import spikeinterface.core as sc
@@ -123,17 +124,27 @@ def test_all_transformers():
         "SupervisedDenoiser",
         "FixedProperty",
         "WaveformInterpolator",
-        "TemplateWaveformReducer",
         "FullProbeTemporalPCAEmbedder",
         "WaveformWhitener",
         "TruncatedMixtureModelTransformer",
         "DenoisingScorer",
     }
-    class_names_and_kwargs = [
+    class_names_and_kwargs: list[tuple[str, dict[str, Any]]] = [
         (name, {"name_prefix": j, **smoke_test_kwargs.get(name, {})})
         for j, name in enumerate(transformers_by_class_name)
         if name not in skip_me
     ]
+    class_names_and_kwargs.append(
+        (
+            "Decollider",
+            {
+                "name_prefix": "with_tpcas",
+                "svd_projection_rank": 4,
+                "tpca_denoiser_rank": 4,
+                **smoke_test_kwargs["Decollider"],
+            },
+        )
+    )
     move_me_last = {"DebugMatchingPursuitDenoiser"}
     starters = [ck for ck in class_names_and_kwargs if ck[0] not in move_me_last]
     enders = [ck for ck in class_names_and_kwargs if ck[0] in move_me_last]

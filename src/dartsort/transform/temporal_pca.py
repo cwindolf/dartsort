@@ -87,7 +87,10 @@ class BaseTemporalPCA(BaseWaveformModule):
         return es
 
     def _other_pre_load_state(self, state_dict, prefix):
-        extra_state = state_dict[f"{prefix}_extra_state"]
+        extra_state_key = f"{prefix}_extra_state"
+        if extra_state_key not in state_dict:
+            return
+        extra_state = state_dict[extra_state_key]
         rank = extra_state["rank"]
         if self.rank != rank and hasattr(self, "components"):
             self.b.whitener.resize_((rank,))
@@ -150,26 +153,29 @@ class BaseTemporalPCA(BaseWaveformModule):
     def needs_fit(self):
         return self._needs_fit
 
+    def sample_snippet_indices(self, n: int, weights=None) -> torch.Tensor | None:
+        if n <= self.max_waveforms:
+            return None
+        rg = np.random.default_rng(self.random_seed)
+        if weights is not None:
+            weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
+            weights = weights.astype(np.float64)
+            weights = weights / weights.sum()
+            choices = rg.choice(len(weights), p=weights, size=self.max_waveforms)
+        else:
+            choices = rg.choice(n, size=self.max_waveforms)
+        choices.sort()
+        return torch.from_numpy(choices)
+
     def extract_snippets(
         self, waveforms, channels, *, weights=None, time_shifts=None
     ) -> torch.Tensor:
-        rg = np.random.default_rng(self.random_seed)
-        if waveforms.shape[0] > self.max_waveforms:
-            if weights is not None:
-                weights = (
-                    weights.numpy(force=True) if torch.is_tensor(weights) else weights
-                )
-                weights = weights.astype(np.float64)
-                weights = weights / weights.sum()
-                choices = rg.choice(len(weights), p=weights, size=self.max_waveforms)
-            else:
-                choices = rg.choice(len(channels), size=self.max_waveforms)
-            choices.sort()
-            choices = torch.from_numpy(choices)
-            waveforms = waveforms[choices]
-            channels = channels[choices]
+        ixs = self.sample_snippet_indices(waveforms.shape[0], weights)
+        if ixs is not None:
+            waveforms = waveforms[ixs]
+            channels = channels[ixs]
             if time_shifts is not None:
-                time_shifts = time_shifts[choices.to(time_shifts.device)]
+                time_shifts = time_shifts[ixs.to(time_shifts.device)]
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         channels = channels.to(device=waveforms.device)
         if self.fit_radius is not None:

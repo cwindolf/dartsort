@@ -49,8 +49,10 @@ def test_proposal_thresholding(tmp_path, mini_simulations, proposal):
     chunk, _, left_margin, right_margin = thresholder.get_chunk(0)
     with pytest.raises(ValueError, match="needs to be fitted"):
         thresholder.peel(tmp_path / "unfit.h5")
-    with pytest.raises(AssertionError, match="never fit"):
-        thresholder.peel_chunk(chunk, left_margin=left_margin, right_margin=right_margin)
+    with pytest.raises(ValueError, match="not fit"):
+        thresholder.peel_chunk(
+            chunk, left_margin=left_margin, right_margin=right_margin
+        )
 
     thresholder.load_or_fit_and_save_models(tmp_path / "models")
     assert not thresholder.needs_fit()

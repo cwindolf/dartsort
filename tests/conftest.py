@@ -73,7 +73,7 @@ def score_net_pt(pytestconfig, tmp_path_factory, mini_simulations):
         WaveformConfig,
     )
 
-    cache_key = "dartsort/score_net_pt"
+    cache_key = "dartsort/score_net_pt_staged"
     if (p := pytestconfig.cache.get(cache_key, None)) is not None:
         p = ensure_path(p)
         if p.exists():

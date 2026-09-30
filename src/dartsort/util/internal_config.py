@@ -617,6 +617,9 @@ class RefinementConfig:
     censor_ms: float = 0.25
 
 
+TPCADenoiserFitStage = Literal["during_nn_training", "peeling"]
+
+
 @cfg_dataclass
 class FeaturizationConfig:
     """Featurization and denoising configuration
@@ -644,6 +647,7 @@ class FeaturizationConfig:
     # -- denoising configuration
     do_nn_denoise: bool = False
     do_tpca_denoise: bool = True
+    tpca_denoise_fit: TPCADenoiserFitStage = "peeling"
     do_enforce_decrease: Literal["yes", "no", "loc_only"] = "loc_only"
     # turn off features below
     denoise_only: bool = False
@@ -759,6 +763,7 @@ class SubtractionConfig:
     subtraction_denoising_cfg: FeaturizationConfig = FeaturizationConfig(
         denoise_only=True,
         do_nn_denoise=True,
+        tpca_denoise_fit="during_nn_training",
         extract_radius=200.0,
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
@@ -1421,6 +1426,7 @@ def _initial_detection_cfg(
             extract_radius=cfg.subtraction_radius_um,
             do_nn_denoise=cfg.use_nn_in_subtraction,
             do_tpca_denoise=cfg.do_tpca_denoise,
+            tpca_denoise_fit=cfg.tpca_denoise_fit,
             tpca_rank=cfg.temporal_pca_rank,
             tpca_fit_radius=cfg.fit_radius_um,
             input_waveforms_name="raw",
