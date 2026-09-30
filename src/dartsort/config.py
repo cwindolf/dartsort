@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from .util.internal_config import (
+    DetectionProposal,
     InterpKernel,
     InterpMethod,
     KmeansppSelection,
@@ -277,9 +278,11 @@ class DeveloperConfig(DARTsortUserConfig):
     nn_denoiser_noise_waveforms: int = 100 * 256
     nn_denoiser_extra_kwargs: dict | None = None
     score_filter_radius_um: float = 0.0
-    detection_proposal: Literal["voltage", "tpca", "vq", "score_net"] = "voltage"
+    detection_proposal: DetectionProposal = "voltage"
     proposal_filters: int = 1
-    score_proposal_threshold: float = 5.0
+    propose_with_score_net: bool = False
+    proposal_threshold: float = 5.0
+    score_net_threshold: float = 5.0
     do_tpca_denoise: bool = True
     first_denoiser_thinning: float = 0.0
     first_denoiser_spatial_dedup_radius: float = 100.0

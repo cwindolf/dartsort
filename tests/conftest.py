@@ -90,8 +90,8 @@ def score_net_pt(pytestconfig, tmp_path_factory, mini_simulations):
             score_filter_radius_um=35.0,
             **cheap_decollider_kwargs,  # ty: ignore[invalid-argument-type]
         ),
-        detection_proposal="score_net",
-        score_proposal_threshold=4.0,
+        propose_with_score_net=True,
+        score_net_threshold=4.0,
         first_denoiser_thinning=0.0,
     )
     peeler = SubtractionPeeler.from_config(

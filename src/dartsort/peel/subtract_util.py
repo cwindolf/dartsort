@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import TYPE_CHECKING, Literal, Protocol, Self
 
 import torch
@@ -11,7 +12,13 @@ from ..detect.detect import (
     peak_sign_to_pos,
     update_peak_map,
 )
-from ..util.internal_config import PeakSign, SubtractionConfig
+from ..transform import BaseTemporalPCA, VQMatchedFilter
+from ..util.internal_config import (
+    DetectionProposal,
+    FeaturizationConfig,
+    PeakSign,
+    SubtractionConfig,
+)
 from ..util.py_util import databag, panic
 from ..util.spiketorch import grab_spikes, subtract_spikes_
 from ..util.torch_util import BModule
@@ -165,7 +172,9 @@ class GlobalPeakProposer:
             reference = self._full_peak_map(residual)
             n_bad = int((reference != self.peak_map).sum())
             if n_bad:
-                panic(f"patched peak map differs from full recompute at {n_bad} sites")
+                raise ValueError(
+                    f"patched peak map differs from full recompute at {n_bad} sites"
+                )
 
     def propose_peaks(
         self, residual: Tensor, detection_mask: Tensor | None
@@ -407,10 +416,14 @@ class MatchedFilterProposer:
         bad = int(off.sum())
         if bad:
             worst = (reference - self.field).abs().nan_to_num().max()
-            panic(f"patched score field differs at {bad} sites, worst {worst:.3e}")
+            raise ValueError(
+                f"patched score field differs at {bad} sites, worst {worst:.3e}"
+            )
         bad = int((self._full_peak_map() != self.peak_map).sum())
         if bad:
-            panic(f"patched score peak map differs from full recompute at {bad} sites")
+            raise ValueError(
+                f"patched score peak map differs from full recompute at {bad} sites"
+            )
 
 
 @databag
@@ -455,7 +468,7 @@ class LinearMatchedFilterProposer:
         return self.spike_length_samples + nbefore + nafter
 
     def setup(self, residual: Tensor) -> None:
-        self.field = self._full_field(residual)
+        self.field = self.full_proposal_score_field(residual)
         self.peak_map = self._full_peak_map()
 
     def cleanup(self) -> None:
@@ -522,6 +535,12 @@ class LinearMatchedFilterProposer:
             out[i0:i1] = self.score_from_responses(responses).T
         return out
 
+    def full_proposal_score_field(self, residual: Tensor) -> Tensor:
+        field = residual.new_full(residual.shape, -torch.inf)
+        dense = self.dense(residual[:, :-1])
+        field[self.trough_offset : self.trough_offset + dense.shape[0], :-1] = dense
+        return field
+
     # -- the patch
 
     def _patch_field(self, residual: Tensor, peaks: AcceptedPeaks) -> Tensor:
@@ -557,12 +576,6 @@ class LinearMatchedFilterProposer:
 
     # -- for audit
 
-    def _full_field(self, residual: Tensor) -> Tensor:
-        field = residual.new_full(residual.shape, -torch.inf)
-        dense = self.dense(residual[:, :-1])
-        field[self.trough_offset : self.trough_offset + dense.shape[0], :-1] = dense
-        return field
-
     def _full_peak_map(self) -> Tensor:
         assert self.field is not None
         return is_extreme_transpose_no_pad(
@@ -573,17 +586,21 @@ class LinearMatchedFilterProposer:
 
     def _check(self, residual: Tensor) -> None:
         assert self.field is not None and self.peak_map is not None
-        reference = self._full_field(residual)
+        reference = self.full_proposal_score_field(residual)
         off = reference.isfinite().logical_and_(
             torch.isclose(reference, self.field, rtol=1e-4, atol=1e-5).logical_not_()
         )
         bad = int(off.sum())
         if bad:
             worst = (reference - self.field).abs().nan_to_num().max()
-            panic(f"patched linear field differs at {bad} sites, worst {worst:.3e}")
+            raise ValueError(
+                f"patched linear field differs at {bad} sites, worst {worst:.3e}"
+            )
         bad = int((self._full_peak_map() != self.peak_map).sum())
         if bad:
-            panic(f"patched linear peak map differs from full recompute at {bad} sites")
+            raise ValueError(
+                f"patched linear peak map differs from full recompute at {bad} sites"
+            )
 
 
 def find_score_net(pipeline: "WaveformPipeline"):
@@ -596,6 +613,7 @@ def find_score_net(pipeline: "WaveformPipeline"):
 
 def make_peak_proposer(
     p: SubtractionConfig,
+    proposal: DetectionProposal,
     spike_length_samples: int,
     trough_offset_samples: int,
     peak_channel_index: Tensor | None,
@@ -606,41 +624,16 @@ def make_peak_proposer(
     proposal_filter_trough_offset: int | None = None,
     audit: bool = False,
 ) -> PeakProposer:
-    if p.detection_proposal not in ("voltage", "tpca", "vq", "score_net"):
-        panic(f"unknown {p.detection_proposal=}")
-
-    if p.detection_proposal in ("tpca", "vq") and proposal_filters is not None:
-        assert channel_index is not None
-        assert proposal_filter_trough_offset is not None
-        return LinearMatchedFilterProposer(
-            filters=proposal_filters,
-            filter_trough_offset=proposal_filter_trough_offset,
-            threshold=p.score_proposal_threshold**2,
-            reduction="sum" if p.detection_proposal == "tpca" else "max",
-            relative_peak_radius=p.relative_peak_radius_samples,
-            detect_dedup_radius=spike_length_samples,
-            peak_channel_index=peak_channel_index,
-            remove_exact_duplicates=p.remove_exact_duplicates,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-            field_patch_channel_index=channel_index,
-            audit=audit,
-        )
-
-    if p.detection_proposal == "score_net":
+    if p.propose_with_score_net:
         assert denoising_pipeline is not None and channel_index is not None
         denoiser, score_net = find_score_net(denoising_pipeline)
-        if score_net is None:
-            panic(
-                "detection_proposal='score_net' but the denoising pipeline has no "
-                "score net. Set score_filter_radius_um so one gets trained."
-            )
+        assert score_net is not None
         score_channel_index = denoiser.b.score_channel_index
         return MatchedFilterProposer(
             score_net=score_net,
             score_channel_index=score_channel_index,
             score_mask=score_channel_index < denoiser.n_channels,
-            threshold=p.score_proposal_threshold,
+            threshold=p.score_net_threshold,
             relative_peak_radius=p.relative_peak_radius_samples,
             detect_dedup_radius=spike_length_samples,
             peak_channel_index=peak_channel_index,
@@ -652,7 +645,8 @@ def make_peak_proposer(
             ),
             audit=audit,
         )
-    if p.subtract_global_dedup:
+
+    if proposal == "voltage" and p.subtract_global_dedup:
         return GlobalPeakProposer(
             threshold=p.voltage_threshold,
             peak_sign=p.peak_sign,
@@ -665,16 +659,97 @@ def make_peak_proposer(
             spike_length_samples=spike_length_samples,
             audit=audit,
         )
-    return LocalPeakProposer(
-        threshold=p.voltage_threshold,
-        peak_sign=p.peak_sign,
-        relative_peak_radius=p.relative_peak_radius_samples,
-        detect_dedup_radius=spike_length_samples,
-        peak_channel_index=peak_channel_index,
-        sub_dedup_channel_index=sub_dedup_channel_index,
-        trough_priority=p.trough_priority,
-        remove_exact_duplicates=p.remove_exact_duplicates,
+    elif proposal == "voltage":
+        return LocalPeakProposer(
+            threshold=p.voltage_threshold,
+            peak_sign=p.peak_sign,
+            relative_peak_radius=p.relative_peak_radius_samples,
+            detect_dedup_radius=spike_length_samples,
+            peak_channel_index=peak_channel_index,
+            sub_dedup_channel_index=sub_dedup_channel_index,
+            trough_priority=p.trough_priority,
+            remove_exact_duplicates=p.remove_exact_duplicates,
+        )
+    elif proposal == "tpca" or proposal == "vq":
+        assert proposal_filters is not None
+        assert channel_index is not None
+        assert proposal_filter_trough_offset is not None
+        return LinearMatchedFilterProposer(
+            filters=proposal_filters,
+            filter_trough_offset=proposal_filter_trough_offset,
+            threshold=p.proposal_threshold**2,
+            reduction="sum" if proposal == "tpca" else "max",
+            relative_peak_radius=p.relative_peak_radius_samples,
+            detect_dedup_radius=spike_length_samples,
+            peak_channel_index=peak_channel_index,
+            remove_exact_duplicates=p.remove_exact_duplicates,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            field_patch_channel_index=channel_index,
+            audit=audit,
+        )
+    else:
+        panic(proposal)
+
+
+def with_proposal_filters(
+    featurization_cfg: FeaturizationConfig, proposal: DetectionProposal, n_filters: int
+) -> FeaturizationConfig:
+    """Swap fields to make a featurization config whose pipeline will fit the proposer"""
+    if proposal == "voltage":
+        return featurization_cfg
+    elif proposal == "tpca":
+        if n_filters > featurization_cfg.tpca_rank:
+            panic(f"{n_filters} {featurization_cfg.tpca_rank}")
+        return replace(featurization_cfg, learn_cleaned_tpca_basis=True)
+    elif proposal == "vq":
+        return replace(featurization_cfg, vq_proposal_filters=n_filters)
+    else:
+        panic(proposal)
+
+
+def proposal_fit_featurization_cfg(
+    featurization_cfg: FeaturizationConfig | None,
+    proposal: DetectionProposal,
+    n_filters: int,
+) -> FeaturizationConfig:
+    if featurization_cfg is None and proposal != "voltage":
+        raise ValueError(
+            f"{proposal=} needs the featurization config its filters are fit with."
+        )
+    if featurization_cfg is None:
+        featurization_cfg = FeaturizationConfig()
+    waveforms_only = FeaturizationConfig(
+        do_tpca_denoise=False,
+        do_enforce_decrease="no",
+        save_input_voltages=False,
+        save_input_waveforms=True,
+        save_input_tpca_projs=False,
+        save_amplitudes=False,
+        do_localization=False,
+        input_waveforms_name="",
+        tpca_rank=featurization_cfg.tpca_rank,
+        tpca_fit_radius=featurization_cfg.tpca_fit_radius,
+        tpca_max_waveforms=featurization_cfg.tpca_max_waveforms,
+        input_tpca_waveform_cfg=featurization_cfg.input_tpca_waveform_cfg,
     )
+    return with_proposal_filters(waveforms_only, proposal, n_filters)
+
+
+def proposal_filters_from_pipeline(
+    pipeline: "WaveformPipeline", proposal: DetectionProposal, n_filters: int
+) -> tuple[Tensor, int]:
+    if proposal == "tpca":
+        nodes = [t for t in pipeline.transformers if type(t) is BaseTemporalPCA]
+    elif proposal == "vq":
+        nodes = [t for t in pipeline.transformers if isinstance(t, VQMatchedFilter)]
+    else:
+        panic()
+    if len(nodes) != 1:
+        panic(len(nodes))
+    (node,) = nodes
+    assert not node.needs_fit()
+    return node.b.components[:n_filters].clone(), node.filter_trough_offset
 
 
 # -- the subtracter
