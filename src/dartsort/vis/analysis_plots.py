@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,6 +20,9 @@ from ..util.data_util import (
     try_get_denoising_pipeline,
 )
 from .colors import glasbey1024
+
+if TYPE_CHECKING:
+    from ..transform import WaveformPipeline
 
 
 def scatter_max_channel_waveforms(
@@ -476,6 +480,9 @@ def visualize_denoiser(
     vis_mask: np.ndarray | None = None,
     load_denoiser_from_sorting: DARTsortSorting | None = None,
     denoising_pipeline_pt: Path | None = None,
+    dn: "WaveformPipeline | None" = None,
+    geom: torch.Tensor | None = None,
+    channel_index: torch.Tensor | None = None,
     n_show: int = 8,
     figscale: float = 2.0,
     seed: int = 0,
@@ -484,11 +491,12 @@ def visualize_denoiser(
     waveforms_feature_name: str | None = "waveforms",
 ):
     # load denoiser
-    if load_denoiser_from_sorting is None:
-        load_denoiser_from_sorting = vis_sorting
-    dn, geom, channel_index = try_get_denoising_pipeline(
-        load_denoiser_from_sorting, denoising_pipeline_pt=denoising_pipeline_pt
-    )
+    if dn is None:
+        if load_denoiser_from_sorting is None:
+            load_denoiser_from_sorting = vis_sorting
+        dn, geom, channel_index = try_get_denoising_pipeline(
+            load_denoiser_from_sorting, denoising_pipeline_pt=denoising_pipeline_pt
+        )
     assert dn is not None
     assert channel_index is not None
     assert geom is not None
