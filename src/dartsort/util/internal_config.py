@@ -1417,6 +1417,17 @@ def _matching_cfg(
     )
 
 
+def _tpca_denoise_fit(cfg: "DeveloperConfig") -> TPCADenoiserFitStage:
+    if cfg.tpca_denoise_fit is not None:
+        return cfg.tpca_denoise_fit
+    trains_decollider = (
+        cfg.use_nn_in_subtraction
+        and cfg.nn_denoiser_class_name == "Decollider"
+        and cfg.nn_denoiser_pretrained_path is None
+    )
+    return "during_nn_training" if trains_decollider else "peeling"
+
+
 def _initial_detection_cfg(
     cfg: "DeveloperConfig", whiten_cfg: WhiteningConfig
 ) -> SubtractionConfig | ThresholdingConfig | MatchingConfig:
@@ -1426,7 +1437,7 @@ def _initial_detection_cfg(
             extract_radius=cfg.subtraction_radius_um,
             do_nn_denoise=cfg.use_nn_in_subtraction,
             do_tpca_denoise=cfg.do_tpca_denoise,
-            tpca_denoise_fit=cfg.tpca_denoise_fit,
+            tpca_denoise_fit=_tpca_denoise_fit(cfg),
             tpca_rank=cfg.temporal_pca_rank,
             tpca_fit_radius=cfg.fit_radius_um,
             input_waveforms_name="raw",
