@@ -147,7 +147,7 @@ def preprocess(
     if output_dir is not None:
         json_path = ensure_path(output_dir) / json_filename
         if json_path.exists():
-            extractor = load(json_path)
+            extractor = load(json_path, base_folder=json_path.parent)
             assert isinstance(extractor, BaseRecording)
             return extractor
     else:
