@@ -696,6 +696,17 @@ def _add_tpca_and_nn(fc, wc, fs):
         # that was it, all in one as discussed above.
         return more
 
+    tpca_in_nn = fc.do_tpca_denoise and fc.tpca_denoise_fit == "during_nn_training"
+    if tpca_in_nn and not (
+        fc.do_nn_denoise
+        and fc.nn_denoiser_class_name == "Decollider"
+        and fc.nn_denoiser_pretrained_path is None
+    ):
+        raise ValueError(
+            "tpca_denoise_fit='during_nn_training' needs a Decollider which is "
+            "trained here (not pretrained). Use tpca_denoise_fit='peeling' otherwise."
+        )
+
     if fc.do_nn_denoise:
         nn_kwargs = {
             "pretrained_path": fc.nn_denoiser_pretrained_path,
@@ -704,9 +715,16 @@ def _add_tpca_and_nn(fc, wc, fs):
         }
         if fc.nn_denoiser_class_name == "Decollider":
             nn_kwargs["score_radius_um"] = fc.score_filter_radius_um or None
+        if tpca_in_nn:
+            nn_kwargs.update(
+                tpca_denoiser_rank=fc.tpca_rank,
+                tpca_denoiser_fit_radius=fc.tpca_fit_radius,
+                tpca_denoiser_centered=fc.tpca_centered,
+                tpca_denoiser_max_waveforms=fc.tpca_max_waveforms,
+            )
         nn_kwargs.update(fc.nn_denoiser_extra_kwargs or {})
         more.append((fc.nn_denoiser_class_name, nn_kwargs))
-    if fc.do_tpca_denoise:
+    if fc.do_tpca_denoise and not tpca_in_nn:
         more.append(
             (
                 "TemporalPCADenoiser",

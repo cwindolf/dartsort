@@ -43,7 +43,6 @@ class BaseWaveformModule(BModule):
             if name_prefix:
                 name = f"{name_prefix}_{name}"
         self.name = name
-        self.submodule_names = None
         # these buffers below need to be copied, else they share references
         # across all the transformers which seems to cause problems!
         if channel_index is not None:
@@ -132,27 +131,11 @@ class BaseWaveformModule(BModule):
         pass
 
     def _pre_load_state(self, state_dict, prefix, *args, **kwargs):
-        # wish torch would strip the prefix for us?
-        extra_state_keys = [k for k in state_dict if k.endswith("_extra_state")]
-
-        all_submodule_keys = []
-        if self.submodule_names:
-            for sn in self.submodule_names:
-                sn_keys = [
-                    k for k in extra_state_keys if k.endswith(f"{sn}._extra_state")
-                ]
-                assert len(sn_keys) == 1
-                all_submodule_keys.append(sn_keys[0])
-
-        my_extra_state_keys = [
-            k for k in extra_state_keys if k not in all_submodule_keys
-        ]
-        assert len(my_extra_state_keys) <= 1
-        if my_extra_state_keys:
-            extra_state = state_dict[my_extra_state_keys[0]]
-
+        extra_state_key = f"{prefix}_extra_state"
+        if extra_state_key in state_dict:
             # some modules want to know the spike length before loading the state dict
             # and unfortunately set_extra_state usually runs after. doesn't hurt to run now.
+            extra_state = state_dict[extra_state_key]
             self.spike_length_samples = extra_state["spike_length_samples"]
 
         self._other_pre_load_state(state_dict, prefix)
@@ -160,13 +143,10 @@ class BaseWaveformModule(BModule):
         # and this is how subclasses use that info
         # if state dict was dumped before fit, then sls was never known and we
         # don't want to call that initializer, so don't if sls is None.
+        # torch will handle recursion into submodules initialized inside
+        # initialize_spike_length_dependent_params
         if self.spike_length_samples is not None:
             self.initialize_spike_length_dependent_params()
-
-        if self.submodule_names:
-            for sn, smk in zip(self.submodule_names, all_submodule_keys, strict=True):
-                sn_dict = {smk: state_dict[smk]}
-                getattr(self, sn)._pre_load_state(sn_dict, prefix, *args, **kwargs)
 
     def initialize_spike_length_dependent_params(self):
         pass

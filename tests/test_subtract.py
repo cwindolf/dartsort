@@ -14,6 +14,8 @@ from test_util import dense_layout
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.main import subtract
 from dartsort.peel.subtract import SubtractionPeeler
+from dartsort.transform import Decollider, TemporalPCADenoiser
+from dartsort.transform.matched_filter_net import ScoreNetParams
 from dartsort.util import waveform_util
 from dartsort.util.internal_config import (
     ComputationConfig,
@@ -22,6 +24,7 @@ from dartsort.util.internal_config import (
     SubtractionConfig,
     WaveformConfig,
 )
+from dartsort.util.spiketorch import grab_spikes
 
 fixedlenkeys = (
     "subtract_channel_index",
@@ -205,13 +208,13 @@ def test_fakedata_nonn(fakedata, tmp_path):
         print(ns2)
         assert subtraction_full_spike_count == ns2
         with h5py.File(out_h5, locking=False) as h5:
-            assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]´
-            assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]´
-            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]´
-            assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]´
-            assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]´
-            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]´
-            assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]´
+            assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
+            assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
+            assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]
                 ns0,
                 featconf.tpca_rank,
                 channel_index.shape[1],
@@ -512,7 +515,7 @@ def test_denoise_before_localization(tmp_path, nn_localization):
             assert "denoised_ptp_amplitudes" in h5
 
 
-def score_net_cfgs(score_net_pt, score_proposal_threshold):
+def score_net_cfgs(score_net_pt, score_net_threshold):
     subconf = SubtractionConfig(
         subtraction_denoising_cfg=FeaturizationConfig(
             denoise_only=True,
@@ -523,8 +526,8 @@ def score_net_cfgs(score_net_pt, score_proposal_threshold):
             do_tpca_denoise=False,
             **cheap_decollider_kwargs,  # ty: ignore[invalid-argument-type]
         ),
-        detection_proposal="score_net",
-        score_proposal_threshold=score_proposal_threshold,
+        propose_with_score_net=True,
+        score_net_threshold=score_net_threshold,
         first_denoiser_thinning=0.0,
         max_iter=15,
         whiten=False,
@@ -534,7 +537,7 @@ def score_net_cfgs(score_net_pt, score_proposal_threshold):
 
 def test_score_net_proposals(tmp_path, mini_simulations, score_net_pt):
     rec = mini_simulations["driftn_szmini"]["recording"]
-    subconf, featconf = score_net_cfgs(score_net_pt, score_proposal_threshold=4.0)
+    subconf, featconf = score_net_cfgs(score_net_pt, score_net_threshold=4.0)
 
     peeler = SubtractionPeeler.from_config(
         recording=rec,
@@ -562,6 +565,94 @@ def test_score_net_proposals(tmp_path, mini_simulations, score_net_pt):
     assert proposer.field is None and proposer.peak_map is None
 
 
+@pytest.mark.parametrize("tpca_denoise_fit", ["peeling", "during_nn_training"])
+def test_decollider_tpca_denoise_fit(tmp_path, mini_simulations, tpca_denoise_fit):
+    rec = mini_simulations["driftn_szmini"]["recording"]
+    nn_kwargs = dict(
+        **cheap_decollider_kwargs["nn_denoiser_extra_kwargs"],  # ty: ignore[invalid-argument-type]
+        score_net_params=ScoreNetParams(n_epochs=10),
+    )
+    subconf = SubtractionConfig(
+        subtraction_denoising_cfg=FeaturizationConfig(
+            denoise_only=True,
+            do_nn_denoise=True,
+            nn_denoiser_class_name="Decollider",
+            tpca_denoise_fit=tpca_denoise_fit,
+            score_filter_radius_um=35.0,
+            **dict(cheap_decollider_kwargs, nn_denoiser_extra_kwargs=nn_kwargs),  # ty: ignore[invalid-argument-type]
+        ),
+        propose_with_score_net=True,
+        score_net_threshold=4.0,
+        first_denoiser_thinning=0.0,
+        max_iter=15,
+    )
+
+    def _peeler():
+        return SubtractionPeeler.from_config(
+            recording=rec,
+            waveform_cfg=WaveformConfig(),
+            subtraction_cfg=subconf,
+            featurization_cfg=FeaturizationConfig(nn_localization=False),
+            sampling_cfg=FitSamplingConfig(n_residual_snips=512),
+        )
+
+    peeler = _peeler()
+    peeler.load_or_fit_and_save_models(
+        tmp_path, computation_cfg=ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=1)
+    )
+    pipeline = peeler.subtraction_denoising_pipeline
+    denoiser = pipeline.transformers[0]
+    assert isinstance(denoiser, Decollider)
+    if tpca_denoise_fit == "peeling":
+        (tpca,) = pipeline.transformers[1:]
+        assert isinstance(tpca, TemporalPCADenoiser)
+        assert denoiser.tpca_denoiser is None
+    else:
+        assert len(pipeline.transformers) == 1
+        tpca = denoiser.tpca_denoiser
+        assert tpca is not None
+    assert not tpca.needs_fit()
+
+    chunk, _, left_margin, right_margin = peeler.get_chunk(0)
+    times = torch.arange(peeler.trough_offset_samples, 20_000, 101)
+    channels = times % rec.get_num_channels()
+    waveforms = grab_spikes(
+        chunk,
+        times,
+        channels,
+        peeler.b.sub_channel_index,
+        trough_offset=peeler.trough_offset_samples,
+        spike_length_samples=peeler.spike_length_samples,
+        already_padded=False,
+        pad_value=torch.nan,
+    )
+    with torch.no_grad():
+        denoised, _ = pipeline(waveforms.clone(), channels=channels)
+        projected = tpca(denoised.clone(), channels=channels)
+        torch.testing.assert_close(projected, denoised, equal_nan=True)
+
+        reloaded = _peeler()
+        reloaded.load_models(tmp_path)
+        assert not reloaded.needs_fit()
+        reloaded_pipeline = reloaded.subtraction_denoising_pipeline
+        redenoised, _ = reloaded_pipeline(waveforms.clone(), channels=channels)
+        torch.testing.assert_close(redenoised, denoised, equal_nan=True)
+        model_order, _ = denoiser.to_nn_channels(waveforms, channels)
+        torch.testing.assert_close(
+            reloaded_pipeline.transformers[0].score_forward(model_order, channels),
+            denoiser.score_forward(model_order, channels),
+        )
+
+        peeler.eval()
+        result = peeler.peel_chunk(
+            chunk,
+            left_margin=left_margin,
+            right_margin=right_margin,
+            return_waveforms=False,
+        )
+    assert result["n_spikes"] > 0
+
+
 @pytest.mark.parametrize("proposal", ["tpca", "vq"])
 def test_linear_filter_proposals(fakedata, tmp_path, proposal):
     rec, _geom, _T_s, _fs = fakedata
@@ -569,7 +660,7 @@ def test_linear_filter_proposals(fakedata, tmp_path, proposal):
         detection_proposal=proposal,
         proposal_filters=2,
         voltage_threshold=20.0,
-        score_proposal_threshold=20.0,
+        proposal_threshold=20.0,
         subtraction_denoising_cfg=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True, score_filter_radius_um=35.0
         ),
@@ -634,7 +725,7 @@ def test_small_nonn(tmp_path, nn_localization):
         assert st is not None
         with h5py.File(st.parent_h5_path, locking=False) as h5:
             ll = None
-            for k in h5.keys():
+            for k in h5:
                 if k in fixedlenkeys:
                     continue
                 ds = cast(h5py.Dataset, h5[k])
@@ -660,7 +751,7 @@ def test_small_nonn(tmp_path, nn_localization):
         assert st is not None
         with h5py.File(st.parent_h5_path, locking=False) as h5:
             lens = []
-            for k in h5.keys():
+            for k in h5:
                 if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
                     lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1
@@ -682,7 +773,7 @@ def test_small_nonn(tmp_path, nn_localization):
         out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
-            for k in h5.keys():
+            for k in h5:
                 if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
                     lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1

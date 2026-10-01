@@ -25,10 +25,9 @@ class ScoreNetParams:
     energy_powers: tuple[Literal["abs", "log1p"], ...] = ()
 
     # training
-    loss_alpha: float = 1.0
+    n_epochs: int = 90
     target_clamp: float = 30.0
     learning_rate: float | None = None
-    start_epoch: int = 10
 
 
 default_score_net_params = ScoreNetParams()

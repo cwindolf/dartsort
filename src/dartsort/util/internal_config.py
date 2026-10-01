@@ -617,6 +617,9 @@ class RefinementConfig:
     censor_ms: float = 0.25
 
 
+TPCADenoiserFitStage = Literal["during_nn_training", "peeling"]
+
+
 @cfg_dataclass
 class FeaturizationConfig:
     """Featurization and denoising configuration
@@ -644,6 +647,7 @@ class FeaturizationConfig:
     # -- denoising configuration
     do_nn_denoise: bool = False
     do_tpca_denoise: bool = True
+    tpca_denoise_fit: TPCADenoiserFitStage = "peeling"
     do_enforce_decrease: Literal["yes", "no", "loc_only"] = "loc_only"
     # turn off features below
     denoise_only: bool = False
@@ -712,6 +716,8 @@ class FeaturizationConfig:
 
 PeakSign = Literal["pos", "neg", "both"]
 
+DetectionProposal = Literal["voltage", "tpca", "vq"]
+
 WaveformKind = Literal["collisioncleaned", "denoised"]
 
 
@@ -723,11 +729,13 @@ class SubtractionConfig:
     chunk_length_samples: int = 30_000
     fit_only: bool = False
 
-    detection_proposal: Literal["voltage", "tpca", "vq", "score_net"] = "voltage"
+    detection_proposal: DetectionProposal = "voltage"
     proposal_filters: int = 1
+    propose_with_score_net: bool = False
 
     voltage_threshold: float = 3.0
-    score_proposal_threshold: float = 5.0
+    proposal_threshold: float = 5.0
+    score_net_threshold: float = 5.0
     subtraction_threshold: float = 9.0
     threshold_before_whitening: float = 10.0
 
@@ -755,6 +763,7 @@ class SubtractionConfig:
     subtraction_denoising_cfg: FeaturizationConfig = FeaturizationConfig(
         denoise_only=True,
         do_nn_denoise=True,
+        tpca_denoise_fit="during_nn_training",
         extract_radius=200.0,
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
@@ -783,7 +792,10 @@ class ThresholdingConfig:
     chunk_length_samples: int = 30_000
 
     # thresholding
-    detection_threshold: float = 4.0
+    detection_proposal: DetectionProposal = "voltage"
+    proposal_filters: int = 1
+    voltage_threshold: float = 4.0
+    proposal_threshold: float = 5.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
     spatial_dedup_radius_um: float = 150.0
@@ -1405,6 +1417,17 @@ def _matching_cfg(
     )
 
 
+def _tpca_denoise_fit(cfg: "DeveloperConfig") -> TPCADenoiserFitStage:
+    if cfg.tpca_denoise_fit is not None:
+        return cfg.tpca_denoise_fit
+    trains_decollider = (
+        cfg.use_nn_in_subtraction
+        and cfg.nn_denoiser_class_name == "Decollider"
+        and cfg.nn_denoiser_pretrained_path is None
+    )
+    return "during_nn_training" if trains_decollider else "peeling"
+
+
 def _initial_detection_cfg(
     cfg: "DeveloperConfig", whiten_cfg: WhiteningConfig
 ) -> SubtractionConfig | ThresholdingConfig | MatchingConfig:
@@ -1414,6 +1437,7 @@ def _initial_detection_cfg(
             extract_radius=cfg.subtraction_radius_um,
             do_nn_denoise=cfg.use_nn_in_subtraction,
             do_tpca_denoise=cfg.do_tpca_denoise,
+            tpca_denoise_fit=_tpca_denoise_fit(cfg),
             tpca_rank=cfg.temporal_pca_rank,
             tpca_fit_radius=cfg.fit_radius_um,
             input_waveforms_name="raw",
@@ -1429,8 +1453,10 @@ def _initial_detection_cfg(
             peak_sign=cfg.peak_sign,
             detection_proposal=cfg.detection_proposal,
             proposal_filters=cfg.proposal_filters,
+            propose_with_score_net=cfg.propose_with_score_net,
             voltage_threshold=cfg.voltage_threshold,
-            score_proposal_threshold=cfg.score_proposal_threshold,
+            proposal_threshold=cfg.proposal_threshold,
+            score_net_threshold=cfg.score_net_threshold,
             subtraction_threshold=cfg.initial_threshold,
             spatial_dedup_radius_um=cfg.deduplication_radius_um,
             subtract_radius_um=cfg.subtraction_radius_um,
@@ -1455,7 +1481,7 @@ def _initial_detection_cfg(
     if cfg.detection_type == "threshold":
         return ThresholdingConfig(
             peak_sign=cfg.peak_sign,
-            detection_threshold=cfg.voltage_threshold,
+            voltage_threshold=cfg.voltage_threshold,
             spatial_dedup_radius_um=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
             temporal_dedup_radius_samples=cfg.temporal_dedup_radius_samples,
@@ -1618,7 +1644,7 @@ def _motion_estimation_cfg(cfg: "DeveloperConfig") -> MotionEstimationConfig:
         if hasattr(cfg, k.name)
     }
     motion_threshold_cfg = ThresholdingConfig(
-        detection_threshold=cfg.motion_voltage_threshold,
+        voltage_threshold=cfg.motion_voltage_threshold,
         chunk_length_samples=cfg.chunk_length_samples,
         peak_sign=cfg.peak_sign,
         shave_score=cfg.shave_score,

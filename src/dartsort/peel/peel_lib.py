@@ -12,6 +12,7 @@ from torch import Tensor
 from ..detect import detect_and_deduplicate
 from ..util.internal_config import (
     ComputationConfig,
+    FeaturizationConfig,
     FitSamplingConfig,
     PeakSign,
     ThresholdingConfig,
@@ -20,7 +21,6 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.spiketorch import grab_spikes, subtract_spikes_
 from ..util.torch_util import torch_compile
-from ..util.waveform_util import make_channel_index
 from .peel_base import PeelingBatchResult
 
 if TYPE_CHECKING:
@@ -120,7 +120,7 @@ def flatten_denan_and_whiten_batched(
 def threshold_chunk(
     traces,
     channel_index,
-    detection_threshold=4.0,
+    voltage_threshold=4.0,
     peak_sign: PeakSign = "both",
     peak_channel_index=None,
     dedup_channel_index=None,
@@ -140,10 +140,9 @@ def threshold_chunk(
     rg=None,
     quiet=False,
 ) -> PeelingBatchResult:
-    n_index = channel_index.shape[1]
     times_rel, channels, energies = detect_and_deduplicate(
         traces,
-        threshold=detection_threshold,
+        threshold=voltage_threshold,
         peak_channel_index=peak_channel_index,
         dedup_neighborhoods=dedup_channel_index,
         peak_sign=peak_sign,
@@ -153,6 +152,46 @@ def threshold_chunk(
         return_energies=True,
         trough_priority=trough_priority,
     )
+    return extract_detections(
+        traces,
+        times_rel,
+        channels,
+        energies,
+        channel_index=channel_index,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
+        left_margin=left_margin,
+        right_margin=right_margin,
+        max_spikes_per_chunk=max_spikes_per_chunk,
+        thinning=thinning,
+        time_jitter=time_jitter,
+        spatial_jitter_channel_index=spatial_jitter_channel_index,
+        return_waveforms=return_waveforms,
+        rg=rg,
+        quiet=quiet,
+    )
+
+
+def extract_detections(
+    traces,
+    times_rel,
+    channels,
+    energies,
+    *,
+    channel_index,
+    trough_offset_samples=42,
+    spike_length_samples=121,
+    left_margin=0,
+    right_margin=0,
+    max_spikes_per_chunk=None,
+    thinning=0.0,
+    time_jitter=0,
+    spatial_jitter_channel_index=None,
+    return_waveforms=True,
+    rg=None,
+    quiet=False,
+) -> PeelingBatchResult:
+    n_index = channel_index.shape[1]
     if not times_rel.numel():
         return PeelingBatchResult(
             n_spikes=0,
@@ -281,7 +320,7 @@ def perturb_detections(
     n = len(times_rel)
     if time_jitter:
         assert rg is not None
-        jitter = rg.integers(low=-time_jitter, high=time_jitter + 1)
+        jitter = rg.integers(low=-time_jitter, high=time_jitter + 1, size=n)
         times_rel = times_rel + torch.asarray(
             jitter, dtype=times_rel.dtype, device=times_rel.device
         )
@@ -436,8 +475,8 @@ def threshold_to_fit(
     recording: BaseRecording,
     waveform_cfg: WaveformConfig,
     channel_index: Tensor,
-    spatial_dedup_radius: float | None,
     threshold_cfg: ThresholdingConfig,
+    featurization_cfg: FeaturizationConfig,
     sampling_cfg: FitSamplingConfig,
     max_waveforms_fit: int | None = None,
     n_residual_snips: int | None = None,
@@ -448,34 +487,23 @@ def threshold_to_fit(
 
     Used by subtraction to fit initial NN denoisers.
     """
-    from ..transform import Waveform, WaveformPipeline
     from ..util.data_util import subsample_waveforms
     from .threshold import Threshold
 
     computation_cfg = ensure_computation_config(computation_cfg)
 
-    geom = recording.get_channel_locations()
-    waveform_node = Waveform(
-        channel_index=channel_index,
-        waveform_cfg=waveform_cfg,
-        sampling_frequency=recording.sampling_frequency,
-    )
-    waveform_pipeline = WaveformPipeline([waveform_node])
-
-    if spatial_dedup_radius:
-        dn_dedup_ci = make_channel_index(geom, spatial_dedup_radius, to_torch=True)
-        dn_dedup_ci = dn_dedup_ci.to(channel_index)
-    else:
-        dn_dedup_ci = channel_index
-    trainer = Threshold(
+    trainer = Threshold.from_config(
         recording=recording,
-        channel_index=channel_index,
-        featurization_pipeline=waveform_pipeline,
-        p=threshold_cfg,
         waveform_cfg=waveform_cfg,
-        dedup_channel_index=dn_dedup_ci,
-        fit_sampling_cfg=sampling_cfg,
+        thresholding_cfg=threshold_cfg,
+        featurization_cfg=featurization_cfg,
+        sampling_cfg=sampling_cfg,
+        extract_channel_index=channel_index,
     )
+    assert trainer.featurization_pipeline is not None
+    assert "waveforms" in {
+        ds.name for ds in trainer.featurization_pipeline.spike_datasets()
+    }
 
     if max_waveforms_fit is None:
         max_waveforms_fit = sampling_cfg.max_waveforms_fit
@@ -490,6 +518,9 @@ def threshold_to_fit(
     with TemporaryDirectory(dir=tmp_dir) as temp_dir:
         temp_hdf5_filename = Path(temp_dir) / "subtraction_denoiser0_fit.h5"
         try:
+            trainer.load_or_fit_and_save_models(
+                Path(temp_dir) / "threshold_models", computation_cfg=computation_cfg
+            )
             trainer.run_subsampled_peeling(
                 temp_hdf5_filename,
                 stop_after_n_waveforms=max_waveforms_fit,
@@ -515,7 +546,7 @@ def threshold_to_fit(
                 raise ValueError(
                     "Found no spikes when thresholding to get model fitting data. "
                     "This usually indicates a preprocessing issue, since it means "
-                    f"that no spikes could be found at threshold {threshold_cfg.detection_threshold}."
+                    f"that no spikes could be found at threshold {threshold_cfg.voltage_threshold}."
                 )
 
             # fit the thing

@@ -59,7 +59,7 @@ class Shaver(BasePeeler):
             fixed_property_keys=fixed_prop_keys,
         )
         self.p = p
-        self.peel_kind = f"Shave {p.detection_threshold}"
+        self.peel_kind = f"Shave {p.voltage_threshold}"
         self.denoising_pipeline = denoising_pipeline
         self.dedup_batch_size = self.nearest_batch_length()
 
@@ -135,7 +135,7 @@ class Shaver(BasePeeler):
             channel_index=self.b.channel_index,
             denoising_pipeline=self.denoising_pipeline,
             residnorm_decrease_threshold=self.p.shave_score,
-            detection_threshold=self.p.detection_threshold,
+            detection_threshold=self.p.voltage_threshold,
             peak_sign=self.p.peak_sign,
             dedup_channel_index=self.b.dedup_channel_index,
             trough_offset_samples=self.trough_offset_samples,

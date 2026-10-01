@@ -144,9 +144,19 @@ def preprocess(
     json_filename: str = "dartsort_preprocessed_recording.json",
     dtype: str = "float32",
 ) -> BaseRecording:
+    if output_dir is not None:
+        json_path = ensure_path(output_dir) / json_filename
+        if json_path.exists():
+            extractor = load(json_path, base_folder=json_path.parent)
+            assert isinstance(extractor, BaseRecording)
+            return extractor
+    else:
+        json_path = None
+
     if already_preprocessed == "yes":
         logger.info("skipping preprocessing since already_preprocessed=yes.")
         warn_about_preprocessing(rec=rec, will_preprocess=False)
+        _dump_json(rec, json_path)
         return rec
     elif already_preprocessed == "assume_yes_if_float":
         if rec.dtype.kind == "f":
@@ -155,32 +165,31 @@ def preprocess(
                 "the data is already floating point."
             )
             warn_about_preprocessing(rec=rec, will_preprocess=False)
+            _dump_json(rec, json_path)
             return rec
     elif already_preprocessed == "no":
         pass
     else:
         panic(already_preprocessed)
 
-    if output_dir is not None:
-        json_path = ensure_path(output_dir) / json_filename
-        if json_path.exists():
-            extractor = load(json_path)
-            assert isinstance(extractor, BaseRecording)
-            return extractor
-    else:
-        json_path = None
-
     logger.info("applying preprocessing: %s", strategy)
     warn_about_preprocessing(rec=rec, will_preprocess=strategy != "none")
     rec = preprocessing_strategies[strategy](rec, dtype)
-
-    # save provenance
-    if json_path is not None:
-        rec.dump_to_json(
-            file_path=json_path,
-            include_extra_metadata=True,
-            include_properties=True,
-            include_annotations=True,
-        )
+    _dump_json(rec, json_path)
 
     return rec
+
+
+def _dump_json(recording: BaseRecording, json_path: Path | None):
+    if json_path is None:
+        return
+    try:
+        recording.dump_to_json(
+            file_path=json_path,
+            include_extra_metadata=True,  # ty: ignore[unknown-argument]
+            include_properties=True,  # ty: ignore[unknown-argument]
+            include_annotations=True,  # ty: ignore[unknown-argument]
+            relative_to=True,
+        )
+    except TypeError:
+        recording.dump_to_json(file_path=json_path, relative_to=True)
