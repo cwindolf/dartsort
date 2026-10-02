@@ -838,6 +838,7 @@ class TMMRefinement(Refinement):
             save_step_labels_format=self.labels_fmt,
             save_step_labels_dir=self.save_labels_dir,
             save_cfg=self.save_cfg,
+            seed=self.refinement_cfg.sampling_cfg.seed,
             skip_final_assign_and_return_mix_data=skip_final_assign_and_return_mix_data,
         )
         gc.collect()
