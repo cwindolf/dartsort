@@ -3,7 +3,7 @@ import pytest
 import torch
 from test_util import dense_layout
 
-from dartsort.detect.detect import detect_and_deduplicate
+from dartsort.detect.detect import detect_and_deduplicate, is_extreme_transpose_no_pad
 from dartsort.util.waveform_util import make_channel_index
 
 
@@ -273,3 +273,38 @@ def test_detect_edgecases(case, peak_sign):
             assert torch.equal(out_t, targ_t)
             assert torch.equal(out_c, targ_c)
         assert torch.equal(out_v, targ_v)
+
+
+@pytest.mark.parametrize("use_neighbors", [False, True])
+@pytest.mark.parametrize("ties", [False, True])
+def test_is_extreme_transpose_no_pad_matches_reference(use_neighbors, ties):
+    """Peak map equals a plain sliding-max reference (guards the CPU max-pool path)."""
+    h = dense_layout()
+    g = np.c_[h["x"], h["y"]]
+    C = len(g)
+    neighbors = make_channel_index(g, 35, to_torch=True) if use_neighbors else None
+    dt = 5
+
+    rg = torch.Generator().manual_seed(0)
+    T = 1000
+    if ties:
+        # small integers -> many equal values, so the >= comparison is exercised
+        X = torch.randint(0, 4, (T, C + 1), generator=rg).float()
+    else:
+        X = torch.randn((T, C + 1), generator=rg)
+    X[:, -1] = -torch.inf  # dartsort's padding channel
+
+    # Reference without max pooling: neighbour max, then a -inf-padded sliding
+    # max over 2 * dt + 1 samples; a sample is a peak if
+    # its window holds nothing larger.
+    if use_neighbors:
+        Xmax = X[:, neighbors].amax(dim=2)
+    else:
+        Xmax = X[:, :-1]
+    pad = torch.full((dt, C), -torch.inf)
+    Xmax = torch.cat([pad, Xmax, pad]).unfold(0, 2 * dt + 1, 1).amax(dim=2)
+    expected = X[:, :-1] >= Xmax
+
+    peak = is_extreme_transpose_no_pad(X, dt=dt, neighbors=neighbors)
+    assert peak.shape == (T, C)
+    assert torch.equal(peak, expected)
