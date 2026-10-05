@@ -9,6 +9,7 @@ from dartsort.clustering import (
     get_clusterer,
     refinement_strategies,
 )
+from dartsort.clustering.refine_util import HAVE_KDEPY
 from dartsort.main import cluster
 from dartsort.templates.postprocess_util import reorder_templates_by_depth
 from dartsort.util.internal_config import (
@@ -78,9 +79,12 @@ eval_refinement_kwargs = [
     dict(refinement_strategy="tmm", demolish_during_selection=False),
 ]
 eval_post_refinement_kwargs = [
-    (
-        dict(refinement_strategy="filter", gmm_isolation_threshold=0.5),
-        dict(refinement_strategy="agglomerate", dedup_ms=0.5),
+    pytest.param(
+        (
+            dict(refinement_strategy="filter", gmm_isolation_threshold=0.5),
+            dict(refinement_strategy="agglomerate", dedup_ms=0.5),
+        ),
+        marks=pytest.mark.skipif(not HAVE_KDEPY, reason="no KDEpy"),
     )
 ]
 

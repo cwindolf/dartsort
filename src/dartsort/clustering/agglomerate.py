@@ -6,8 +6,14 @@ from typing import cast
 import numba
 import numpy as np
 import torch
-from KDEpy import FFTKDE
 from spikeinterface.core import BaseRecording
+
+try:
+    import KDEpy
+
+    HAVE_KDEPY = True
+except ImportError:
+    HAVE_KDEPY = False
 
 from ..templates.template_util import shared_basis_compress_templates
 from ..templates.templates import TemplateData
@@ -479,6 +485,8 @@ def qda(
 ) -> QDAResult:
     from ..util.data_util import get_gmm_scores
 
+    assert HAVE_KDEPY or not bimodality
+
     # reconstruct scores from sorting attached data (exclude train_ix?)
     gscores = get_gmm_scores(sorting)
     glabels = sorting.labels
@@ -596,6 +604,8 @@ def _qda_job(ij):
     bc = binc.shape[0] // 2
     assert np.isclose(binc[bc], 0.0)
     assert binc.shape[0] == 2 * bc + 1
+
+    from KDEpy import FFTKDE
 
     try:
         kde = FFTKDE(bw="ISJ").fit(dll)

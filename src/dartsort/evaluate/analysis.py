@@ -16,7 +16,7 @@ import spikeinterface.core as sc
 import torch
 from sklearn.decomposition import PCA
 
-from ..clustering.agglomerate import QDAResult, qda, template_distances
+from ..clustering.agglomerate import HAVE_KDEPY, QDAResult, qda, template_distances
 from ..templates import TemplateData
 from ..util import job_util, logging_util
 from ..util.data_util import (
@@ -193,6 +193,7 @@ class DARTsortAnalysis:
 
         if (
             allow_qda
+            and HAVE_KDEPY
             and template_data is not None
             and hasattr(sorting, "gmm_candidates")
         ):

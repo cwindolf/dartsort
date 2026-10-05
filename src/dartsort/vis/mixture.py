@@ -6,11 +6,11 @@ from typing import cast
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from KDEpy import FFTKDE
 from matplotlib.lines import Line2D
 from scipy.cluster.hierarchy import fcluster, linkage
 from tqdm.auto import tqdm
 
+from ..clustering.agglomerate import HAVE_KDEPY
 from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
 from ..clustering.mixture import (
     MixtureModelAndDatasets,
@@ -460,7 +460,14 @@ class NeighborDistances(MixtureComponentPlot):
 class NeighborQDAPlot(MixtureComponentPlot):
     kind = "neighbors"
 
-    def __init__(self, count=5, log=False, ncols=1, kind="kde", kde_bin=1.0):
+    def __init__(
+        self,
+        count=5,
+        log=False,
+        ncols=1,
+        kind="kde" if HAVE_KDEPY else "hist",
+        kde_bin=1.0,
+    ):
         super().__init__()
         self.count = count
         self.log = log
@@ -550,6 +557,8 @@ class NeighborQDAPlot(MixtureComponentPlot):
                     linestyle=ls,
                 )
             elif self.kind == "kde":
+                from KDEpy import FFTKDE
+
                 made_one = False
                 messages = []
                 for (label, dll), linestyle in zip(dlls.items(), ls, strict=False):

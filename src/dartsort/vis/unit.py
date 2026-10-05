@@ -13,10 +13,10 @@ from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
-from KDEpy import FFTKDE
 from matplotlib.legend_handler import HandlerTuple
 from tqdm.auto import tqdm
 
+from ..clustering.agglomerate import HAVE_KDEPY
 from ..evaluate.analysis import DARTsortAnalysis, WaveformsBag
 from ..util.job_util import get_global_computation_config
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, cloudpickle, get_pool
@@ -833,7 +833,14 @@ class NeighborCCGPlot(UnitPlot):
 class NeighborQDAPlot(UnitPlot):
     kind = "neighbors"
 
-    def __init__(self, count=5, log=False, ncols=1, kind="kde", kde_bin=1.0):
+    def __init__(
+        self,
+        count=5,
+        log=False,
+        ncols=1,
+        kind="kde" if HAVE_KDEPY else "hist",
+        kde_bin=1.0,
+    ):
         super().__init__()
         self.count = count
         self.log = log
@@ -916,6 +923,8 @@ class NeighborQDAPlot(UnitPlot):
                     density=True,
                 )
             elif self.kind == "kde":
+                from KDEpy import FFTKDE
+
                 bines, bincs = centered_bins(dll)
                 if not bincs.size:
                     continue
@@ -1062,7 +1071,7 @@ def make_all_summaries(
     n_jobs=None,
     show_progress=True,
     namebyamp=False,
-    nameby: tuple[str, np.ndarray] | None=None,
+    nameby: tuple[str, np.ndarray] | None = None,
     overwrite=False,
     unit_ids=None,
     gizmo_name="sorting_analysis",
@@ -1158,7 +1167,12 @@ def pngname(unit_id, sorting_analysis=None, nameby=None, ext="png"):
 
 
 def all_summaries_done(
-    unit_ids, save_folder, sorting_analysis=None, namebyamp=False, nameby=None, ext="png"
+    unit_ids,
+    save_folder,
+    sorting_analysis=None,
+    namebyamp=False,
+    nameby=None,
+    ext="png",
 ):
     if not save_folder.exists():
         return False
