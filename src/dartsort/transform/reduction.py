@@ -176,7 +176,6 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
             mean = np.nan_to_num(mean, copy=False)
             return count, mean, std
         finally:
-            global _reduction_stuff
             _reduction_stuff.ctx = None
 
     def _initialize(self, wf_shape: tuple[int, int]):
@@ -221,7 +220,6 @@ def _reduction_init(
     dev: torch.device,
     do_std: bool,
 ):
-    global _reduction_stuff
 
     labels = torch.asarray(labels, dtype=torch.int32, device=dev)
 
@@ -249,7 +247,6 @@ def _reduction_init(
 
 
 def _reduction_job(j: int) -> _ReductionResult | None:
-    global _reduction_stuff
     p = cast(_ReductionStuff, _reduction_stuff.ctx)
     (inu,) = (p.labels == j).nonzero(as_tuple=True)
     inu = inu.cpu()

@@ -21,7 +21,6 @@ def localize_waveforms(
     radius=None,
     n_channels_subset=None,
 ):
-    C, dim = geom.shape
     amp_vecs = ptp(waveforms, 1)
     if main_channels is None:
         main_channels = amp_vecs.argmax(1)
@@ -287,7 +286,7 @@ def point_source_mse(locs, amp_vecs, channels, channel_index, geom):
             torch.asarray(amp_vecs).nan_to_num(),
             channel_mask,
             *torch.asarray(locs).T,
-            torch.asarray(dxz).nan_to_num(),
+            torch.asarray(dxz).nan_to_num(),  # ty: ignore[too-many-positional-arguments]
         )
         alpha = alpha.numpy()
     else:

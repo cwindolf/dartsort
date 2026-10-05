@@ -71,7 +71,7 @@ def get_background_recording(
     spatial_std, spatial_vt = rbf_kernel_sqrt(
         geom, bandwidth=noise_spatial_kernel_bandwidth
     )
-    noise_temporal_kernel = noise_temporal_kernel.astype(spatial_vt.dtype) + 0j  # ty:ignore[no-matching-overload]
+    noise_temporal_kernel = noise_temporal_kernel.astype(spatial_vt.dtype) + 0j
     noise = StationaryFactorizedNoise(
         spatial_std=spatial_std,
         vt_spatial=spatial_vt,
@@ -119,7 +119,7 @@ class WhiteNoiseRecording(BaseRecording):
             channel_ids = np.asarray(channel_ids)
             assert channel_ids.shape == (n_channels,)
         assert n_segments == 1
-        super().__init__(sampling_frequency, channel_ids=channel_ids, dtype=dtype)  # type: ignore
+        super().__init__(sampling_frequency, channel_ids=channel_ids, dtype=dtype)
         self._serializability["json"] = False
         self._serializability["pickle"] = False
         segment = WhiteNoiseRecordingSegment(

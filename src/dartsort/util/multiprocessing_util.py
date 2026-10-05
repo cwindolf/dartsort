@@ -16,7 +16,7 @@ try:
     have_cloudpickle = True
 except ImportError:
     try:
-        from joblib.externals import cloudpickle
+        from joblib.externals import cloudpickle  # ty: ignore[unresolved-import]
 
         have_cloudpickle = True
     except ImportError:
@@ -152,7 +152,7 @@ def handle_negative_jobs(n_jobs: int):
         n_cores = os.process_cpu_count()  # type: ignore
     except AttributeError:
         try:
-            my_cores = os.sched_getaffinity(0)  # type: ignore  # ty: ignore[x]
+            my_cores = os.sched_getaffinity(0)  # type: ignore
             if my_cores:
                 n_cores = len(my_cores)
             else:

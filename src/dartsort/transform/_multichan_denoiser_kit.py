@@ -353,7 +353,7 @@ def get_noise_h5(
 
 @numba.njit(parallel=True)
 def take_along_dim2_masked(arr, out, channels, mask_val):
-    for i in numba.prange(arr.shape[0]):  # type: ignore
+    for i in numba.prange(arr.shape[0]):
         wf = arr[i]
         cc = channels[i]
         for t in range(arr.shape[1]):
