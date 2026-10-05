@@ -1,7 +1,12 @@
 import numpy as np
 import torch
 from dredge.dredge_ap import register as dredge_register
-from dredge.motion_util import MotionEstimate, get_motion_estimate, speed_limit_filter
+from dredge.motion_util import (
+    MotionEstimate,
+    NonrigidMotionEstimate,
+    RigidMotionEstimate,
+    speed_limit_filter,
+)
 from spikeinterface.core import BaseRecording, Motion
 
 from .data_util import DARTsortSorting
@@ -70,26 +75,27 @@ def dredge_estimate_motion(
 
 
 def dredge_to_si(dredge_motion_est: MotionEstimate) -> Motion:
-    disp = dredge_motion_est.displacement
-    t = dredge_motion_est.time_bin_centers_s
+    disp = np.asarray(dredge_motion_est.displacement)
+    t = np.asarray(dredge_motion_est.time_bin_centers_s)
     if disp.ndim == 1:
-        # rigid case only for now
         return Motion(
             displacement=disp[:, None],
             temporal_bins_s=t,
             spatial_bins_um=np.zeros(1),
         )
-    else:
-        # TODO
-        raise NotImplementedError
+    z = np.asarray(dredge_motion_est.spatial_bin_centers_um)
+    assert disp.shape == (z.size, t.size)
+    return Motion(displacement=disp.T, temporal_bins_s=t, spatial_bins_um=z)
 
 
 def si_to_dredge(si_motion: Motion) -> MotionEstimate:
-    assert len(si_motion.displacement) == 1
-    assert isinstance(si_motion.temporal_bins_s, list)
-    assert len(si_motion.temporal_bins_s) == 1
-    return get_motion_estimate(
-        time_bin_centers_s=np.asarray(si_motion.temporal_bins_s[0]),
-        spatial_bin_centers_um=np.asarray(si_motion.spatial_bins_um),
-        displacement=np.asarray(si_motion.displacement[0]).T,
+    assert si_motion.num_segments == 1
+    assert si_motion.direction == "y"
+    disp = np.asarray(si_motion.displacement[0])
+    t = np.asarray(si_motion.temporal_bins_s[0])
+    z = np.asarray(si_motion.spatial_bins_um)
+    if z.size == 1:
+        return RigidMotionEstimate(disp[:, 0], time_bin_centers_s=t)
+    return NonrigidMotionEstimate(
+        disp.T, time_bin_centers_s=t, spatial_bin_centers_um=z
     )
