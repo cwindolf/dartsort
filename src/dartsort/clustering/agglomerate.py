@@ -817,7 +817,7 @@ def _check_soft_assign_invariants(
     maxdiff = -np.inf
     n_neginf_viol = 0
 
-    for s in numba.prange(cand.shape[0]):  # ty: ignore[not-iterable]
+    for s in numba.prange(cand.shape[0]):
         for j in range(n_cand):
             if cand[s, j] < 0:
                 nbye += 1
@@ -837,7 +837,7 @@ def _assign_labels(
     n_changed = 0
     n_labeled = 0
 
-    for s in numba.prange(cand.shape[0]):  # ty: ignore[not-iterable]
+    for s in numba.prange(cand.shape[0]):
         if labels[s] >= 0:
             n_labeled += 1
             if labels[s] != cand[s, 0]:
@@ -856,7 +856,7 @@ def _combine_loop(
 ):
     n_cand = cand.shape[1]
 
-    for s in numba.prange(cand.shape[0]):  # ty: ignore
+    for s in numba.prange(cand.shape[0]):
         spike_cand = cand[s]
         for j in range(n_cand - 1):
             spike_candj = spike_cand[j]

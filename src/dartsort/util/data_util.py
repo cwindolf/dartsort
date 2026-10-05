@@ -750,7 +750,7 @@ class DARTsortSorting:
             # path needs to be relative to npz path's parent in case user moves stuff
             h5p = ensure_path(self.parent_h5_path, strict=True)
             try:
-                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # type: ignore
+                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)
             except TypeError:
                 try:
                     h5p = h5p.relative_to(sorting_npz.parent)
@@ -1096,7 +1096,9 @@ class DARTsortSorting:
                 yield chunk
 
     def slice_feature_by_name(
-        self, dataset_name: str, mask: np.ndarray | slice = slice(None)  # noqa: B008
+        self,
+        dataset_name: str,
+        mask: np.ndarray | slice = slice(None),
     ) -> np.ndarray:
         if hasattr(self, dataset_name):
             return getattr(self, dataset_name)[mask]
@@ -2395,7 +2397,7 @@ def _gmm_remap_on_disk(
 def vacuum_neg_candidate_prob(
     n_units: int, cand: np.ndarray, resp: np.ndarray, loglik: np.ndarray
 ):
-    for s in numba.prange(cand.shape[0]):  # ty: ignore
+    for s in numba.prange(cand.shape[0]):
         spike_cand = cand[s]
         # vacuum into noise component
         # this is partly to handle stuff that was missed before getting here
@@ -2449,7 +2451,7 @@ def _pos_int_counts(x: np.ndarray) -> tuple[np.ndarray, int]:
     # Create an isolated accumulation space for every thread
     tcounts = np.zeros((num_threads, K), dtype=np.int64)
     neg_count = 0
-    for i in numba.prange(x.shape[0]):  # ty: ignore
+    for i in numba.prange(x.shape[0]):
         xi = x[i]
         if xi < 0:
             neg_count += 1
@@ -2475,7 +2477,7 @@ def flatten_remapping(units: np.ndarray, K: int | None = None) -> np.ndarray:
 @numba.njit(nogil=True, parallel=True)
 def count_not_sorted(x: np.ndarray) -> int:
     count = 0
-    for i in numba.prange(x.shape[0] - 1):  # ty: ignore[not-iterable]
+    for i in numba.prange(x.shape[0] - 1):
         if x[i] > x[i + 1]:
             count += 1
     return count
@@ -2515,7 +2517,7 @@ def apply_label_remapping_in_place(
 def _apply_remapping_and_count_over(labels: np.ndarray, remapping: np.ndarray) -> int:
     over_count = 0
     K = remapping.shape[0]
-    for i in numba.prange(labels.shape[0]):  # ty: ignore[not-iterable]
+    for i in numba.prange(labels.shape[0]):
         li = labels[i]
         if li < 0:
             continue

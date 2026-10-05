@@ -121,7 +121,7 @@ def merge_group_shifts(
 
 @numba.njit(nogil=True, parallel=True)
 def apply_time_shifts(times: np.ndarray, labels: np.ndarray, unit_shifts: np.ndarray):
-    for i in numba.prange(times.shape[0]):  # ty: ignore[not-iterable]
+    for i in numba.prange(times.shape[0]):
         label = labels[i]
         if label >= 0:
             times[i] -= unit_shifts[label]
@@ -867,7 +867,7 @@ def _violation_count_matrix(
     n = times.shape[0]
 
     # parallelize over chunks
-    for c in numba.prange(starts.shape[0] - 1):  # ty: ignore[not-iterable]
+    for c in numba.prange(starts.shape[0] - 1):
         out = counts[c]  # my thread's output buffer
 
         for i in range(starts[c], starts[c + 1]):
@@ -904,7 +904,7 @@ def _violation_weight_matrix(
     window_length = weights.shape[0] - 1
 
     # parallelize over chunks
-    for c in numba.prange(starts.shape[0] - 1):  # ty: ignore[not-iterable]
+    for c in numba.prange(starts.shape[0] - 1):
         out = sums[c]  # my thread's output buffer
 
         for i in range(starts[c], starts[c + 1]):

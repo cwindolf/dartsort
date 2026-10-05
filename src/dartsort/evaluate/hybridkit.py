@@ -135,7 +135,7 @@ def make_hybrid_recording(
     assert target_recording.get_num_segments() == 1
     assert injected_sorting.get_num_segments() == 1
     if hasattr(injected_sorting, "get_last_spike_frame"):
-        assert injected_sorting.get_last_spike_frame() < target_recording.get_num_frames()  # ty:ignore[call-non-callable]
+        assert injected_sorting.get_last_spike_frame() < target_recording.get_num_frames()
     assert abs(templates.sampling_frequency - target_sampling_frequency) < 10
 
     if folder is not None and not overwrite:

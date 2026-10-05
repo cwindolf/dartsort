@@ -716,7 +716,7 @@ def get_channel_subset(
         inds = inds[:, None, :]
 
     return take_along_dim(
-        input=waveforms,  # type: ignore
+        input=waveforms,
         indices=inds,
         dim=waveforms.ndim - 1,
         out=out,
