@@ -270,7 +270,8 @@ def test_reproducible_and_residual(
 
 @pytest.mark.parametrize("drift_speed", [0.0, -1.0, 5.0])
 @pytest.mark.parametrize("drift_type", ["triangle"])
-def test_motion(tmp_path, drift_speed, drift_type):
+@pytest.mark.parametrize("motion_batching_mode", ["full", "online"])
+def test_motion(tmp_path, drift_speed, drift_type, motion_batching_mode):
     sim = simkit.generate_simulation(
         tmp_path / "sim",
         tmp_path / "noise",
@@ -305,7 +306,11 @@ def test_motion(tmp_path, drift_speed, drift_type):
     me1 = get_motion_info(
         recording=sim["recording"],
         sorting=sim["sorting"],
-        motion_cfg=MotionEstimationConfig(rigid=True),
+        motion_cfg=MotionEstimationConfig(
+            rigid=True,
+            motion_batching_mode=motion_batching_mode,
+            motion_chunk_len_s=6.0,
+        ),
         amplitudes_dataset_name="ptp_amplitudes",
         localizations_dataset_name="localizations",
     ).dredge_motion_est
