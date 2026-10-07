@@ -10,6 +10,7 @@ from .util.internal_config import (
     KmeansppSelection,
     KmeansppStopping,
     MixtureStep,
+    MotionBatchingMode,
     PreprocessingStrategy,
     RealignStrategy,
     TemplateSVDMethod,
@@ -250,6 +251,10 @@ class DARTsortUserConfig:
     max_dist_from_median_um: float = 250.0
     """Motion bins farther than this from the local median will be replaced by interpolation."""
     median_neighborhood_bins: int = 51
+    motion_batching_mode: MotionBatchingMode = "full"
+    """'full' or 'online'. Online helps with long recordings."""
+    motion_chunk_len_s: Annotated[float, Field(gt=0)] = 3000.0
+    """Chunk length in seconds for online motion tracking"""
 
     # -- pipeline control parameters for specific use cases
     fit_matching_models_only: bool = False

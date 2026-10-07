@@ -6,8 +6,14 @@ from typing import cast
 import numba
 import numpy as np
 import torch
-from KDEpy import FFTKDE
 from spikeinterface.core import BaseRecording
+
+try:
+    import KDEpy
+
+    HAVE_KDEPY = True
+except ImportError:
+    HAVE_KDEPY = False
 
 from ..templates.template_util import shared_basis_compress_templates
 from ..templates.templates import TemplateData
@@ -479,6 +485,8 @@ def qda(
 ) -> QDAResult:
     from ..util.data_util import get_gmm_scores
 
+    assert HAVE_KDEPY or not bimodality
+
     # reconstruct scores from sorting attached data (exclude train_ix?)
     gscores = get_gmm_scores(sorting)
     glabels = sorting.labels
@@ -596,6 +604,8 @@ def _qda_job(ij):
     bc = binc.shape[0] // 2
     assert np.isclose(binc[bc], 0.0)
     assert binc.shape[0] == 2 * bc + 1
+
+    from KDEpy import FFTKDE
 
     try:
         kde = FFTKDE(bw="ISJ").fit(dll)
@@ -807,7 +817,7 @@ def _check_soft_assign_invariants(
     maxdiff = -np.inf
     n_neginf_viol = 0
 
-    for s in numba.prange(cand.shape[0]):  # ty: ignore[not-iterable]
+    for s in numba.prange(cand.shape[0]):
         for j in range(n_cand):
             if cand[s, j] < 0:
                 nbye += 1
@@ -827,7 +837,7 @@ def _assign_labels(
     n_changed = 0
     n_labeled = 0
 
-    for s in numba.prange(cand.shape[0]):  # ty: ignore[not-iterable]
+    for s in numba.prange(cand.shape[0]):
         if labels[s] >= 0:
             n_labeled += 1
             if labels[s] != cand[s, 0]:
@@ -846,7 +856,7 @@ def _combine_loop(
 ):
     n_cand = cand.shape[1]
 
-    for s in numba.prange(cand.shape[0]):  # ty: ignore
+    for s in numba.prange(cand.shape[0]):
         spike_cand = cand[s]
         for j in range(n_cand - 1):
             spike_candj = spike_cand[j]

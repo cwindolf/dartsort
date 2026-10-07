@@ -4,11 +4,16 @@ from typing import cast
 import numba
 import numpy as np
 import torch
-from KDEpy import FFTKDE
-from KDEpy.bw_selection import improved_sheather_jones
 from scipy.spatial import KDTree
 from scipy.stats import norm
 from spikeinterface.core.baserecording import BaseRecording
+
+try:
+    import KDEpy
+
+    HAVE_KDEPY = True
+except ImportError:
+    HAVE_KDEPY = False
 
 from dartsort.clustering.mixture import Scores
 
@@ -392,7 +397,9 @@ def collision_cleaning_error_filter(
             assert flag_scores.excess_rate is not None
             flag_bad |= flag_scores.excess_rate > refinement_cfg.cc_flag_excess_rate
 
-        logger.dartsortdebug(f"CC flag criterion dropped {flag_bad.sum()} / {nu0} units.")
+        logger.dartsortdebug(
+            f"CC flag criterion dropped {flag_bad.sum()} / {nu0} units."
+        )
         keep_mask &= np.logical_not(flag_bad)
 
     bad_ids = np.flatnonzero(np.logical_not(keep_mask))
@@ -646,6 +653,7 @@ def gmm_isolation_scores(
     kde_rhs=50.0,
     kde_dx: float = 0.5,
 ) -> GMMIsolationScores:
+    assert HAVE_KDEPY
     if unit_ids is None:
         unit_ids = np.arange(scores.candidates[:, 0].max().item() + 1)
     assert unit_ids is not None
@@ -761,6 +769,9 @@ def _iso_job(unit_id) -> tuple[float, np.ndarray | None, np.ndarray | None]:
     # fit kde. will symmetrize around 0 to avoid boundary issues (since lr>=0)
     amax = in_lr.abs().amax().item()
     lr = in_lr.double().numpy(force=True)
+    from KDEpy import FFTKDE
+    from KDEpy.bw_selection import improved_sheather_jones
+
     try:
         # select bandwidth based on positive part
         bw = improved_sheather_jones(lr[:, None])

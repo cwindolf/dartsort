@@ -308,5 +308,26 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
     assert np.array_equal(nids_3, neighborhood_ids_2)
 
 
-if __name__ == "__main__":
-    test_shifted_waveforms()
+@pytest.mark.parametrize("rigid", [True, False])
+def test_dredge_si_motion_conversion(rigid):
+    rg = np.random.default_rng(0)
+    t = np.arange(50) + 0.5
+    z = None if rigid else np.array([100.0, 500.0, 900.0])
+    disp = 10 * rg.normal(size=50 if rigid else (3, 50))
+    me = mu.get_motion_estimate(disp, time_bin_centers_s=t, spatial_bin_centers_um=z)
+    geom = np.c_[np.tile([0.0, 32.0], 50), np.repeat(20.0 * np.arange(50), 2)]
+    motion = MotionInfo.from_motion_est(geom=geom, dredge_motion_est=me)
+    si_motion = motion.to_spikeinterface()
+    assert si_motion is not None
+    si_motion_info = MotionInfo.from_motion_est(geom=geom, si_motion=si_motion)
+    me2 = si_motion_info.to_dredge()
+    assert me2 is not None
+    assert type(me2) is type(me)
+    assert si_motion_info.is_nonrigid == (not rigid)
+    np.testing.assert_array_equal(si_motion_info.rgeom, motion.rgeom)
+
+    qt = rg.uniform(0, 50, size=1000)
+    qz = rg.uniform(0, 1000, size=1000)
+    d = me.disp_at_s(qt, qz)
+    np.testing.assert_allclose(si_motion_info.disp_at_s(qt, qz), d, atol=1e-6)
+    np.testing.assert_allclose(me2.disp_at_s(qt, qz), d, atol=1e-6)

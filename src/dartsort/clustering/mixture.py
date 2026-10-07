@@ -7598,7 +7598,7 @@ def _update_lut_mean_batch(
 
     # constplogdet. add in the signal-rank-0-only terms.
     lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)  # type: ignore  # ty: ignore[x]
-    lut_params.constplogdet[i0:i1] += neighb_cov.b.logdet[nn]
+    lut_params.constplogdet[i0:i1] += neighb_cov.b.logdet[nn]  # ty: ignore[not-subscriptable]
     if pnoid:
         assert lut_params.constplogdet[i0:i1].isfinite().all()  # type: ignore  # ty: ignore[x]
 
@@ -7658,7 +7658,7 @@ def _update_lut_ppca_batch(
     assert lut_params.Tpad is not None
     lut_params.Tpad[i0:i1, :, :-1] = T  # type: ignore  # ty: ignore[x]
     cap_logdet = L.diagonal(dim1=-2, dim2=-1).log().sum(dim=1).mul_(2.0)
-    lut_params.constplogdet[i0:i1] += cap_logdet
+    lut_params.constplogdet[i0:i1] += cap_logdet  # ty: ignore[not-subscriptable]
     if pnoid:
         assert lut_params.b.constplogdet[i0:i1].isfinite().all()
 

@@ -159,24 +159,9 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         cii, cjj = np.nonzero(self.channel_index_np < len(self.channel_index_np))
         self.channel_index_valid_inds = cii, cjj
 
-        # precompute drifting neighborhood lookup tables
         if self.motion.drifting:
-            # in this case, prebake a lookup table
-            # TODO just consider relevant time bins here?
-            # or chunk this somehow?
-            tbs = self.motion.time_bins_s
-            tcm_t, nid_t = neighborhood_mapping_at_time(
-                motion=self.motion,
-                t_s=torch.from_numpy(tbs),
-                neighborhoods=self.b.neighborhoods,
-                channel_index=self.channel_index_np,
-                workers=self.workers,
-                static_neighbs=self.static_neighbs,
-                channel_index_valid_inds=self.channel_index_valid_inds,
-            )
             nid_map = None
         else:
-            tcm_t = nid_t = tbs = None
             # in this case, channel index is a superset of neighborhoods and
             # we prebake the mapping from chans to neighb ids
             ci_eq_neighb = _outer_all_equal(
@@ -193,13 +178,6 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             )
             nid_map[_chans] = _chan_nids
         self.register_buffer_or_none("neighborhood_ids_map", nid_map)
-        self.drifting_time_bins_s = tbs
-        self.register_buffer_or_none(
-            "drifting_target_channels_map_t", tcm_t, persistent=False
-        )
-        self.register_buffer_or_none(
-            "drifting_neighborhood_ids_map_t", nid_t, persistent=False
-        )
 
     def fit(
         self,
@@ -360,10 +338,21 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         # drifting channel mapping
         assert self.motion is not None
         if self.motion.drifting:
-            assert self.drifting_time_bins_s is not None
-            t_idx = find_nearest(self.drifting_time_bins_s, chunk_center_s)
-            target_channels_map = self.b.drifting_target_channels_map_t[t_idx]
-            neighborhood_ids_map = self.b.drifting_neighborhood_ids_map_t[t_idx]
+            time_bins_s = self.motion.time_bins_s
+            t_bin_s = time_bins_s[find_nearest(time_bins_s, chunk_center_s)]
+            depths_um = self.motion.geom[:, 1]
+            _, n_pitches_shift = self.motion.pitch_shifts(
+                times_s=np.full_like(depths_um, t_bin_s), depths_um=depths_um
+            )
+            target_channels_map, neighborhood_ids_map = neighborhood_mapping_at_shift(
+                self.motion,
+                n_pitches_shift=n_pitches_shift,
+                channel_index=self.channel_index_np,
+                neighborhoods=self.b.neighborhoods,
+                static_neighbs=self.static_neighbs,
+                channel_index_valid_inds=self.channel_index_valid_inds,
+                workers=self.workers,
+            )
         else:
             target_channels_map = self.b.channel_index
             neighborhood_ids_map = self.b.neighborhood_ids_map
@@ -411,59 +400,37 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         return res
 
 
-def neighborhood_mapping_at_time(
+def neighborhood_mapping_at_shift(
     motion: MotionInfo,
     *,
-    t_s: torch.Tensor | np.ndarray,
+    n_pitches_shift: np.ndarray,
     channel_index: np.ndarray,
     neighborhoods: torch.Tensor,
-    workers: int = 4,
-    shift_mode="round",
     static_neighbs: np.ndarray,
     channel_index_valid_inds: tuple[np.ndarray, np.ndarray],
-):
-    t_s = t_s.numpy(force=True) if isinstance(t_s, torch.Tensor) else np.asarray(t_s)
-    t_s = np.atleast_1d(t_s)
-
-    index_at_time = torch.full((len(t_s), *channel_index.shape), -1)
-    nids_at_time = torch.full(
-        (len(t_s), channel_index.shape[0]),
-        neighborhoods.shape[0],
-        device=neighborhoods.device,
+    workers: int = 4,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Map channels to registered target channels and neighborhood ids"""
+    shifted_neighbs = static_neighbs.copy()
+    shifted_neighbs[:, :, 1] += n_pitches_shift[:, None] * motion.pitch
+    _, umatch = motion.rgeom_kdt.query(
+        shifted_neighbs[channel_index_valid_inds],
+        distance_upper_bound=motion.min_dist,
+        workers=workers,
     )
+    index = np.full(channel_index.shape, motion.rgeom.shape[0])
+    index[channel_index_valid_inds] = umatch
+    index = torch.asarray(index, device=neighborhoods.device)
+    assert index.shape[1] == neighborhoods.shape[1]
 
-    for j, t in enumerate(t_s):
-        probe_disp = -motion.disp_at_s(
-            times_s=t, depths_um=motion.geom[:, 1], grid=True
-        )
-        if shift_mode == "floor":
-            n_pitches_shift = (probe_disp / motion.pitch).astype(np.int32)
-        elif shift_mode == "round":
-            n_pitches_shift = np.round(probe_disp / motion.pitch).astype(np.int32)
-        else:
-            panic(shift_mode)
-        shift = n_pitches_shift * motion.pitch
-        shifted_neighbs = static_neighbs.copy()
-        shifted_neighbs[:, :, 1] += shift
-        _, umatch = motion.rgeom_kdt.query(
-            shifted_neighbs[channel_index_valid_inds],
-            distance_upper_bound=motion.min_dist,
-            workers=workers,
-        )
-        index = np.full(channel_index.shape, motion.rgeom.shape[0])
-        index[channel_index_valid_inds] = umatch
-        index = torch.asarray(index, device=neighborhoods.device)
-        assert index.shape[1] == neighborhoods.shape[1]
+    mapping = _outer_all_equal(index, neighborhoods)
+    _chans, _chan_nids = mapping.nonzero(as_tuple=True)
+    nids = torch.full(
+        (channel_index.shape[0],), neighborhoods.shape[0], device=neighborhoods.device
+    )
+    nids[_chans] = _chan_nids
 
-        index_at_time[j] = index
-
-        mapping = _outer_all_equal(index, neighborhoods)
-        _chans, _chan_nids = mapping.nonzero(as_tuple=True)
-        nids_at_time[j, _chans] = _chan_nids
-
-    assert (index_at_time >= 0).all()
-
-    return index_at_time, nids_at_time
+    return index, nids
 
 
 @torch_compile

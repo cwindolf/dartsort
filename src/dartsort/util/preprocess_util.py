@@ -186,9 +186,9 @@ def _dump_json(recording: BaseRecording, json_path: Path | None):
     try:
         recording.dump_to_json(
             file_path=json_path,
-            include_extra_metadata=True,  # ty: ignore[unknown-argument]
-            include_properties=True,  # ty: ignore[unknown-argument]
-            include_annotations=True,  # ty: ignore[unknown-argument]
+            include_extra_metadata=True,
+            include_properties=True,  # ty: ignore[unknown-argument, unused-ignore-comment]
+            include_annotations=True,  # ty: ignore[unknown-argument, unused-ignore-comment]
             relative_to=True,
         )
     except TypeError:

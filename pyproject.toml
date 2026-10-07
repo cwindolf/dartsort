@@ -8,17 +8,16 @@ dynamic = ["version"]
 authors = [{ name = "Charlie Windolf", email = "ciw2048@gmail.com" }]
 description = "DARTsort"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  "dredge-ephys",
+  "dredge-ephys>=0.4.0",
   "h5py",
   "jaxtyping",
-  "kdepy",
   "linear_operator",
   "numba",
   "numpy>=1.20;python_version<'3.13'",
@@ -40,7 +39,7 @@ dependencies = [
 [project.optional-dependencies]
 doc = ["zensical", "mkdocstrings-python"]
 test = ["pytest", "pytest-cov"]
-vis = ["matplotlib", "seaborn", "matplotlib-venn"]
+vis = ["kdepy", "matplotlib", "seaborn", "matplotlib-venn"]
 
 [project.urls]
 "Homepage" = "https://github.com/cwindolf/dartsort"

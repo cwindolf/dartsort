@@ -855,6 +855,9 @@ class MatchingConfig:
     delete_pconv: bool = True
 
 
+MotionBatchingMode = Literal["full", "online"]
+
+
 @cfg_dataclass
 class MotionEstimationConfig:
     """Configure motion estimation."""
@@ -862,6 +865,8 @@ class MotionEstimationConfig:
     do_motion_estimation: bool = True
 
     # DREDge parameters
+    motion_batching_mode: MotionBatchingMode = "full"
+    motion_chunk_len_s: float = 3000.0
     probe_boundary_padding_um: float = 100.0
     spatial_bin_length_um: float = 1.0
     temporal_bin_length_s: float = 1.0
