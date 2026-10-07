@@ -708,34 +708,6 @@ def with_proposal_filters(
         panic(proposal)
 
 
-def proposal_fit_featurization_cfg(
-    featurization_cfg: FeaturizationConfig | None,
-    proposal: DetectionProposal,
-    n_filters: int,
-) -> FeaturizationConfig:
-    if featurization_cfg is None and proposal != "voltage":
-        raise ValueError(
-            f"{proposal=} needs the featurization config its filters are fit with."
-        )
-    if featurization_cfg is None:
-        featurization_cfg = FeaturizationConfig()
-    waveforms_only = FeaturizationConfig(
-        do_tpca_denoise=False,
-        do_enforce_decrease="no",
-        save_input_voltages=False,
-        save_input_waveforms=True,
-        save_input_tpca_projs=False,
-        save_amplitudes=False,
-        do_localization=False,
-        input_waveforms_name="",
-        tpca_rank=featurization_cfg.tpca_rank,
-        tpca_fit_radius=featurization_cfg.tpca_fit_radius,
-        tpca_max_waveforms=featurization_cfg.tpca_max_waveforms,
-        input_tpca_waveform_cfg=featurization_cfg.input_tpca_waveform_cfg,
-    )
-    return with_proposal_filters(waveforms_only, proposal, n_filters)
-
-
 def proposal_filters_from_pipeline(
     pipeline: "WaveformPipeline", proposal: DetectionProposal, n_filters: int
 ) -> tuple[Tensor, int]:

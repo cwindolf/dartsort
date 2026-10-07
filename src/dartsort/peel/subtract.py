@@ -43,7 +43,6 @@ from .subtract_util import (
     ChunkSubtracter,
     make_peak_proposer,
     proposal_filters_from_pipeline,
-    proposal_fit_featurization_cfg,
     with_proposal_filters,
 )
 
@@ -64,7 +63,6 @@ class SubtractionPeeler(BasePeeler):
         p: SubtractionConfig = default_subtraction_cfg,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
-        featurization_cfg: FeaturizationConfig | None = None,
         save_iteration=False,
         save_residnorm_decrease=False,
         save_collidedness=False,
@@ -94,8 +92,6 @@ class SubtractionPeeler(BasePeeler):
         self.save_iteration = save_iteration
         self.save_residnorm_decrease = save_residnorm_decrease
         self.save_collidedness = save_collidedness
-        # non-voltage proposal may need this config
-        self.featurization_cfg = featurization_cfg
         self.dedup_batch_size = self.nearest_batch_length()
         if self.p.whiten:
             self.threshold = self.p.threshold_before_whitening
@@ -388,7 +384,6 @@ class SubtractionPeeler(BasePeeler):
             p=subtraction_cfg,
             waveform_cfg=waveform_cfg,
             fit_sampling_cfg=sampling_cfg,
-            featurization_cfg=featurization_cfg,
             save_iteration=subtraction_cfg.save_iteration,
             save_residnorm_decrease=subtraction_cfg.save_residnorm_decrease,
             save_collidedness=save_collidedness,
@@ -628,10 +623,8 @@ class SubtractionPeeler(BasePeeler):
 
     def _threshold_to_fit(self, tmp_dir, fit_pipeline, computation_cfg):
         threshold_cfg = ThresholdingConfig(
-            detection_proposal=self.p.detection_proposal,
-            proposal_filters=self.p.proposal_filters,
+            detection_proposal="voltage",
             voltage_threshold=self.p.voltage_threshold,
-            proposal_threshold=self.p.proposal_threshold,
             spatial_dedup_radius_um=(
                 self.p.first_denoiser_spatial_dedup_radius or self.p.subtract_radius_um
             ),
@@ -659,10 +652,15 @@ class SubtractionPeeler(BasePeeler):
             waveform_cfg=self.waveform_cfg,
             channel_index=self.b.sub_channel_index,
             threshold_cfg=threshold_cfg,
-            featurization_cfg=proposal_fit_featurization_cfg(
-                self.featurization_cfg,
-                self.p.detection_proposal,
-                self.p.proposal_filters,
+            featurization_cfg=FeaturizationConfig(
+                do_tpca_denoise=False,
+                do_enforce_decrease="no",
+                save_input_voltages=False,
+                save_input_waveforms=True,
+                save_input_tpca_projs=False,
+                save_amplitudes=False,
+                do_localization=False,
+                input_waveforms_name="",
             ),
             sampling_cfg=sampling_cfg,
             max_waveforms_fit=self.p.first_denoiser_max_waveforms_fit,

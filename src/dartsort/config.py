@@ -374,8 +374,8 @@ class DeveloperConfig(DARTsortUserConfig):
     kmeanspp_patience: int = 21
     kmeanspp_greedy_proposals: int = 1
     kmeanspp_neighb_overlap: float | None = None
-    kmeanspp_selection: KmeansppSelection = "phi"
-    kmeanspp_stopping: KmeansppStopping = "patience"
+    kmeanspp_selection: KmeansppSelection = "marginal"
+    kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
 
     # filters
     gmm_isolation_threshold: float | None = None
@@ -406,7 +406,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_n_candidates: int = 5
     gmm_n_search: int | None = 3
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5
-    gmm_batch_size: int = 2048
+    gmm_batch_size: int = 4096
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     cov_kind: str = "factorizednoise"
