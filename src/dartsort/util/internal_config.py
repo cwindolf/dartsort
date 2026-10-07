@@ -521,8 +521,8 @@ class RefinementConfig:
     merge_group_size: int = 5
     n_search: int | None = 3
     n_explore: int | None = None
-    train_batch_size: int = 2048
-    eval_batch_size: int = 2048
+    train_batch_size: int = 4096
+    eval_batch_size: int = 4096
     split_friend_distance: float = 0.8
     split_distance_threshold: float = 1.5
     merge_distance_threshold: float = 1.5
@@ -542,8 +542,8 @@ class RefinementConfig:
     kmeanspp_patience: int = 21
     kmeanspp_greedy_proposals: int = 1
     kmeanspp_neighb_overlap: float | None = None
-    kmeanspp_selection: KmeansppSelection = "phi"
-    kmeanspp_stopping: KmeansppStopping = "patience"
+    kmeanspp_selection: KmeansppSelection = "marginal"
+    kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
