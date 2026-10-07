@@ -229,7 +229,6 @@ class FitSamplingConfig:
     residual_snip_ms: float | None = None
     residual_sampling_target_density: float = 0.5
     seed: int = 0
-    chunk_sampling: Literal["random", "kmeanspp"] = "kmeanspp"
     fit_sampling: FitSamplingMethod = "amp_reweighted"
     fit_max_reweighting: float = default_fit_max_reweighting
     n_seconds_fit: int = 100
