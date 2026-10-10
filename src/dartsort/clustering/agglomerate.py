@@ -1113,7 +1113,7 @@ def clean_final_sorting(
     motion: MotionInfo,
     dedup_ms: float = -1.0,
     merge_mapping: np.ndarray | None = None,
-    score_by=("merged_log_liks", "gmm_log_liks", "scores"),
+    score_by=("gmm_log_liks", "scores"),
     in_place: bool = True,
 ) -> tuple[DARTsortSorting, np.ndarray]:
     """Deduplicate, flatten, depth-order
@@ -1151,7 +1151,7 @@ def clean_final_sorting(
 def deduplicate_spikes(
     sorting: DARTsortSorting,
     radius_ms: float = -1.0,
-    score_by=("merged_log_liks", "gmm_log_liks", "scores"),
+    score_by=("gmm_log_liks", "scores"),
     in_place: bool = False,
 ) -> DARTsortSorting:
     if radius_ms < 0 or sorting.labels is None:

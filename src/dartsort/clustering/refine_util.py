@@ -409,7 +409,7 @@ def collision_cleaning_error_filter(
     new_props = dict(labels=new_labels)
     if bad_ids.size:
         try:
-            scores = get_gmm_scores(sorting, prefixes=["gmm"])
+            scores = get_gmm_scores(sorting)
             scores, _ = drop_units_and_update_scores(
                 train_scores=scores,
                 scores=None,
@@ -534,7 +534,7 @@ def gmm_isolation_filter(
 
     assert sorting.labels is not None
     try:
-        scores = get_gmm_scores(sorting, prefixes=["gmm"])
+        scores = get_gmm_scores(sorting)
     except AttributeError:
         logger.dartsortdebug("No GMM scores attached to sorting, no isolation filter.")
         return GMMIsolationResult(
