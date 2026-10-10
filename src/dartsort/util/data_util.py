@@ -157,7 +157,7 @@ class DARTsortSorting:
     ) -> NumpySorting:
         """Clean up and produce a spikeinterface NumpySorting object."""
         if drop_doubles:
-            self = self.drop_doubles()
+            self = self.drop_doubles()  # noqa: PLW0642
         assert self.labels is not None
         st = self.drop_missing()
         assert st.labels is not None
@@ -569,7 +569,7 @@ class DARTsortSorting:
         if not try_insert:
             return
         if self.get_mask_indices() is not None:
-           raise ValueError("Can't write to the h5 with a mask.")
+            raise ValueError("Can't write to the h5 with a mask.")
 
         try:
             with h5py.File(
@@ -2251,7 +2251,7 @@ def subsample_waveforms(
 
 def fit_reweighting(
     voltages: np.ndarray | torch.Tensor | None = None,
-    h5=None,
+    h5: h5py.File | None = None,
     hdf5_path=None,
     log_voltages=True,
     fit_sampling: Literal["random", "amp_reweighted"] = "random",
@@ -2266,7 +2266,7 @@ def fit_reweighting(
         if h5 is not None:
             voltages: np.ndarray = h5[voltages_dataset_name][:]
         elif hdf5_path is not None:
-            with h5py.File(hdf5_path) as h5:
+            with h5py.File(hdf5_path) as h5:  # noqa: PLR1704
                 voltages: np.ndarray = h5[voltages_dataset_name][:]
         else:
             panic()

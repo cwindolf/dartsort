@@ -1,5 +1,6 @@
 """Agglomeration of clusters to fix up GMM oversplits."""
 
+import importlib.util
 from threading import local
 from typing import cast
 
@@ -7,13 +8,6 @@ import numba
 import numpy as np
 import torch
 from spikeinterface.core import BaseRecording
-
-try:
-    import KDEpy
-
-    HAVE_KDEPY = True
-except ImportError:
-    HAVE_KDEPY = False
 
 from ..templates.template_util import shared_basis_compress_templates
 from ..templates.templates import TemplateData
@@ -55,6 +49,7 @@ from .cluster_util import (
 )
 
 logger = get_logger(__name__)
+HAVE_KDEPY = importlib.util.find_spec("KDEpy") is not None
 
 
 @databag

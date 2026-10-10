@@ -4216,7 +4216,7 @@ class TMMView(BaseMixtureModel):
         return self.tmm.b.log_proportions[self.unit_ids].logsumexp(dim=0)
 
     @property
-    def noise_log_prop(self) -> Tensor:
+    def noise_log_prop(self) -> Tensor:  # ty: ignore[invalid-property-type-override]
         return self.tmm.b.noise_log_prop
 
     def score(

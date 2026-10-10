@@ -119,7 +119,7 @@ class WhiteNoiseRecording(BaseRecording):
             channel_ids = np.asarray(channel_ids)
             assert channel_ids.shape == (n_channels,)
         assert n_segments == 1
-        super().__init__(sampling_frequency, channel_ids=channel_ids, dtype=dtype)
+        super().__init__(sampling_frequency, channel_ids=channel_ids, dtype=dtype)  # ty: ignore[invalid-argument-type]
         self._serializability["json"] = False
         self._serializability["pickle"] = False
         segment = WhiteNoiseRecordingSegment(

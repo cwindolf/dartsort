@@ -516,6 +516,7 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
     N = true_labels.shape[0]
     assert scores.candidates.shape == (N, n_candidates)
     assert scores.log_liks.shape == (N, n_candidates + 1)
+    assert scores.responsibilities is not None
     assert scores.responsibilities.shape == (N, n_candidates + 1)
     assert torch.equal(
         scores.candidates >= 0, scores.log_liks[:, :-1].isfinite()

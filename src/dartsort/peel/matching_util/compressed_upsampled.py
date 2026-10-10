@@ -278,25 +278,25 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
 
 @dataclass(kw_only=True, slots=True, frozen=True, repr=False, eq=False)
 class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
-    upsampling: bool
-    scaling: bool
-    free_scaling: bool
-    needs_fine_pass: bool
+    upsampling: bool  # ty: ignore[invalid-attribute-override]
+    scaling: bool  # ty: ignore[invalid-attribute-override]
+    free_scaling: bool  # ty: ignore[invalid-attribute-override]
+    needs_fine_pass: bool  # ty: ignore[invalid-attribute-override]
     comp_up_max: int
     n_templates: int
-    obj_n_templates: int
-    spike_length_samples: int
-    up_factor: int
-    inv_lambda: Tensor
-    scale_min: Tensor
-    scale_max: Tensor
-    resid_offset: int
-    filter_length_samples: int
+    obj_n_templates: int  # ty: ignore[invalid-attribute-override]
+    spike_length_samples: int  # ty: ignore[invalid-attribute-override]
+    up_factor: int  # ty: ignore[invalid-attribute-override]
+    inv_lambda: Tensor  # ty: ignore[invalid-attribute-override]
+    scale_min: Tensor  # ty: ignore[invalid-attribute-override]
+    scale_max: Tensor  # ty: ignore[invalid-attribute-override]
+    resid_offset: int  # ty: ignore[invalid-attribute-override]
+    filter_length_samples: int  # ty: ignore[invalid-attribute-override]
 
     # objective props
-    obj_normsq: Tensor
-    obj_normsq_plus_inv_lambda: Tensor
-    inv_obj_normsq_plus_inv_lambda: Tensor
+    obj_normsq: Tensor  # ty: ignore[invalid-attribute-override]
+    obj_normsq_plus_inv_lambda: Tensor  # ty: ignore[invalid-attribute-override]
+    inv_obj_normsq_plus_inv_lambda: Tensor  # ty: ignore[invalid-attribute-override]
     obj_temporal_comps: Tensor
     obj_spatial_sing: Tensor
     temporal_comps: Tensor
@@ -309,8 +309,8 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     cup_index: Tensor
     cup_map: Tensor
     cup_ix_to_up_ix: Tensor
-    unit_ids: Tensor
-    main_channels: Tensor
+    unit_ids: Tensor  # ty: ignore[invalid-attribute-override]
+    main_channels: Tensor  # ty: ignore[invalid-attribute-override]
     conv_lags: Tensor
     rank_ix: Tensor
     time_ix: Tensor
@@ -320,8 +320,8 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     pconv_db: PconvBase
     shifts_a: Tensor | None
     shifts_b: Tensor | None
-    prewhiten: bool = False
-    needs_residual: bool = True
+    prewhiten: bool = False  # ty: ignore[invalid-attribute-override]
+    needs_residual: bool = True  # ty: ignore[invalid-attribute-override]
 
     def convolve(self, traces, padding=0, out=None):
         """Convolve the objective templates with traces."""
