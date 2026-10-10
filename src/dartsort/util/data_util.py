@@ -82,6 +82,8 @@ class DARTsortSorting:
 
         It's more common to construct from an HDF5 file with .from_peeling_hdf5() or from
         a .npz with .load().
+
+        persistent_features must already be datasets in parent_h5_path.
         """
         self.n_spikes = times_samples.shape[0]
         if parent_h5_path is not None:
@@ -105,7 +107,9 @@ class DARTsortSorting:
         if persistent_features is not None:
             for k, v in persistent_features.items():
                 check_shape = not self._no_check_needed(k)
-                self._register_persistent_feature(k, v, check_shape=check_shape)
+                self._register_persistent_feature(
+                    k, v, check_shape=check_shape, try_insert=False
+                )
 
         if ephemeral_features is not None:
             for k, v in ephemeral_features.items():
@@ -469,7 +473,12 @@ class DARTsortSorting:
                         return self._persistent_features[name]
                 if self.has_dataset(name):
                     feature = self.load_dataset(name)
-                    self._register_persistent_feature(name, feature, try_insert=False)
+                    if self.get_mask_indices() is None:
+                        self._register_persistent_feature(
+                            name, feature, try_insert=False
+                        )
+                    else:
+                        self.add_ephemeral_feature(name, feature)
                     return feature
         raise AttributeError
 
@@ -489,10 +498,11 @@ class DARTsortSorting:
         if check_shape:
             self._check_shape(feature_name, feature)
 
-        already_ephemeral = feature_name in self._ephemeral_features
-        already_attr = hasattr(self, feature_name)
-        if already_ephemeral:
-            assert already_attr
+        already_attr = (
+            feature_name in self._ephemeral_features
+            or feature_name in self._persistent_features
+            or feature_name in self.__dict__
+        )
         if already_attr and not overwrite:
             raise ValueError(
                 f"Can't add feature {feature_name}, since it already exists."
@@ -558,6 +568,8 @@ class DARTsortSorting:
 
         if not try_insert:
             return
+        if self.get_mask_indices() is not None:
+           raise ValueError("Can't write to the h5 with a mask.")
 
         try:
             with h5py.File(
@@ -861,24 +873,18 @@ class DARTsortSorting:
         else:
             labels = self.labels[mask]
 
-        eph = {}
-        for k in self._ephemeral_features:
-            assert k != "mask_indices"  # no recursion...
-            v = getattr(self, k)
-            if self._no_check_needed(k):
-                eph[k] = v
-            else:
-                eph[k] = v[mask]
-        eph["mask_indices"] = mask
-
         per = {}
-        for k in self._persistent_features:
+        eph = {}
+        for k in (*self._ephemeral_features, *self._persistent_features):
             assert k != "mask_indices"  # no recursion...
             v = getattr(self, k)
-            if self._no_check_needed(k):
+            if not self._no_check_needed(k):
+                eph[k] = v[mask]
+            elif k in self._persistent_features:
                 per[k] = v
             else:
-                per[k] = v[mask]
+                eph[k] = v
+        eph["mask_indices"] = mask
 
         return self.__class__(
             times_samples=self.times_samples[mask],
@@ -964,7 +970,11 @@ class DARTsortSorting:
         top candidates but still exist in the lower ranks -- have their
         probability added to the noise component.
         """
-        if in_place and self.has_dataset_on_disk_not_loaded("gmm_candidates"):
+        if (
+            in_place
+            and self.get_mask_indices() is None
+            and self.has_dataset_on_disk_not_loaded("gmm_candidates")
+        ):
             assert self.parent_h5_path is not None
             _gmm_remap_on_disk(self.parent_h5_path, remap)
             return {}
