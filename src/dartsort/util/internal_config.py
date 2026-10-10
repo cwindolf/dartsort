@@ -522,8 +522,8 @@ class RefinementConfig:
     merge_group_size: int = 5
     n_search: int | None = 3
     n_explore: int | None = None
-    train_batch_size: int = 2048
-    eval_batch_size: int = 2048
+    train_batch_size: int = 4096
+    eval_batch_size: int = 4096
     split_friend_distance: float = 0.8
     split_distance_threshold: float = 1.5
     merge_distance_threshold: float = 1.5
