@@ -428,15 +428,11 @@ class DeveloperConfig(DARTsortUserConfig):
     # agglomeration
     agg_max_template_distance: float = 0.6
     agg_force_merge_template_distance: float = 0.3
-    agg_qda_overlap: bool = False
-    agg_qda_bimodality: bool = False
     agg_violation_ms: float = 1.0
     agg_jitter_ms: float = 20.0
-    agg_min_violation_evidence: float = 4.6
-    agg_violation_linkage: Literal["average", "complete"] = "average"
+    agg_min_violation_evidence: float = 10.0
     agg_violation_threshold: float | None = 0.3
     agg_veto_threshold: float | None = None
-    agg_veto_min_evidence: float = 10.0
     agg_template_linkage: Literal["single", "complete"] = "complete"
     agg_template_whiten_strategy: WhiteningStrategy = "none"
 
