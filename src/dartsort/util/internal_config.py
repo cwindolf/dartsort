@@ -479,7 +479,8 @@ class TemplateMergeConfig:
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
 ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
-KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
+KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp", "significance"]
+KmeansppSampling = Literal["d2", "significance"]
 
 
 @cfg_dataclass
@@ -544,6 +545,9 @@ class RefinementConfig:
     kmeanspp_neighb_overlap: float | None = None
     kmeanspp_selection: KmeansppSelection = "phi"
     kmeanspp_stopping: KmeansppStopping = "patience"
+    kmeanspp_sampling: KmeansppSampling = "d2"
+    kmeanspp_alpha: float = 2.0
+    kmeanspp_z0: float = 3.0
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
@@ -1354,6 +1358,9 @@ def _refinement_cfg(
         kmeanspp_neighb_overlap=cfg.kmeanspp_neighb_overlap,
         kmeanspp_selection=cfg.kmeanspp_selection,
         kmeanspp_stopping=cfg.kmeanspp_stopping,
+        kmeanspp_sampling=cfg.kmeanspp_sampling,
+        kmeanspp_alpha=cfg.kmeanspp_alpha,
+        kmeanspp_z0=cfg.kmeanspp_z0,
         train_batch_size=cfg.gmm_batch_size,
         eval_batch_size=cfg.gmm_batch_size,
         robust_df=cfg.robust_df,
