@@ -479,7 +479,8 @@ class TemplateMergeConfig:
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
 ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
-KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
+KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp", "significance"]
+KmeansppSampling = Literal["d2", "significance"]
 
 
 @cfg_dataclass
@@ -542,8 +543,11 @@ class RefinementConfig:
     kmeanspp_patience: int = 21
     kmeanspp_greedy_proposals: int = 1
     kmeanspp_neighb_overlap: float | None = None
-    kmeanspp_selection: KmeansppSelection = "marginal"
-    kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
+    kmeanspp_selection: KmeansppSelection = "phi"
+    kmeanspp_stopping: KmeansppStopping = "patience"
+    kmeanspp_sampling: KmeansppSampling = "d2"
+    kmeanspp_alpha: float = 2.0
+    kmeanspp_z0: float = 3.0
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
@@ -567,22 +571,13 @@ class RefinementConfig:
 
     # agglomeration: which pairs are allowed to merge
     glom_force_merge_template_distance: float = 0.3
-    glom_qda_overlap: bool = False
-    glom_qda_bimodality: bool = False
-    qda_uni_score: float = 0.95
-    qda_threshold: float = 0.35
-    qda_min_ratio: float = 0.1
-    qda_min_coverage: float = 0.35
-    qda_min_iou: float = 0.5
 
-    # agglomeration: refractory violations across a pair
+    # agglomeration: refractory violations across groups
     glom_violation_ms: float = 1.0
     glom_jitter_ms: float = 20.0
-    glom_min_violation_evidence: float = 4.6
-    glom_violation_linkage: Literal["average", "complete"] = "average"
+    glom_min_violation_evidence: float = 10.0
     glom_violation_threshold: float | None = 0.3
     glom_veto_threshold: float | None = None
-    glom_veto_min_evidence: float = 10.0
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
@@ -1354,6 +1349,9 @@ def _refinement_cfg(
         kmeanspp_neighb_overlap=cfg.kmeanspp_neighb_overlap,
         kmeanspp_selection=cfg.kmeanspp_selection,
         kmeanspp_stopping=cfg.kmeanspp_stopping,
+        kmeanspp_sampling=cfg.kmeanspp_sampling,
+        kmeanspp_alpha=cfg.kmeanspp_alpha,
+        kmeanspp_z0=cfg.kmeanspp_z0,
         train_batch_size=cfg.gmm_batch_size,
         eval_batch_size=cfg.gmm_batch_size,
         robust_df=cfg.robust_df,
@@ -1526,16 +1524,12 @@ def _agglomerate_cfg(
             template_cfg=replace(template_cfg, whitening=agg_whiten_cfg),
         ),
         glom_force_merge_template_distance=cfg.agg_force_merge_template_distance,
-        glom_qda_overlap=cfg.agg_qda_overlap,
-        glom_qda_bimodality=cfg.agg_qda_bimodality,
         censor_ms=cfg.deduplication_ms,
         glom_violation_ms=cfg.agg_violation_ms,
         glom_jitter_ms=cfg.agg_jitter_ms,
         glom_min_violation_evidence=cfg.agg_min_violation_evidence,
-        glom_violation_linkage=cfg.agg_violation_linkage,
         glom_violation_threshold=cfg.agg_violation_threshold,
         glom_veto_threshold=cfg.agg_veto_threshold,
-        glom_veto_min_evidence=cfg.agg_veto_min_evidence,
     )
 
 

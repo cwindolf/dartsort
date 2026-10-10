@@ -286,7 +286,7 @@ def point_source_mse(locs, amp_vecs, channels, channel_index, geom):
             torch.asarray(amp_vecs).nan_to_num(),
             channel_mask,
             *torch.asarray(locs).T,
-            torch.asarray(dxz).nan_to_num(),  # ty: ignore[too-many-positional-arguments]
+            torch.asarray(dxz).nan_to_num(),
         )
         alpha = alpha.numpy()
     else:

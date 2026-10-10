@@ -57,6 +57,51 @@ def test_from_peeling():
         assert np.array_equal(dsorting.labels, labels)
 
 
+def test_flatten_gmm_on_disk():
+    rg = np.random.default_rng(0)
+    n, n_cand = times_samples.size, 3
+    gapped_units = np.array([0, 2, 5, 7])
+    candidates = np.stack(
+        [rg.permutation(gapped_units)[:n_cand] for _ in range(n)]
+    )
+    labels = np.where(rg.random(n) < 0.1, -1, candidates[:, 0])
+    resps = rg.dirichlet(np.ones(n_cand + 1), size=n).astype(np.float32)
+    log_liks = np.log(resps)
+    with tempfile.TemporaryDirectory() as tempdir:
+        peeling_h5 = Path(tempdir) / "test.h5"
+        with h5py.File(peeling_h5, "w") as h:
+            h.create_dataset("sampling_frequency", data=1)
+            h.create_dataset("times_samples", data=times_samples)
+            h.create_dataset("channels", data=np.zeros(n, dtype=np.int64))
+            h.create_dataset("labels", data=labels)
+            h.create_dataset("gmm_candidates", data=candidates)
+            h.create_dataset("gmm_responsibilities", data=resps)
+            h.create_dataset("gmm_log_liks", data=log_liks)
+
+        def load_and_flatten():
+            sorting = DARTsortSorting.from_peeling_hdf5(
+                peeling_h5, load_simple_features=False
+            )
+            sorting = sorting.flatten(include_gmm_properties=True, in_place=True)
+            with h5py.File(peeling_h5, "r") as h:
+                on_disk = {k: h[k][()] for k in h}
+            return sorting, on_disk
+
+        sorting, on_disk = load_and_flatten()
+        flat_labels = np.searchsorted(gapped_units, labels)
+        flat_labels[labels < 0] = -1
+        assert np.array_equal(sorting.labels, flat_labels)
+        assert np.array_equal(on_disk["labels"], flat_labels)
+        flat_candidates = np.searchsorted(gapped_units, candidates)
+        assert np.array_equal(on_disk["gmm_candidates"], flat_candidates)
+        assert np.array_equal(on_disk["gmm_responsibilities"], resps)
+
+        sorting_again, on_disk_again = load_and_flatten()
+        assert np.array_equal(sorting_again.labels, flat_labels)
+        for k in on_disk:
+            assert np.array_equal(on_disk_again[k], on_disk[k])
+
+
 def test_check_recording():
     """Test spike rate and data range sanity checks performed by this method."""
     rg = np.random.default_rng(0)

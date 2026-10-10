@@ -1,5 +1,6 @@
 """Agglomeration of clusters to fix up GMM oversplits."""
 
+import importlib.util
 from threading import local
 from typing import cast
 
@@ -7,13 +8,6 @@ import numba
 import numpy as np
 import torch
 from spikeinterface.core import BaseRecording
-
-try:
-    import KDEpy
-
-    HAVE_KDEPY = True
-except ImportError:
-    HAVE_KDEPY = False
 
 from ..templates.template_util import shared_basis_compress_templates
 from ..templates.templates import TemplateData
@@ -55,6 +49,7 @@ from .cluster_util import (
 )
 
 logger = get_logger(__name__)
+HAVE_KDEPY = importlib.util.find_spec("KDEpy") is not None
 
 
 @databag
@@ -64,7 +59,6 @@ class Agglomeration:
     template_distances: np.ndarray | None
     template_shifts: np.ndarray | None
     violation: ViolationInfo | None
-    glom_cost: np.ndarray | None
 
 
 def agglomerate(
@@ -87,17 +81,25 @@ def agglomerate(
     If refinement_cfg is not set, the merge is just a hierarchical clustering
     of the template distances.
 
-    The algorithm is like this.
-     - Pair i,j is allowed to be merged if any of:
-        - Template distance < merge_distance_threshold (and, a non-default
-          QDA/overlap condition holds if specified)
-        - Template distance < glom_force_merge_template_distance
-     - Merges are decided within allowed groups by average linkage on a chance-
-       corrected measure of violation within the groups
-        - Optionally, the criterion can be restricted by a "worst pair" violation
-          rather than average if glom_veto_threshold is set.
-        - Pairs with low overlap (glom_min_violation_evidence) are merged only
-          under the force_merge_template_distance
+    The algorithm is like this (violation_linkage). It's a greedy procedure building
+    up a custom linkage as in hierarchical clustering based on chance-corrected refractory
+    violations and template distances both.
+     - For groups A and B, let d be the distance between their merged templates.
+       Let E, O be their expected and observed violation counts summed over member
+       pairs with E under the jitter model of violation_statistics.
+     - A pair of groups is a candidate for merging if either of:
+        - d < glom_force_merge_template_distance
+        - d < merge_distance_threshold and E >= glom_min_violation_evidence.
+     - Additionally, each member unit u of A must have, against the whole of B,
+       at least one of:
+         - E(u, B) >= glom_min_violation_evidence
+         - Distance from u's template to B's < glom_force_merge_template_distance
+     - Groups are merged greedily in chance-corrected violation ratio (O/E) order
+       up to glom_violation_threshold
+     - Optionally, groups are then split so that no pair of units within a
+       group has violation ratio >= glom_veto_threshold.
+     - If glom_violation_threshold is None, groups are the connected components
+       of the allowed-pair graph by template distance according to the linkage parameter.
 
     This code might read a little weird, because it's used both as a clustering pass
     and to apply a distance-based merge to the template library. In the latter case
@@ -122,7 +124,6 @@ def agglomerate(
             template_distances=None,
             template_shifts=None,
             violation=None,
-            glom_cost=None,
         )
 
     tdist = template_distances(
@@ -137,43 +138,31 @@ def agglomerate(
     distances = np.minimum(tdist.distances, tdist.distances.T)
     np.fill_diagonal(distances, 0.0)
     assert np.array_equal(tdist.template_data.unit_ids, np.arange(distances.shape[0]))
+    unit_snrs = tdist.template_data.snrs_by_channel().max(1)
 
-    # early out
     if refinement_cfg is None:
-        glom_cost = distances
-        veto_cost = veto_threshold = violation = None
-        linkage_method = template_merge_cfg.linkage
-        threshold = template_merge_cfg.merge_distance_threshold
+        _, merge_mapping = hierarchical_cluster(
+            None,
+            distances,
+            linkage_method=template_merge_cfg.linkage,
+            threshold=template_merge_cfg.merge_distance_threshold,
+        )
         violation = None
     else:
-        res = _agglomerate_violation_merge(
-            sorting, distances, refinement_cfg, template_merge_cfg, computation_cfg
+        merge_mapping, violation = _agglomerate_violation_merge(
+            sorting=sorting,
+            distances=distances,
+            tdist=tdist,
+            unit_snrs=unit_snrs,
+            refinement_cfg=refinement_cfg,
+            template_merge_cfg=template_merge_cfg,
         )
-        (
-            _mask,
-            glom_cost,
-            veto_cost,
-            linkage_method,
-            threshold,
-            veto_threshold,
-            violation,
-        ) = res
-
-    _, merge_mapping = hierarchical_cluster(
-        None, glom_cost, linkage_method=linkage_method, threshold=threshold
-    )
-    if veto_cost is not None:
-        assert veto_threshold is not None
-        _, veto_mapping = hierarchical_cluster(
-            None, veto_cost, linkage_method="complete", threshold=veto_threshold
-        )
-        merge_mapping = meet(merge_mapping, veto_mapping)
 
     agg_sorting = apply_reclustering(
         sorting=sorting,
         merge_mapping=merge_mapping,
         shifts=tdist.shifts,
-        unit_snrs=tdist.template_data.snrs_by_channel().max(1),
+        unit_snrs=unit_snrs,
         in_place=in_place,
     )
     agg_sorting = combine_gmm_scores(
@@ -189,75 +178,30 @@ def agglomerate(
         template_distances=distances,
         template_shifts=tdist.shifts,
         violation=violation,
-        glom_cost=glom_cost,
     )
 
 
 def _agglomerate_violation_merge(
+    *,
     sorting: DARTsortSorting,
     distances: np.ndarray,
+    tdist: "TemplateDistanceResult",
+    unit_snrs: np.ndarray,
     refinement_cfg: RefinementConfig,
     template_merge_cfg: TemplateMergeConfig,
-    computation_cfg: ComputationConfig,
-    huge=1e8,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    np.ndarray | None,
-    str,
-    float,
-    float | None,
-    ViolationInfo | None,
-]:
-    mask = distances < template_merge_cfg.merge_distance_threshold
-
-    if refinement_cfg.glom_qda_overlap or refinement_cfg.glom_qda_bimodality:
-        qda_res = qda(
-            mask=mask,
-            sorting=sorting,
-            min_iou=refinement_cfg.qda_min_iou
-            if refinement_cfg.glom_qda_overlap
-            else 0.0,
-            min_cov=refinement_cfg.qda_min_coverage
-            if refinement_cfg.glom_qda_overlap
-            else 0.0,
-            bimodality=refinement_cfg.glom_qda_bimodality,
-            show_progress=False,
-            computation_cfg=computation_cfg,
-        )
-        if refinement_cfg.glom_qda_overlap:
-            mask &= np.logical_and(
-                qda_res.coverage >= refinement_cfg.qda_min_coverage,
-                qda_res.iou >= refinement_cfg.qda_min_iou,
-            )
-        if refinement_cfg.glom_qda_bimodality:
-            mask &= np.logical_or(
-                qda_res.score >= refinement_cfg.qda_uni_score,
-                np.logical_and(
-                    qda_res.score >= refinement_cfg.qda_threshold,
-                    qda_res.min_ratio >= refinement_cfg.qda_min_ratio,
-                ),
-            )
-
-    force_mask = distances < refinement_cfg.glom_force_merge_template_distance
-    mask |= force_mask
-    np.fill_diagonal(mask, True)
-
+) -> tuple[np.ndarray, ViolationInfo | None]:
     # early out: no violation stuff. just distance mask connected components.
     if refinement_cfg.glom_violation_threshold is None:
-        glom_cost = np.logical_not(mask).astype(np.float32)
-        linkage_method = template_merge_cfg.linkage
-        threshold = 0.5
-        veto_cost = veto_threshold = None
-        return (
-            mask,
-            glom_cost,
-            veto_cost,
-            linkage_method,
-            threshold,
-            veto_threshold,
+        mask = distances < template_merge_cfg.merge_distance_threshold
+        mask |= distances < refinement_cfg.glom_force_merge_template_distance
+        np.fill_diagonal(mask, True)
+        _, merge_mapping = hierarchical_cluster(
             None,
+            np.logical_not(mask).astype(np.float32),
+            linkage_method=template_merge_cfg.linkage,
+            threshold=0.5,
         )
+        return merge_mapping, None
 
     violation = violation_statistics(
         sorting,
@@ -265,52 +209,252 @@ def _agglomerate_violation_merge(
         viol_ms=refinement_cfg.glom_violation_ms,
         jitter_ms=refinement_cfg.glom_jitter_ms,
     )
-    assert violation.jitter_counts is not None
-    assert violation.jitter_counts.shape == distances.shape
-
-    # main mask:
-    # it's basically forcing where there's low evidence, and it's the ratio
-    # of observed violation counts to their jitter average elsewhere.
-    glom_cost = violation.jitter_viol_ratio(
-        refinement_cfg.glom_min_violation_evidence,
-        fill_value=np.where(force_mask, 0.0, huge),
+    assert sorting.labels is not None
+    spike_counts = np.bincount(
+        sorting.labels[sorting.labels >= 0], minlength=distances.shape[0]
     )
-    # mask out distance enemies
-    glom_cost[np.logical_not(mask)] = huge
-    glom_cost = np.minimum(glom_cost, glom_cost.T)
-    np.fill_diagonal(glom_cost, 0.0)
+    merge_mapping = violation_linkage(
+        distances=distances,
+        violation=violation,
+        tdist=tdist,
+        spike_counts=spike_counts,
+        unit_snrs=unit_snrs,
+        template_merge_cfg=template_merge_cfg,
+        force_distance=refinement_cfg.glom_force_merge_template_distance,
+        min_evidence=refinement_cfg.glom_min_violation_evidence,
+        violation_threshold=refinement_cfg.glom_violation_threshold,
+    )
 
     # last thing: optionally, be extremely finnicky about merging into violated groups
     # i am not sure if this will be a good idea or not; it may cost too many merges
     # to be worthwhile.
     if refinement_cfg.glom_veto_threshold is not None:
         veto_cost = violation.jitter_viol_ratio(
-            refinement_cfg.glom_veto_min_evidence, fill_value=0.0
+            refinement_cfg.glom_min_violation_evidence, fill_value=0.0
         )
-        veto_cost[np.logical_not(mask)] = huge
         veto_cost = np.minimum(veto_cost, veto_cost.T)
         np.fill_diagonal(veto_cost, 0.0)
-    else:
-        veto_cost = None
+        _, veto_mapping = hierarchical_cluster(
+            None,
+            veto_cost,
+            linkage_method="complete",
+            threshold=refinement_cfg.glom_veto_threshold,
+        )
+        merge_mapping = meet(merge_mapping, veto_mapping)
 
-    return (
-        mask,
-        glom_cost,
-        veto_cost,
-        refinement_cfg.glom_violation_linkage,
-        refinement_cfg.glom_violation_threshold,
-        refinement_cfg.glom_veto_threshold,
-        violation,
+    return merge_mapping, violation
+
+
+def violation_linkage(
+    *,
+    distances: np.ndarray,
+    violation: ViolationInfo,
+    tdist: "TemplateDistanceResult",
+    spike_counts: np.ndarray,
+    unit_snrs: np.ndarray,
+    template_merge_cfg: TemplateMergeConfig,
+    force_distance: float,
+    min_evidence: float,
+    violation_threshold: float,
+) -> np.ndarray:
+    """Greedy agglomeration on chance-corrected violations and merged templates
+
+    Groups' merged templates are the spike-count-weighted average of their
+    members' templates, aligned to the group's highest-SNR member as in
+    apply_reclustering.
+     - For groups A and B, let d be the distance between their merged templates.
+       Let E, O be their expected and observed violation counts summed over member
+       pairs.
+     - A pair of groups is a candidate for merging if either of:
+        - d < force_distance
+        - d < merge_distance_threshold and E >= min_evidence.
+     - Additionally, each member unit u of A must have, against the whole of B,
+       at least one of:
+         - E(u, B) >= min_evidence
+         - Distance from u's template to B's < force_distance
+     - Groups are merged greedily in O/E order (0 if E < min_evidence) up to
+       violation_threshold
+
+    Returns the merge mapping (group label of each unit).
+    """
+    n = distances.shape[0]
+    assert violation.jitter_counts is not None
+    assert distances.shape == violation.viol_counts.shape == (n, n)
+    assert np.array_equal(distances, distances.T)
+    assert not np.isnan(distances).any()
+    assert (np.diagonal(distances) == 0).all()
+    assert spike_counts.shape == unit_snrs.shape == (n,)
+    assert (spike_counts > 0).all()
+    assert np.isfinite(unit_snrs).all()
+    assert tdist.radial_counts is not None
+
+    templates = tdist.template_data.templates
+    assert templates.shape[0] == n
+    assert tdist.temporal_components.shape[1] == templates.shape[1]
+    assert tdist.radial_counts.shape == (n, templates.shape[2])
+    assert tdist.shifts.shape == (n, n)
+    unit_spatial_sing = np.einsum("rt,ntc->nrc", tdist.temporal_components, templates)
+    unit_weights = radial_weights(tdist.radial_counts)
+
+    # groups are identified by their lowest unit id. every unit starts as its own
+    # group, so group stats start as unit stats.
+    members = {u: [u] for u in range(n)}
+    group_spatial_sing = unit_spatial_sing.copy()
+    group_weights = unit_weights.copy()
+    group_dist = distances.copy()
+    group_obs_viol = violation.viol_counts.astype(np.float64)
+    group_exp_viol = violation.jitter_counts.astype(np.float64)
+    # rows: units, cols: current groups (members.keys()). a unit's entry for its
+    # own group is stale; it's never read.
+    unit_to_group_dist = distances.copy()
+    unit_to_group_exp_viol = group_exp_viol.copy()
+
+    while True:
+        group_ids = np.array(sorted(members))
+        dist = group_dist[group_ids][:, group_ids]
+        exp_viol = group_exp_viol[group_ids][:, group_ids]
+        obs_viol = group_obs_viol[group_ids][:, group_ids]
+
+        # O/E for candidate pairs (0 if E < min_evidence), inf for the rest
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = obs_viol / exp_viol
+        ratio[exp_viol < min_evidence] = 0.0
+        allow = dist < force_distance
+        allow |= np.logical_and(
+            dist < template_merge_cfg.merge_distance_threshold,
+            exp_viol >= min_evidence,
+        )
+        ratio[np.logical_not(allow, out=allow)] = np.inf
+        del allow
+
+        # find lowest-ratio group pair below violation_threshold which passes the
+        # per-member evidence check (or dist forcing)
+        ii, jj = np.nonzero(np.triu(ratio < violation_threshold, k=1))
+        ratio_pair_order = np.argsort(ratio[ii, jj], kind="stable")
+        for i, j in zip(ii[ratio_pair_order], jj[ratio_pair_order], strict=True):
+            a = group_ids[i]
+            b = group_ids[j]
+            assert a < b
+            if _all_group_members_have_evidence(
+                a,
+                b,
+                members=members,
+                unit_to_group_exp_viol=unit_to_group_exp_viol,
+                unit_to_group_dist=unit_to_group_dist,
+                min_evidence=min_evidence,
+                force_distance=force_distance,
+            ):
+                break
+        else:  # no pair passed: done
+            break
+
+        # merge B into A
+        # combine violation stats over the groups
+        members[a] += members.pop(b)
+        group_obs_viol[a] += group_obs_viol[b]
+        group_obs_viol[:, a] += group_obs_viol[:, b]
+        group_exp_viol[a] += group_exp_viol[b]
+        group_exp_viol[:, a] += group_exp_viol[:, b]
+        unit_to_group_exp_viol[:, a] += unit_to_group_exp_viol[:, b]
+
+        # recompute A's template and distances to other groups and units
+        group_spatial_sing[a], group_weights[a] = _merged_template(
+            members[a],
+            templates=templates,
+            spike_counts=spike_counts,
+            unit_snrs=unit_snrs,
+            shifts=tdist.shifts,
+            temporal_components=tdist.temporal_components,
+            radial_counts=tdist.radial_counts,
+        )
+        other_groups = [g for g in members if g != a]
+        a_dist = template_distances_to(
+            group_spatial_sing[a],
+            group_weights[a],
+            group_spatial_sing[other_groups],
+            group_weights[other_groups],
+            trimmed_tconv=tdist.trimmed_tconv,
+            template_merge_cfg=template_merge_cfg,
+        )
+        group_dist[a, other_groups] = a_dist
+        group_dist[other_groups, a] = a_dist
+        nonmembers = np.setdiff1d(np.arange(n), members[a])
+        unit_to_group_dist[nonmembers, a] = template_distances_to(
+            group_spatial_sing[a],
+            group_weights[a],
+            unit_spatial_sing[nonmembers],
+            unit_weights[nonmembers],
+            trimmed_tconv=tdist.trimmed_tconv,
+            template_merge_cfg=template_merge_cfg,
+        )
+
+    merge_mapping = np.full(n, -1, dtype=np.int64)
+    for label, unit_ids in enumerate(members.values()):
+        merge_mapping[unit_ids] = label
+    assert np.min(merge_mapping, initial=0) >= 0
+    return merge_mapping
+
+
+def _all_group_members_have_evidence(
+    a: int,
+    b: int,
+    *,
+    members: dict[int, list[int]],
+    unit_to_group_exp_viol: np.ndarray,
+    unit_to_group_dist: np.ndarray,
+    min_evidence: float,
+    force_distance: float,
+) -> bool:
+    """Each unit u in A has E(u, B) >= min_evidence or d(u, B) < force_distance; and vice versa"""
+    return all(
+        np.logical_or(
+            unit_to_group_exp_viol[members[src], dst] >= min_evidence,
+            unit_to_group_dist[members[src], dst] < force_distance,
+        ).all()
+        for src, dst in ((a, b), (b, a))
     )
+
+
+def _merged_template(
+    unit_ids,
+    *,
+    templates: np.ndarray,
+    spike_counts: np.ndarray,
+    unit_snrs: np.ndarray,
+    shifts: np.ndarray,
+    temporal_components: np.ndarray,
+    radial_counts: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Shift, weighted sum in temporal mask, project onto known shared basis"""
+    unit_ids = np.sort(unit_ids)
+    ref = unit_ids[np.argmax(unit_snrs[unit_ids])]
+    n_samples = templates.shape[1]
+    total = np.zeros(templates.shape[1:])
+    coverage = np.zeros(n_samples)
+    for u in unit_ids:
+        s = shifts[ref, u]
+        assert abs(s) < n_samples
+        src = slice(max(0, -s), n_samples - max(0, s))
+        dst = slice(max(0, s), n_samples - max(0, -s))
+        total[dst] += spike_counts[u] * templates[u, src]
+        coverage[dst] += spike_counts[u]
+    assert (coverage > 0).all()
+    template = np.divide(total, coverage[:, None], out=total)
+    spatial = temporal_components @ template
+    weights = radial_weights(radial_counts[unit_ids].sum(0))
+    return spatial, weights
 
 
 @databag
 class TemplateDistanceResult:
     distances: np.ndarray
     shifts: np.ndarray
+    """shifts[i, j] is like trough[i] - trough[j]"""
     r2: np.ndarray
     template_data: TemplateData
-    spatial_weights: np.ndarray | None
+    temporal_components: np.ndarray
+    trimmed_tconv: torch.Tensor
+    radial_counts: np.ndarray | None
     spatial_iou: np.ndarray | None
 
 
@@ -399,12 +543,12 @@ def template_distances(
     center = conv_len // 2
     assert conv_len == 2 * center + 1
     assert center >= max_shift
-    tconv = tconv[:, :, center - max_shift : center + 1 + max_shift]
-    tconv = tconv.contiguous()
+    trimmed_tconv = tconv[:, :, center - max_shift : center + 1 + max_shift]
+    trimmed_tconv = trimmed_tconv.contiguous()
 
-    spatial_weights = spatial_iou = None
+    radial_counts = spatial_iou = None
     if template_merge_cfg.distance_kind == "scaled_normeuc":
-        best_conv, best_lag = best_shared_pconv(tconv, spatial_sing)
+        best_conv, best_lag = best_shared_pconv(trimmed_tconv, spatial_sing)
         dist = scaled_normeuc_from_dots(
             best_conv,
             scale_var=template_merge_cfg.amplitude_scaling_variance,
@@ -413,14 +557,15 @@ def template_distances(
     elif template_merge_cfg.distance_kind == "weighted_scaled_normeuc":
         assert sorting is not None
         assert motion is not None
-        spatial_weights = count_radial_weights(
+        radial_counts = radial_spike_counts(
             sorting=sorting,
             motion=motion,
             radius=template_merge_cfg.weighted_dist_radius,
         )
+        spatial_weights = radial_weights(radial_counts)
         assert np.isfinite(spatial_weights).all()
         dist, best_lag, iou = weighted_best_lagged_scaled_normeuc_dist(
-            tconv=tconv,
+            tconv=trimmed_tconv,
             spatial_sing=spatial_sing,
             weights=torch.asarray(spatial_weights).to(spatial_sing),
             scale_var=template_merge_cfg.amplitude_scaling_variance,
@@ -434,12 +579,54 @@ def template_distances(
     # okay then
     return TemplateDistanceResult(
         distances=dist.numpy(force=True),
-        shifts=best_lag.numpy(force=True),
+        shifts=best_lag.T.numpy(force=True),
         r2=cast(np.ndarray, sbt.r2),
         template_data=template_data,
-        spatial_weights=spatial_weights,
+        temporal_components=sbt.temporal_components,
+        trimmed_tconv=trimmed_tconv,
+        radial_counts=radial_counts,
         spatial_iou=spatial_iou,
     )
+
+
+def template_distances_to(
+    spatial_sing_a: np.ndarray,
+    weights_a: np.ndarray,
+    spatial_sing_b: np.ndarray,
+    weights_b: np.ndarray,
+    *,
+    trimmed_tconv: torch.Tensor,
+    template_merge_cfg: TemplateMergeConfig,
+) -> np.ndarray:
+    assert template_merge_cfg.distance_kind == "weighted_scaled_normeuc"
+    n = spatial_sing_b.shape[0]
+    assert spatial_sing_b.shape[1:] == spatial_sing_a.shape
+    assert weights_a.shape == spatial_sing_a.shape[1:]
+    assert weights_b.shape == (n, *weights_a.shape)
+    assert weights_a.max() > 0 and (weights_b.max(1) > 0).all()
+
+    dist = np.full(n, np.inf)
+    iou = np.minimum(weights_a, weights_b).sum(1) / np.maximum(
+        weights_a, weights_b
+    ).sum(1)
+    (ix,) = np.nonzero(iou >= template_merge_cfg.weighted_dist_min_iou)
+    if not ix.size:
+        return dist
+
+    spatial_sing = np.concatenate([spatial_sing_a[None], spatial_sing_b[ix]])
+    weights = np.concatenate([weights_a[None], weights_b[ix]])
+    jj = torch.arange(1, ix.size + 1)
+    d, _, pair_iou = weighted_best_lagged_scaled_normeuc_dist(
+        tconv=trimmed_tconv,
+        spatial_sing=torch.asarray(spatial_sing).to(trimmed_tconv),
+        weights=torch.asarray(weights).to(trimmed_tconv),
+        scale_var=template_merge_cfg.amplitude_scaling_variance,
+        scale_boundary=template_merge_cfg.amplitude_scaling_boundary,
+        pairs=(torch.zeros_like(jj), jj),
+    )
+    d.masked_fill_(pair_iou < template_merge_cfg.weighted_dist_min_iou, torch.inf)
+    dist[ix] = d.numpy(force=True)
+    return dist
 
 
 @databag
@@ -689,7 +876,7 @@ def bimod_stats(h):
     return a, b
 
 
-def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: float):
+def radial_spike_counts(sorting: DARTsortSorting, motion: MotionInfo, radius: float):
     assert sorting.labels is not None
     kept = np.flatnonzero(sorting.labels >= 0)
 
@@ -708,23 +895,21 @@ def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: f
     ci = make_channel_index(motion.rgeom, radius, to_torch=False)
 
     # puff out with radial neighborhood and sum up the counts by label
-    weights = np.zeros(counts.shape)
+    radial_counts = np.zeros(counts.shape)
     for uu in range(counts.shape[0]):
         row = counts[uu]
         ii = np.flatnonzero(row)
-        if not ii.size:
-            continue
-        vv = row[ii]
-        vv = vv / vv.sum()
-
-        for channel, value in zip(ii, vv, strict=True):
+        for channel, value in zip(ii, row[ii], strict=True):
             cixs = ci[channel]
             cixs = cixs[cixs < motion.rgeom.shape[0]]
-            weights[uu, cixs] += value
+            radial_counts[uu, cixs] += value
 
-    denom = weights.max(axis=1, keepdims=True).clip(min=1e-10)  # avoid div by 0
-    weights /= denom
-    return weights
+    return radial_counts
+
+
+def radial_weights(radial_counts: np.ndarray) -> np.ndarray:
+    denom = radial_counts.max(axis=-1, keepdims=True).clip(min=1e-10)
+    return radial_counts / denom
 
 
 def combine_gmm_scores(
@@ -923,7 +1108,7 @@ def clean_final_sorting(
     motion: MotionInfo,
     dedup_ms: float = -1.0,
     merge_mapping: np.ndarray | None = None,
-    score_by=("merged_log_liks", "gmm_log_liks", "scores"),
+    score_by=("gmm_log_liks", "scores"),
     in_place: bool = True,
 ) -> tuple[DARTsortSorting, np.ndarray]:
     """Deduplicate, flatten, depth-order
@@ -961,7 +1146,7 @@ def clean_final_sorting(
 def deduplicate_spikes(
     sorting: DARTsortSorting,
     radius_ms: float = -1.0,
-    score_by=("merged_log_liks", "gmm_log_liks", "scores"),
+    score_by=("gmm_log_liks", "scores"),
     in_place: bool = False,
 ) -> DARTsortSorting:
     if radius_ms < 0 or sorting.labels is None:

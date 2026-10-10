@@ -65,6 +65,7 @@ from ..util.internal_config import (
     ComponentDistanceMetric,
     ComputationConfig,
     DARTsortInternalConfig,
+    KmeansppSampling,
     KmeansppSelection,
     KmeansppStopping,
     RefinementConfig,
@@ -87,7 +88,7 @@ from ..util.logging_util import (
 from ..util.main_util import ds_save_intermediate_labels, ds_save_intermediate_sorting
 from ..util.motion import MotionInfo
 from ..util.noise_util import EmbeddedNoise
-from ..util.py_util import databag, panic
+from ..util.py_util import cfg_dataclass, databag, panic
 from ..util.spiketorch import (
     _nonzero_static,
     cosine_distance,
@@ -4215,7 +4216,7 @@ class TMMView(BaseMixtureModel):
         return self.tmm.b.log_proportions[self.unit_ids].logsumexp(dim=0)
 
     @property
-    def noise_log_prop(self) -> Tensor:
+    def noise_log_prop(self) -> Tensor:  # ty: ignore[invalid-property-type-override]
         return self.tmm.b.noise_log_prop
 
     def score(
@@ -4450,6 +4451,9 @@ def get_truncated_datasets(
             neighb_overlap=refinement_cfg.kmeanspp_neighb_overlap,
             selection=refinement_cfg.kmeanspp_selection,
             stopping=refinement_cfg.kmeanspp_stopping,
+            sampling=refinement_cfg.kmeanspp_sampling,
+            alpha=refinement_cfg.kmeanspp_alpha,
+            z0=refinement_cfg.kmeanspp_z0,
             seed=rg,
         )
         sorting = sorting.ephemeral_replace(
@@ -4788,9 +4792,18 @@ def instantiate_and_bootstrap_tmm(
     )
 
 
+@cfg_dataclass
+class KmeansppSamplingParams:
+    sampling: KmeansppSampling
+    alpha: float
+    z0: float
+    min_count: int
+
+
 @databag
 class TruncatedKmeansppResult:
     full_labels: Tensor
+    centroid_ixs: Tensor
 
     # data smuggling
     xt: Tensor
@@ -4817,6 +4830,9 @@ def truncated_kmeanspp(
     neighb_overlap: float | None = None,
     selection: KmeansppSelection = "phi",
     stopping: KmeansppStopping = "patience",
+    sampling: KmeansppSampling = "d2",
+    alpha: float = 2.0,
+    z0: float = 3.0,
     max_components_per_channel: int = 5,
 ) -> TruncatedKmeansppResult:
     """Neighborhood-sparsity-aware kmeans++"""
@@ -4870,6 +4886,9 @@ def truncated_kmeanspp(
             greedy_proposals=greedy_proposals,
             stopping=stopping,
             feat_rank=feat_rank,
+            sampling=sampling,
+            alpha=alpha,
+            z0=z0,
         )
         if selection == "phi":
             score = phi
@@ -4947,6 +4966,7 @@ def truncated_kmeanspp(
 
     return TruncatedKmeansppResult(
         full_labels=full_labels,
+        centroid_ixs=centroid_ixs,
         xt=xt,
         whitenedx=whitenedx,
         CmoCooinvx=CmoCooinvx,
@@ -4968,6 +4988,9 @@ def _truncated_kmeanspp_inner(
     greedy_proposals: int,
     stopping: KmeansppStopping,
     feat_rank: int,
+    sampling: KmeansppSampling = "d2",
+    alpha: float = 2.0,
+    z0: float = 3.0,
 ) -> tuple[Tensor, float]:
     """Sparse flavor of kmeans++ which has some strategies for picking k
 
@@ -4975,6 +4998,8 @@ def _truncated_kmeanspp_inner(
         - 1: make sure neighbs are covered
         - 2: do usual kmeans++ until a simple coverage criterion is hit
         - 3: check stopping criteria at each iteration
+
+    sampling="d2" draws wppt distsq^(alpha/2) [5]
 
     Stopping criteria come mainly from [2, 4]. Some refs below.
 
@@ -4986,21 +5011,32 @@ def _truncated_kmeanspp_inner(
         38:293-306, 1985. https://doi.org/10.1016/0304-3975(85)90224-5
     [4] Bahmani et al. Scalable k-means++. VLDB 2012.
         https://arxiv.org/abs/1203.6402
+    [5] Bamas et al. Analyzing D^alpha seeding for k-means. ICML 2024.
+        https://arxiv.org/abs/2310.13474
     """
     n = X.shape[0]
     gen = spawn_torch_rg(base_rg, device=X.device)
     max_nc_obs = neighborhoods.shape[1]
     n_neighb = visible.shape[0]
     assert X.shape == (n, feat_rank * max_nc_obs)
+    assert alpha > 0
+    assert stopping != "significance" or sampling == "significance"
+    assert sampling != "significance" or alpha == 2.0
+    sampling_params = KmeansppSamplingParams(
+        sampling=sampling, alpha=alpha, z0=z0, min_count=int(min_count)
+    )
+    assert sampling_params.min_count == min_count
 
     # Initialize
     train_centroid_ixs = X.new_full((max_k,), n, dtype=torch.long)
     distsq = X.new_full((n,), torch.inf)
+    dof = X.new_zeros((n,))
     order, indptr, counts = sort_to_csr(
         Xneighbixs, n_neighb
     )
 
     buf = torch.empty_like(distsq)
+    wbuf = torch.empty_like(distsq)
     stop_distsq = stop_rms**2
     propose_kw = dict(
         X=X,
@@ -5022,50 +5058,80 @@ def _truncated_kmeanspp_inner(
         nj = uncov[torch.multinomial(counts[uncov].to(X), 1, generator=gen)[0]]
         j = torch.rand((), device=X.device, generator=gen).mul_(counts[nj]).long()
         train_centroid_ixs[k] = order[indptr[nj] + j]
-        ix, d = _truncated_kmeanspp_propose(
+        ix, d, n_feats = _truncated_kmeanspp_propose(
             centroid_ix=train_centroid_ixs[k],
             **propose_kw,  # ty: ignore[invalid-argument-type]
         )
         if d is not None:
-            _truncated_kmeanspp_commit_(distsq, ix, d)
+            assert n_feats is not None
+            _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
         covered.logical_or_(visible[Xneighbixs[train_centroid_ixs[k]]])
         k += 1
 
+    # -- significance: sample by excess over z0, until no neighborhood has enough
+    while stopping == "significance" and k < max_k:
+        w = _truncated_kmeanspp_sampling_weights(
+            sampling_params, distsq, dof, Xneighbixs, n_neighb, out=wbuf
+        )
+        if w is None:
+            break
+        train_centroid_ixs[k] = _one_gumbel_nolog(w, gen, buf)
+        ix, d, n_feats = _truncated_kmeanspp_propose(
+            centroid_ix=train_centroid_ixs[k],
+            **propose_kw,  # ty: ignore[invalid-argument-type]
+        )
+        assert d is not None and n_feats is not None
+        _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
+        k += 1
+
     # -- phase 2: regular kmeanspp until well covered neighborhoods
-    while k < max_k:
+    while stopping != "significance" and k < max_k:
         mass = _truncated_kmeanspp_uncovered_mass(
             distsq, Xneighbixs, n_neighb, stop_distsq, buf
         )
         (unsat,) = (mass >= min_count).nonzero(as_tuple=True)
         if not unsat.numel():
             break
-        train_centroid_ixs[k] = _one_gumbel_nolog(distsq, gen, buf)
-        ix, d = _truncated_kmeanspp_propose(
+        w = _truncated_kmeanspp_sampling_weights(
+            sampling_params, distsq, dof, Xneighbixs, n_neighb, out=wbuf
+        )
+        if w is None:
+            break
+        train_centroid_ixs[k] = _one_gumbel_nolog(w, gen, buf)
+        ix, d, n_feats = _truncated_kmeanspp_propose(
             centroid_ix=train_centroid_ixs[k],
             **propose_kw,  # ty: ignore[invalid-argument-type]
         )
         if d is not None:
-            _truncated_kmeanspp_commit_(distsq, ix, d)
+            assert n_feats is not None
+            _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
         k += 1
 
     # -- phase 3: with stopping and other criteria
     floor = min_count * stop_distsq
     centroid_budget = floor / n
     fails = 0
-    phase3_enabled = stopping != "patience" or patience > 0
+    phase3_enabled = stopping != "significance" and (stopping != "patience" or patience > 0)
     while phase3_enabled and k < max_k:
         best_gain, best = -1.0, None
+        w = _truncated_kmeanspp_sampling_weights(
+            sampling_params, distsq, dof, Xneighbixs, n_neighb, out=wbuf
+        )
+        if w is None:
+            break
         # TODO remove greedy
+        # TODO maybe remove significance and alpha
         # TODO parallel proposals for patience: many proposals at once, take the first that passes
         # TODO proposals are entirely independent for neighborhoods that don't overlap, could segment the adjacency into a checkerboard...
         for _ in range(greedy_proposals):
-            cix = _one_gumbel_nolog(distsq, gen, buf)
-            ix, d = _truncated_kmeanspp_propose(centroid_ix=cix, **propose_kw)  # ty: ignore[invalid-argument-type]
+            cix = _one_gumbel_nolog(w, gen, buf)
+            ix, d, n_feats = _truncated_kmeanspp_propose(centroid_ix=cix, **propose_kw)  # ty: ignore[invalid-argument-type]
             if d is None:
                 continue
+            assert n_feats is not None
             gain = distsq[ix].sub_(d).clamp_(min=0.0).sum().item()
             if gain > best_gain:
-                best_gain, best = gain, (cix, ix, d)
+                best_gain, best = gain, (cix, ix, d, n_feats)
         if stopping in ("patience", "patientdpmeanspp"):
             if best is None or best_gain < floor:
                 fails += 1
@@ -5080,8 +5146,8 @@ def _truncated_kmeanspp_inner(
                 break
         if best is None:
             panic(stopping)
-        train_centroid_ixs[k], ix, d = best
-        _truncated_kmeanspp_commit_(distsq, ix, d)
+        train_centroid_ixs[k], ix, d, n_feats = best
+        _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
         k += 1
 
     phi = distsq.mean().item()
@@ -5091,6 +5157,37 @@ def _truncated_kmeanspp_inner(
         )
 
     return train_centroid_ixs[:k], phi
+
+
+def _truncated_kmeanspp_sampling_weights(
+    p: KmeansppSamplingParams,
+    distsq: Tensor,
+    dof: Tensor,
+    Xneighbixs: Tensor,
+    n_neighb: int,
+    out: Tensor,
+) -> Tensor | None:
+    if p.sampling == "d2":
+        return _truncated_kmeanspp_weights(distsq, p.alpha, out=out)
+    assert p.sampling == "significance"
+    assert distsq.isfinite().all() and (dof > 0).all()
+    z = _truncated_kmeanspp_significance(distsq, dof, out=out)
+    n_sig = distsq.new_zeros(n_neighb).index_add_(0, Xneighbixs, (z > p.z0).to(z))
+    dense = n_sig >= p.min_count
+    if not dense.any():
+        return None
+    return z.sub_(p.z0).clamp_(min=0.0).mul_(dense[Xneighbixs])
+
+
+def _truncated_kmeanspp_weights(distsq: Tensor, alpha: float, out: Tensor) -> Tensor:
+    if alpha == 2.0:
+        return distsq
+    return torch.pow(distsq, alpha / 2.0, out=out)
+
+
+def _truncated_kmeanspp_significance(distsq: Tensor, dof: Tensor, out: Tensor) -> Tensor:
+    z = torch.div(dof, 2.0, out=out).sqrt_()
+    return z.mul_(distsq.div(2.0).sub_(1.0))
 
 
 def _truncated_kmeanspp_uncovered_mass(
@@ -5118,12 +5215,12 @@ def _truncated_kmeanspp_propose(
     indptr: Tensor,
     counts: Tensor,
     feat_rank: int,
-) -> tuple[Tensor, Tensor | None]:
+) -> tuple[Tensor, Tensor | None, Tensor | None]:
     cent_neighb = Xneighbixs[centroid_ix]
     (vis_neighbs,) = visible[cent_neighb].nonzero(as_tuple=True)
     ix = csr_members_ordered(order, indptr, counts, vis_neighbs)
     if not ix.numel():
-        return ix, None
+        return ix, None, None
 
     max_nc_obs = neighborhoods.shape[1]
     rel_inds = neighb_rel_inds[cent_neighb][neighborhoods[Xneighbixs[ix]]]
@@ -5134,15 +5231,19 @@ def _truncated_kmeanspp_propose(
 
     d = X[ix].view(ix.numel(), feat_rank, max_nc_obs) - cent
     d = d.square_().mul_(shared.unsqueeze(1)).sum(dim=(1, 2))
-    d = d.div_(n_shared.mul(feat_rank).clamp_(min=1))
+    n_feats = n_shared.mul(feat_rank).to(d)
+    d = d.div_(n_feats.clamp(min=1))
     d.masked_fill_(n_shared == 0, torch.inf)
-    return ix, d
+    return ix, d, n_feats
 
 
-def _truncated_kmeanspp_commit_(distsq: Tensor, ix: Tensor, d: Tensor) -> None:
-    """Min-update distsq in place with a proposal's distances. Destroys d."""
-    torch.minimum(distsq[ix], d, out=d)
-    distsq[ix] = d
+def _truncated_kmeanspp_commit_(
+    distsq: Tensor, dof: Tensor, ix: Tensor, d: Tensor, n_feats: Tensor
+) -> None:
+    closer = d < distsq[ix]
+    ix = ix[closer]
+    distsq[ix] = d[closer]
+    dof[ix] = n_feats[closer]
 
 
 def run_split(

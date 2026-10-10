@@ -516,6 +516,7 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
     N = true_labels.shape[0]
     assert scores.candidates.shape == (N, n_candidates)
     assert scores.log_liks.shape == (N, n_candidates + 1)
+    assert scores.responsibilities is not None
     assert scores.responsibilities.shape == (N, n_candidates + 1)
     assert torch.equal(
         scores.candidates >= 0, scores.log_liks[:, :-1].isfinite()
@@ -708,8 +709,9 @@ def test_truncated_kmeanspp_step():
 
     centroids = (0, n_neighb)
     distsq = X.new_full((n,), torch.inf)
+    dof = X.new_zeros((n,))
     for c in centroids:
-        ix, d = mixture._truncated_kmeanspp_propose(
+        ix, d, n_feats = mixture._truncated_kmeanspp_propose(
             X=X,
             centroid_ix=torch.tensor(c, device=device),
             Xneighbixs=ids,
@@ -722,22 +724,34 @@ def test_truncated_kmeanspp_step():
             feat_rank=feat_rank,
         )
         if d is not None:
-            mixture._truncated_kmeanspp_commit_(distsq, ix, d)
+            assert n_feats is not None
+            mixture._truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
 
     assert distsq.isfinite().any()
     assert distsq.isinf().any()
+    assert torch.equal(distsq.isfinite(), dof > 0)
 
 
-@pytest.mark.parametrize("stopping", ["patience", "dpmeanspp"])
+@pytest.mark.parametrize(
+    "stopping,sampling",
+    [
+        ("patience", "d2"),
+        ("dpmeanspp", "d2"),
+        ("dpmeanspp", "significance"),
+        ("significance", "significance"),
+    ],
+)
 @pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
-def test_truncated_kmeanspp(mini_simulations, sim_name, stopping):
+def test_truncated_kmeanspp(mini_simulations, sim_name, stopping, sampling):
     sim = mini_simulations[sim_name]
     sorting = sim["sorting"]
     gt_labels = sorting.labels
     unlabeled = sorting.ephemeral_replace(labels=np.full_like(gt_labels, -1))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    refinement_cfg = RefinementConfig(kmeanspp_stop_rms=3.0, kmeanspp_stopping=stopping)
+    refinement_cfg = RefinementConfig(
+        kmeanspp_stop_rms=3.0, kmeanspp_stopping=stopping, kmeanspp_sampling=sampling
+    )
     _, _, train_data, _, _, _, train_ixs, _ = mixture.get_truncated_datasets(
         sorting=unlabeled,
         motion=sim["motion"],
