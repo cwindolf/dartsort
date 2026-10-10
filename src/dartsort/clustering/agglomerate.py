@@ -215,14 +215,14 @@ def _agglomerate_violation_merge(
         jitter_ms=refinement_cfg.glom_jitter_ms,
     )
     assert sorting.labels is not None
-    unit_sizes = np.bincount(
+    spike_counts = np.bincount(
         sorting.labels[sorting.labels >= 0], minlength=distances.shape[0]
     )
     merge_mapping = violation_linkage(
         distances=distances,
         violation=violation,
         tdist=tdist,
-        unit_sizes=unit_sizes,
+        spike_counts=spike_counts,
         unit_snrs=unit_snrs,
         template_merge_cfg=template_merge_cfg,
         force_distance=refinement_cfg.glom_force_merge_template_distance,
@@ -255,7 +255,7 @@ def violation_linkage(
     distances: np.ndarray,
     violation: ViolationInfo,
     tdist: "TemplateDistanceResult",
-    unit_sizes: np.ndarray,
+    spike_counts: np.ndarray,
     unit_snrs: np.ndarray,
     template_merge_cfg: TemplateMergeConfig,
     force_distance: float,
@@ -288,8 +288,8 @@ def violation_linkage(
     assert np.array_equal(distances, distances.T)
     assert not np.isnan(distances).any()
     assert (np.diagonal(distances) == 0).all()
-    assert unit_sizes.shape == unit_snrs.shape == (n,)
-    assert (unit_sizes > 0).all()
+    assert spike_counts.shape == unit_snrs.shape == (n,)
+    assert (spike_counts > 0).all()
     assert np.isfinite(unit_snrs).all()
     assert tdist.radial_counts is not None
 
@@ -366,7 +366,7 @@ def violation_linkage(
         group_spatial_sing[a], group_weights[a] = _merged_template(
             members[a],
             templates=templates,
-            unit_sizes=unit_sizes,
+            spike_counts=spike_counts,
             unit_snrs=unit_snrs,
             shifts=tdist.shifts,
             temporal_components=tdist.temporal_components,
@@ -424,7 +424,7 @@ def _merged_template(
     unit_ids,
     *,
     templates: np.ndarray,
-    unit_sizes: np.ndarray,
+    spike_counts: np.ndarray,
     unit_snrs: np.ndarray,
     shifts: np.ndarray,
     temporal_components: np.ndarray,
@@ -441,8 +441,8 @@ def _merged_template(
         assert abs(s) < n_samples
         src = slice(max(0, -s), n_samples - max(0, s))
         dst = slice(max(0, s), n_samples - max(0, -s))
-        total[dst] += unit_sizes[u] * templates[u, src]
-        coverage[dst] += unit_sizes[u]
+        total[dst] += spike_counts[u] * templates[u, src]
+        coverage[dst] += spike_counts[u]
     assert (coverage > 0).all()
     template = np.divide(total, coverage[:, None], out=total)
     spatial = temporal_components @ template
