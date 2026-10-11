@@ -543,8 +543,8 @@ class RefinementConfig:
     kmeanspp_patience: int = 21
     kmeanspp_greedy_proposals: int = 1
     kmeanspp_neighb_overlap: float | None = None
-    kmeanspp_selection: KmeansppSelection = "phi"
-    kmeanspp_stopping: KmeansppStopping = "patience"
+    kmeanspp_selection: KmeansppSelection = "marginal"
+    kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
     kmeanspp_sampling: KmeansppSampling = "d2"
     kmeanspp_alpha: float = 2.0
     kmeanspp_z0: float = 3.0
@@ -723,7 +723,7 @@ class SubtractionConfig:
     chunk_length_samples: int = 30_000
     fit_only: bool = False
 
-    detection_proposal: DetectionProposal = "voltage"
+    detection_proposal: DetectionProposal = "tpca"
     proposal_filters: int = 1
     propose_with_score_net: bool = False
 
@@ -757,7 +757,7 @@ class SubtractionConfig:
     subtraction_denoising_cfg: FeaturizationConfig = FeaturizationConfig(
         denoise_only=True,
         do_nn_denoise=True,
-        tpca_denoise_fit="during_nn_training",
+        tpca_denoise_fit="peeling",
         extract_radius=200.0,
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
@@ -1419,17 +1419,6 @@ def _matching_cfg(
     )
 
 
-def _tpca_denoise_fit(cfg: "DeveloperConfig") -> TPCADenoiserFitStage:
-    if cfg.tpca_denoise_fit is not None:
-        return cfg.tpca_denoise_fit
-    trains_decollider = (
-        cfg.use_nn_in_subtraction
-        and cfg.nn_denoiser_class_name == "Decollider"
-        and cfg.nn_denoiser_pretrained_path is None
-    )
-    return "during_nn_training" if trains_decollider else "peeling"
-
-
 def _initial_detection_cfg(
     cfg: "DeveloperConfig", whiten_cfg: WhiteningConfig
 ) -> SubtractionConfig | ThresholdingConfig | MatchingConfig:
@@ -1439,7 +1428,7 @@ def _initial_detection_cfg(
             extract_radius=cfg.subtraction_radius_um,
             do_nn_denoise=cfg.use_nn_in_subtraction,
             do_tpca_denoise=cfg.do_tpca_denoise,
-            tpca_denoise_fit=_tpca_denoise_fit(cfg),
+            tpca_denoise_fit=cfg.tpca_denoise_fit,
             tpca_rank=cfg.temporal_pca_rank,
             tpca_fit_radius=cfg.fit_radius_um,
             input_waveforms_name="raw",
