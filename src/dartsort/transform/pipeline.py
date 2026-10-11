@@ -532,39 +532,12 @@ def split_featurization_cfg_for_denoised_features(
     return {"collisioncleaned": collisioncleaned_cfg, "denoised": denoised_cfg}
 
 
-def featurization_config_to_class_names_and_kwargs(
-    featurization_cfg: FeaturizationConfig,
-    waveform_cfg: WaveformConfig,
-    sampling_frequency: float,
+def proposal_class_names_and_kwargs(
+    featurization_cfg: FeaturizationConfig, input_tpca_slice: slice | None
 ):
-    """Convert this config into a list of waveform transformer classes and arguments
-
-    Used by WaveformPipeline.from_config(...) to construct WaveformPipelines
-    from FeaturizationConfig objects.
-    """
     fc = featurization_cfg
-    if fc.skip:
-        return []
-
     class_names_and_kwargs = []
-    do_feats = not fc.denoise_only
-
-    if do_feats and fc.save_input_voltages:
-        class_names_and_kwargs.append(
-            ("Voltage", {"name_prefix": fc.input_waveforms_name})
-        )
-    if do_feats and fc.save_collidedness:
-        class_names_and_kwargs.append(("FixedProperty", {"name": "collidedness"}))
-    if fc.save_input_waveforms:
-        class_names_and_kwargs.append(
-            ("Waveform", {"name_prefix": fc.input_waveforms_name})
-        )
-    input_tpca_slice = None
-    if fc.input_tpca_waveform_cfg is not None:
-        input_tpca_slice = fc.input_tpca_waveform_cfg.relative_slice(
-            waveform_cfg, sampling_frequency
-        )
-    if do_feats and fc.learn_cleaned_tpca_basis:
+    if fc.learn_cleaned_tpca_basis:
         class_names_and_kwargs.append(
             (
                 "BaseTemporalPCA",
@@ -591,6 +564,42 @@ def featurization_config_to_class_names_and_kwargs(
                 },
             )
         )
+    return class_names_and_kwargs
+
+
+def featurization_config_to_class_names_and_kwargs(
+    featurization_cfg: FeaturizationConfig,
+    waveform_cfg: WaveformConfig,
+    sampling_frequency: float,
+):
+    """Convert this config into a list of waveform transformer classes and arguments
+
+    Used by WaveformPipeline.from_config(...) to construct WaveformPipelines
+    from FeaturizationConfig objects.
+    """
+    fc = featurization_cfg
+    input_tpca_slice = None
+    if fc.input_tpca_waveform_cfg is not None:
+        input_tpca_slice = fc.input_tpca_waveform_cfg.relative_slice(
+            waveform_cfg, sampling_frequency
+        )
+    if fc.skip:
+        return proposal_class_names_and_kwargs(fc, input_tpca_slice)
+
+    class_names_and_kwargs = []
+    do_feats = not fc.denoise_only
+
+    if do_feats and fc.save_input_voltages:
+        class_names_and_kwargs.append(
+            ("Voltage", {"name_prefix": fc.input_waveforms_name})
+        )
+    if do_feats and fc.save_collidedness:
+        class_names_and_kwargs.append(("FixedProperty", {"name": "collidedness"}))
+    if fc.save_input_waveforms:
+        class_names_and_kwargs.append(
+            ("Waveform", {"name_prefix": fc.input_waveforms_name})
+        )
+    class_names_and_kwargs.extend(proposal_class_names_and_kwargs(fc, input_tpca_slice))
 
     if fc.fit_disabled_whitener:
         assert fc.whiten_cfg is not None
