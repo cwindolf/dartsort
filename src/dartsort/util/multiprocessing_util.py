@@ -1,8 +1,14 @@
+import collections
 import multiprocessing
 import os
 import queue
+import sys
 from concurrent.futures import CancelledError, ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from concurrent.futures._base import (
+    _result_or_cancel,  # ty: ignore[unresolved-import]
+)
+from itertools import islice
 from multiprocessing import get_context
 
 from .internal_config import ComputationConfig
@@ -126,6 +132,30 @@ class CloudpicklePoolExecutor(ProcessPoolExecutor):
         future = super().submit(cloudpickle_run, cloudpickle.dumps(fn), args)
         # future.add_done_callback(uncloudpickle_callback)
         return future
+
+
+def buffered_map(pool, fn, *iterables, buffersize: int):
+    """pool.map(fn, *iterables, buffersize=buffersize) shim for Python < 3.14"""
+    assert buffersize >= 1
+    if isinstance(pool, MockPoolExecutor) or sys.version_info >= (3, 14):
+        return pool.map(fn, *iterables, buffersize=buffersize)
+
+    args_iter = zip(*iterables, strict=False)
+    fs = collections.deque(
+        pool.submit(fn, *args) for args in islice(args_iter, buffersize)
+    )
+
+    def result_iterator():
+        try:
+            while fs:
+                if args := next(args_iter, None):
+                    fs.append(pool.submit(fn, *args))
+                yield _result_or_cancel(fs.popleft())
+        finally:
+            for future in fs:
+                future.cancel()
+
+    return result_iterator()
 
 
 def rank_init(queue):

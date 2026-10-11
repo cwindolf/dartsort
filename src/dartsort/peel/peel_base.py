@@ -3,7 +3,6 @@
 import gc
 import tempfile
 from collections.abc import Mapping, Sequence
-from concurrent.futures import CancelledError
 from contextlib import contextmanager
 from itertools import repeat
 from pathlib import Path
@@ -37,7 +36,11 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger, progbar
-from ..util.multiprocessing_util import handle_negative_jobs, pool_from_cfg
+from ..util.multiprocessing_util import (
+    buffered_map,
+    handle_negative_jobs,
+    pool_from_cfg,
+)
 from ..util.py_util import delay_keyboard_interrupt, panic
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
 
@@ -307,7 +310,7 @@ class BasePeeler(BModule):
             zip_strict = True
         assert residual_snips_per_chunk is not None
 
-        jobs = list(zip(chunks_to_do, residual_snips_per_chunk, strict=zip_strict))
+        jobs = zip(chunks_to_do, residual_snips_per_chunk, strict=zip_strict)
 
         if not chunks_to_do.size:
             return output_hdf5_filename
@@ -345,7 +348,9 @@ class BasePeeler(BModule):
                     self.to(computation_cfg.actual_device())
 
                 # launch the jobs and wrap in a progress bar
-                results = pool.map(_peeler_process_job, jobs)
+                results = buffered_map(
+                    pool, _peeler_process_job, jobs, buffersize=8 * n_jobs
+                )
                 if show_progress:
                     s_chunk = chunk_length_samples / self.recording.sampling_frequency
                     dtag = computation_cfg.actual_device().type
@@ -373,50 +378,49 @@ class BasePeeler(BModule):
                     total_residual_snips=total_residual_snips,
                 ) as (output_h5, h5_spike_datasets, residual_file, n_spikes):
                     batch_count = 0
-                    try:
-                        for result, chunk_start_samples in zip(
-                            results, chunks_to_do, strict=True
-                        ):
-                            n_new_spikes = self.gather_chunk_result(
-                                cur_n_spikes=n_spikes,
-                                chunk_start_samples=chunk_start_samples,
-                                chunk_result=result,
-                                h5_spike_datasets=h5_spike_datasets,
-                                output_h5=output_h5,
-                                residual_file=residual_file,
-                                ignore_resuming=ignore_resuming,
-                                skip_features=skip_features,
-                            )
-                            batch_count += 1
-                            n_spikes += n_new_spikes
-                            if show_progress:
-                                desc = f"{task_name}:{dtag}"
-                                if not skip_features:
-                                    assert s_chunk is not None
-                                    desc += f" [spk/{s_chunk:g}s={n_spikes / batch_count:0.1f}]"
-                                results.set_description(desc, refresh=False)
-
-                            # early stopping criteria
-                            # no early stopping if we're skipping features (used for residual)
-                            can_stop = not skip_features
-                            # only allow stop if we have enough waveforms
-                            if stop_after_n_waveforms is not None:
-                                enough_spikes = n_spikes >= stop_after_n_waveforms
-                                can_stop = can_stop and enough_spikes
-                            else:
-                                can_stop = False
-                            # prevent stop if we're asked to cover but didn't
-                            if ensure_coverage is not None:
-                                chunks_done = batch_count + last_chunk_index + 1
-                                covered = chunks_done / n_chunks_orig >= ensure_coverage
-                                can_stop = can_stop and covered
-                            if can_stop:
-                                pool.shutdown(cancel_futures=True)
-                    except CancelledError:
+                    for result, chunk_start_samples in zip(
+                        results, chunks_to_do, strict=True
+                    ):
+                        n_new_spikes = self.gather_chunk_result(
+                            cur_n_spikes=n_spikes,
+                            chunk_start_samples=chunk_start_samples,
+                            chunk_result=result,
+                            h5_spike_datasets=h5_spike_datasets,
+                            output_h5=output_h5,
+                            residual_file=residual_file,
+                            ignore_resuming=ignore_resuming,
+                            skip_features=skip_features,
+                        )
+                        batch_count += 1  # noqa: SIM113
+                        n_spikes += n_new_spikes
                         if show_progress:
-                            results.write(
-                                f"Got {n_spikes} spikes, enough to stop early."
-                            )
+                            desc = f"{task_name}:{dtag}"
+                            if not skip_features:
+                                assert s_chunk is not None
+                                desc += f" [spk/{s_chunk:g}s={n_spikes / batch_count:0.1f}]"
+                            results.set_description(desc, refresh=False)
+
+                        # early stopping criteria
+                        # no early stopping if we're skipping features (used for residual)
+                        can_stop = not skip_features
+                        # only allow stop if we have enough waveforms
+                        if stop_after_n_waveforms is not None:
+                            enough_spikes = n_spikes >= stop_after_n_waveforms
+                            can_stop = can_stop and enough_spikes
+                        else:
+                            can_stop = False
+                        # prevent stop if we're asked to cover but didn't
+                        if ensure_coverage is not None:
+                            chunks_done = batch_count + last_chunk_index + 1
+                            covered = chunks_done / n_chunks_orig >= ensure_coverage
+                            can_stop = can_stop and covered
+                        if can_stop:
+                            pool.shutdown(cancel_futures=True)
+                            if show_progress:
+                                results.write(
+                                    f"Got {n_spikes} spikes, enough to stop early."
+                                )
+                            break
         finally:
             self.to("cpu")
 
