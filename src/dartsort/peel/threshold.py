@@ -302,6 +302,11 @@ class Threshold(BasePeeler):
             )
         else:
             panic(proposal)
+        if not threshold_res["n_spikes"] and return_residual:
+            return PeelingBatchResult(
+                n_spikes=0,
+                residual=traces[left_margin : traces.shape[0] - right_margin],
+            )
         if not threshold_res["n_spikes"]:
             return peeling_empty_result
 

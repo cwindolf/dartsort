@@ -147,6 +147,11 @@ class Shaver(BasePeeler):
             remove_exact_duplicates=self.p.remove_exact_duplicates,
             trough_priority=self.p.trough_priority,
         )
+        if not res["n_spikes"] and return_residual:
+            return PeelingBatchResult(
+                n_spikes=0,
+                residual=residual[left_margin : traces.shape[0] - right_margin],
+            )
         if not res["n_spikes"]:
             return peeling_empty_result
 
