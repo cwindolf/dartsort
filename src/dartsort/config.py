@@ -94,6 +94,9 @@ class DARTsortUserConfig:
     n_jobs_gpu: int = 0
     """Number of parallel workers to use when running on GPU."""
 
+    motion_n_jobs_gpu: Annotated[int, Field(ge=0)] = 2
+    """Like n_jobs_gpu, but for the motion tracking spike detection (cheaper jobs, so default to 2)."""
+
     n_jobs_small: int = -2
     """Max workers to use for small jobs."""
 

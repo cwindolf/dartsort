@@ -41,7 +41,7 @@ from ..util.multiprocessing_util import (
     handle_negative_jobs,
     pool_from_cfg,
 )
-from ..util.py_util import delay_keyboard_interrupt, panic
+from ..util.py_util import databag, delay_keyboard_interrupt, panic
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
@@ -397,7 +397,9 @@ class BasePeeler(BModule):
                             desc = f"{task_name}:{dtag}"
                             if not skip_features:
                                 assert s_chunk is not None
-                                desc += f" [spk/{s_chunk:g}s={n_spikes / batch_count:0.1f}]"
+                                desc += (
+                                    f" [spk/{s_chunk:g}s={n_spikes / batch_count:0.1f}]"
+                                )
                             results.set_description(desc, refresh=False)
 
                         # early stopping criteria
@@ -1284,16 +1286,15 @@ peeling_empty_result = PeelingBatchResult(n_spikes=0)
 # -- helper functions and objects for parallelism
 
 
+@databag
 class PeelerProcessContext:
-    def __init__(
-        self, peeler, compute_residual, skip_features, chunk_length_samples, to_cpu
-    ):
-        self.peeler = peeler
-        self.compute_residual = compute_residual
-        self.skip_features = skip_features
-        self.chunk_length_samples = chunk_length_samples
-        self.to_cpu = to_cpu
-        self.Ts = peeler.recording.get_num_samples()
+    peeler: BasePeeler
+    compute_residual: bool
+    skip_features: bool
+    chunk_length_samples: int | None
+    to_cpu: bool
+    recording_n_samples: int
+    stream: torch.cuda.Stream | None
 
 
 # this state will be set on each thread globally
@@ -1302,14 +1303,14 @@ _peeler_process_context.ctx = None
 
 
 def _peeler_process_init(
-    peeler,
-    device,
+    peeler: BasePeeler,
+    device: torch.device | str | None,
     rank_queue,
-    compute_residual,
-    skip_features,
-    chunk_length_samples,
-    is_local,
-    to_cpu,
+    compute_residual: bool,
+    skip_features: bool,
+    chunk_length_samples: int | None,
+    is_local: bool,
+    to_cpu: bool,
 ):
     # figure out what device to work on
     my_rank = rank_queue.get()
@@ -1326,28 +1327,48 @@ def _peeler_process_init(
         peeler.to(device)
     peeler.eval()
 
+    # give workers their own streams
+    stream = None
+    if device.type == "cuda":
+        stream = torch.cuda.Stream(device=device)
+        stream.wait_stream(torch.cuda.default_stream(device))
+
     # update process-local variables
     _peeler_process_context.ctx = PeelerProcessContext(
-        peeler, compute_residual, skip_features, chunk_length_samples, to_cpu
+        peeler=peeler,
+        compute_residual=compute_residual,
+        skip_features=skip_features,
+        chunk_length_samples=chunk_length_samples,
+        to_cpu=to_cpu,
+        recording_n_samples=peeler.recording.get_num_samples(),
+        stream=stream,
     )
 
 
-def _peeler_process_job(chunk_start_samples__n_resid_snips):
+def _peeler_process_job(
+    chunk_start_samples__n_resid_snips: tuple[int, int | None],
+) -> PeelingBatchResult:
     chunk_start_samples, n_resid_snips = chunk_start_samples__n_resid_snips
+    ctx = _peeler_process_context.ctx
+    assert isinstance(ctx, PeelerProcessContext)
     # by returning here, we are implicitly relying on pickle
     # TODO: replace with manual np.saves
-    with torch.no_grad():
-        chlen = _peeler_process_context.ctx.chunk_length_samples
-        if chlen is not None:
-            chunk_end_samples = chunk_start_samples + chlen
-            chunk_end_samples = min(chunk_end_samples, _peeler_process_context.ctx.Ts)
+    with torch.no_grad(), torch.cuda.stream(ctx.stream):
+        if ctx.chunk_length_samples is not None:
+            chunk_end_samples = chunk_start_samples + ctx.chunk_length_samples
+            chunk_end_samples = min(chunk_end_samples, ctx.recording_n_samples)
         else:
             chunk_end_samples = None
-        return _peeler_process_context.ctx.peeler.process_chunk(
+        result = ctx.peeler.process_chunk(
             chunk_start_samples,
             n_resid_snips=n_resid_snips,
             chunk_end_samples=chunk_end_samples,
-            return_residual=_peeler_process_context.ctx.compute_residual,
-            skip_features=_peeler_process_context.ctx.skip_features,
-            to_cpu=_peeler_process_context.ctx.to_cpu,
+            return_residual=ctx.compute_residual,
+            skip_features=ctx.skip_features,
+            to_cpu=ctx.to_cpu,
         )
+    # need a sync to make sure things are valid across threads
+    # doesn't matter if we're .cpu()ing immediately anyway, which is usually true, but...
+    if ctx.stream is not None:
+        ctx.stream.synchronize()
+    return result

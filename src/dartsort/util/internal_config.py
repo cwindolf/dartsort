@@ -964,6 +964,7 @@ default_clustering_features_cfg = ClusteringFeaturesConfig()
 default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
+default_motion_computation_cfg = ComputationConfig(n_jobs_gpu=2)
 default_refinement_cfg = RefinementConfig()
 default_initial_refinement_cfg = RefinementConfig(
     mixture_steps=("split", "demolish", "demolish")
@@ -1007,6 +1008,7 @@ class DARTsortInternalConfig:
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
     computation_cfg: ComputationConfig = default_computation_cfg
+    motion_computation_cfg: ComputationConfig = default_motion_computation_cfg
 
     # high level behavior
     dredge_only: bool = False
@@ -1177,6 +1179,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         clustering_features_cfg=_clustering_features_cfg(cfg),
         motion_estimation_cfg=_motion_estimation_cfg(cfg),
         computation_cfg=_computation_cfg(cfg),
+        motion_computation_cfg=_motion_computation_cfg(cfg),
         preprocessing=cfg.preprocessing,
         already_preprocessed=cfg.already_preprocessed,
         preprocessing_dtype=cfg.preprocessing_dtype,
@@ -1622,6 +1625,10 @@ def _computation_cfg(cfg: "DeveloperConfig") -> ComputationConfig:
         executor=cfg.executor,
         tmpdir_parent=cfg.tmpdir_parent,
     )
+
+
+def _motion_computation_cfg(cfg: "DeveloperConfig") -> ComputationConfig:
+    return replace(_computation_cfg(cfg), n_jobs_gpu=cfg.motion_n_jobs_gpu)
 
 
 def _motion_estimation_cfg(cfg: "DeveloperConfig") -> MotionEstimationConfig:
