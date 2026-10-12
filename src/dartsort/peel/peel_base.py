@@ -1353,8 +1353,6 @@ def _peeler_process_job(
     assert isinstance(ctx, PeelerProcessContext)
     # by returning here, we are implicitly relying on pickle
     # TODO: replace with manual np.saves
-    # torch.cuda.stream(None) still looks up the current device of whichever accelerator
-    # torch finds, which raises on Apple Silicon (torch.mps has no current_device()).
     stream_ctx = nullcontext() if ctx.stream is None else torch.cuda.stream(ctx.stream)
     with torch.no_grad(), stream_ctx:
         if ctx.chunk_length_samples is not None:
