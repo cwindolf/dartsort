@@ -1,3 +1,4 @@
+import importlib.util
 from threading import local
 from typing import cast
 
@@ -7,13 +8,6 @@ import torch
 from scipy.spatial import KDTree
 from scipy.stats import norm
 from spikeinterface.core.baserecording import BaseRecording
-
-try:
-    import KDEpy
-
-    HAVE_KDEPY = True
-except ImportError:
-    HAVE_KDEPY = False
 
 from dartsort.clustering.mixture import Scores
 
@@ -27,6 +21,7 @@ from .cluster_util import hierarchical_cluster, reorder_by_depth
 from .clustering_features import StableWaveformFeatures
 
 logger = get_logger(__name__)
+HAVE_KDEPY = importlib.util.find_spec("KDEpy") is not None
 
 
 @databag
@@ -409,7 +404,7 @@ def collision_cleaning_error_filter(
     new_props = dict(labels=new_labels)
     if bad_ids.size:
         try:
-            scores = get_gmm_scores(sorting, prefixes=["gmm"])
+            scores = get_gmm_scores(sorting)
             scores, _ = drop_units_and_update_scores(
                 train_scores=scores,
                 scores=None,
@@ -534,7 +529,7 @@ def gmm_isolation_filter(
 
     assert sorting.labels is not None
     try:
-        scores = get_gmm_scores(sorting, prefixes=["gmm"])
+        scores = get_gmm_scores(sorting)
     except AttributeError:
         logger.dartsortdebug("No GMM scores attached to sorting, no isolation filter.")
         return GMMIsolationResult(

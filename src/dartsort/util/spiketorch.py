@@ -339,40 +339,39 @@ def weighted_best_lagged_scaled_normeuc_dist(
     batch_size: int = 1024,
     scale_var: float = 0.01**2,
     scale_boundary: float = 1.0 / 3.0,
+    pairs: tuple[Tensor, Tensor] | None = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     rank, rank_, conv_len = tconv.shape
     n_units, rank__ = spatial_sing.shape[:2]
     assert rank == rank_ == rank__
     lag_offset = conv_len // 2
 
-    # initialize so that blanks and diagonal entries (not computed) are correct
-    d_out = spatial_sing.new_full((n_units, n_units), torch.inf)
-    d_out.diagonal().zero_()
-    lag_out = torch.zeros_like(d_out, dtype=torch.int32)
-    iou_out = torch.zeros_like(d_out)
+    if pairs is None:
+        itriu = torch.triu_indices(n_units, n_units, offset=1)
+        ii = itriu[0]
+        jj = itriu[1]
 
-    itriu = torch.triu_indices(n_units, n_units, offset=1)
-    ii = itriu[0]
-    jj = itriu[1]
-
-    not_blank = (weights.sum(1) > 0).cpu()
-    triuvalid = not_blank[ii].logical_and_(not_blank[jj])
-    ii = ii[triuvalid]
-    jj = jj[triuvalid]
+        not_blank = (weights.sum(1) > 0).cpu()
+        triuvalid = not_blank[ii].logical_and_(not_blank[jj])
+        ii = ii[triuvalid]
+        jj = jj[triuvalid]
+    else:
+        ii, jj = pairs
+        assert ii.shape == jj.shape and ii.ndim == 1
 
     ntriu = ii.shape[0]
 
-    d_flat = d_out.new_empty((ntriu,))
-    lag_flat = lag_out.new_empty((ntriu,))
-    iou_flat = iou_out.new_empty((ntriu,))
+    d_flat = spatial_sing.new_empty((ntriu,))
+    lag_flat = torch.empty((ntriu,), dtype=torch.int32, device=spatial_sing.device)
+    iou_flat = spatial_sing.new_empty((ntriu,))
 
     tconv_flat = tconv.view(rank * rank, conv_len)
 
-    inv_lambda = torch.tensor(1.0 / scale_var).to(d_out)
+    inv_lambda = torch.tensor(1.0 / scale_var).to(d_flat)
     scale_max = 1.0 + scale_boundary
-    _0 = torch.tensor(0.0).to(d_out)
-    scmin = torch.tensor(1.0 / scale_max).to(d_out)
-    scmax = torch.tensor(scale_max).to(d_out)
+    _0 = torch.tensor(0.0).to(d_flat)
+    scmin = torch.tensor(1.0 / scale_max).to(d_flat)
+    scmax = torch.tensor(scale_max).to(d_flat)
 
     for i0 in range(0, ntriu, batch_size):
         i1 = min(ntriu, i0 + batch_size)
@@ -429,12 +428,21 @@ def weighted_best_lagged_scaled_normeuc_dist(
         dd = dii.clamp_(_0, djj)
         torch.sqrt(dd, out=d_flat[i0:i1])
 
+    lag_flat -= lag_offset
+    if pairs is not None:
+        return d_flat, lag_flat, iou_flat
+
+    # initialize so that blanks and diagonal entries (not computed) are correct
+    d_out = spatial_sing.new_full((n_units, n_units), torch.inf)
+    d_out.diagonal().zero_()
+    lag_out = torch.zeros_like(d_out, dtype=torch.int32)
+    iou_out = torch.zeros_like(d_out)
+
     # squareform
     d_out[ii, jj] = d_flat
     d_out[jj, ii] = d_flat
     iou_out[ii, jj] = iou_flat
     iou_out[jj, ii] = iou_flat
-    lag_flat -= lag_offset
     lag_out[ii, jj] = lag_flat
     lag_out[jj, ii] = -lag_flat
 

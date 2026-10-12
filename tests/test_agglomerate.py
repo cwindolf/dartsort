@@ -1,14 +1,25 @@
 import numpy as np
 import pytest
+import torch
 
 from dartsort.clustering.agglomerate import (
+    TemplateDistanceResult,
     clean_final_sorting,
     combine_gmm_scores,
     deduplicate_spikes,
+    template_distances_to,
+    violation_linkage,
 )
-from dartsort.clustering.cluster_util import apply_reclustering, merge_group_shifts
+from dartsort.clustering.cluster_util import (
+    ViolationInfo,
+    apply_reclustering,
+    merge_group_shifts,
+)
+from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting
+from dartsort.util.internal_config import TemplateMergeConfig
 from dartsort.util.motion import MotionInfo
+from dartsort.util.spiketorch import shared_temporal_pconv
 
 STATIC_MOTION = MotionInfo.static(np.c_[np.zeros(8), np.arange(8) * 10.0])
 
@@ -410,3 +421,94 @@ def test_apply_reclustering_shifts(in_place):
     else:
         np.testing.assert_array_equal(sorting.times_samples, times)
         np.testing.assert_array_equal(sorting.labels, labels)
+
+
+def test_violation_linkage():
+    n_samples, n_chans, max_shift = 31, 6, 2
+    template_merge_cfg = TemplateMergeConfig(merge_distance_threshold=0.6)
+
+    # temporal components are far spaced one hots
+    temporal_components = np.eye(n_samples, dtype=np.float32)[[10, 20]]
+    tcomp = torch.asarray(temporal_components)
+    tconv = shared_temporal_pconv(temporal_comps=tcomp, up_temporal_comps=tcomp[:, None])
+    center = tconv.shape[3] // 2
+    trimmed_tconv = tconv[:, :, 0, center - max_shift : center + max_shift + 1]
+    trimmed_tconv = trimmed_tconv.contiguous()
+
+    # 4 units. all start with spatial components looking like:
+    base = np.array([[4, 3, 2, 1, 0, 0], [1, 1, 0, 0, 0, 0]], dtype=np.float32)
+    spatial_sing = np.stack([base] * 4)
+    # units 0, 1, 2 are similar, just tweaked
+    spatial_sing[1, 0, 4] += 3.0
+    spatial_sing[2, 0, 5] += 3.0
+    # unit 3 is different
+    spatial_sing[3, 1, 2:4] += 2.5
+    templates = np.einsum("rt,nrc->ntc", temporal_components, spatial_sing)
+    spike_counts = np.array([1000, 10, 10, 1000])
+    radial_counts = np.ones((4, n_chans))
+
+    distances = np.stack(
+        [
+            template_distances_to(
+                spatial_sing[u],
+                radial_counts[u],
+                spatial_sing,
+                radial_counts,
+                trimmed_tconv=trimmed_tconv,
+                template_merge_cfg=template_merge_cfg,
+            )
+            for u in range(4)
+        ]
+    )
+    distances = np.minimum(distances, distances.T)
+    np.fill_diagonal(distances, 0.0)
+    # 1,2 close to 0 but not each other
+    assert distances[0, 1] < 0.6 and distances[0, 2] < 0.6
+    assert distances[1, 2] >= 0.6
+    assert distances[0, 3] < 0.6
+
+    # 0,1,2 co-refractory; unit 3 is not (o/e=1)
+    exp_viol = np.full((4, 4), 100.0)
+    obs_viol = np.zeros((4, 4), dtype=np.int64)
+    obs_viol[3, :3] = 100
+    obs_viol[:3, 3] = 100
+    violation = ViolationInfo(
+        unit_ids=np.arange(4),
+        spike_counts=spike_counts,
+        viol_counts=obs_viol,
+        jitter_counts=exp_viol,
+        n_resamples=0,
+        jitter_ms=20.0,
+        censor_ms=0.0,
+        viol_ms=1.0,
+    )
+    template_data = TemplateData(
+        templates=templates,
+        unit_ids=np.arange(4),
+        spike_counts=spike_counts.astype(np.float64),
+        trough_offset_samples=n_samples // 2,
+        sampling_frequency=30000.0,
+    )
+    tdist = TemplateDistanceResult(
+        distances=distances,
+        shifts=np.zeros((4, 4), dtype=np.int64),
+        r2=np.ones(4),
+        template_data=template_data,
+        temporal_components=temporal_components,
+        trimmed_tconv=trimmed_tconv,
+        radial_counts=radial_counts,
+        spatial_iou=None,
+    )
+
+    merge_mapping = violation_linkage(
+        distances=distances,
+        violation=violation,
+        tdist=tdist,
+        spike_counts=spike_counts,
+        unit_snrs=spike_counts.astype(np.float64),
+        template_merge_cfg=template_merge_cfg,
+        force_distance=0.3,
+        min_evidence=10.0,
+        violation_threshold=0.3,
+    )
+    np.testing.assert_array_equal(merge_mapping, [0, 0, 0, 1])

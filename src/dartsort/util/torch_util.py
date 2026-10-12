@@ -37,6 +37,11 @@ class BModule(Module):
         delattr(self, bufname)
         del self.___cpu_buffers[bufname]
 
+    def set_buffer(self, bufname: str, buf: Tensor):
+        if bufname in self.___cpu_buffers:
+            self.del_none_buffer(bufname)
+        self.register_buffer(bufname, buf)
+
     def _init_bgetter(self):
         self.___bgetter = BufGetter(self._buffers, self.___cpu_buffers)
 

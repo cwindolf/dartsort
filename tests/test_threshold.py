@@ -1,10 +1,11 @@
+import h5py
 import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
+from spikeinterface import NumpyRecording
 
 import dartsort
-from dartsort.peel.peel_lib import perturb_detections
 from dartsort.peel.threshold import Threshold
 from dartsort.util.internal_config import (
     FeaturizationConfig,
@@ -20,6 +21,32 @@ def test_sim(tmp_path, simulations):
 
     st = dartsort.threshold(recording=rec, output_dir=tmp_path)
     assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.2
+
+
+def test_residual_snips_from_silent_chunks(tmp_path, mini_simulations):
+    sim_rec = mini_simulations["driftn_szmini"]["recording"]
+    traces = np.array(sim_rec.get_traces())
+    traces[: traces.shape[0] // 2] = 0.0
+    rec = NumpyRecording(traces, sampling_frequency=sim_rec.sampling_frequency)
+    rec.set_dummy_probe_from_locations(sim_rec.get_channel_locations())
+
+    thresholder = Threshold.from_config(
+        recording=rec,
+        waveform_cfg=WaveformConfig(),
+        thresholding_cfg=ThresholdingConfig(),
+        featurization_cfg=FeaturizationConfig(
+            do_localization=False, do_tpca_denoise=False, save_amplitudes=False
+        ),
+        sampling_cfg=FitSamplingConfig(),
+    )
+    thresholder.load_or_fit_and_save_models(tmp_path / "models")
+    n_chunks = len(thresholder.get_chunk_starts())
+    total_residual_snips = 10 * n_chunks
+    thresholder.peel(tmp_path / "peel.h5", total_residual_snips=total_residual_snips)
+
+    with h5py.File(tmp_path / "peel.h5", "r") as h5:
+        assert h5["n_residuals"][()] == total_residual_snips
+        assert h5["times_seconds"][:].min() >= rec.get_duration() / 2 - 1.0
 
 
 def proposal_thresholder(rec, proposal):

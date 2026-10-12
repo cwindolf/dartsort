@@ -3,7 +3,6 @@
 import gc
 import tempfile
 from collections.abc import Mapping, Sequence
-from concurrent.futures import CancelledError
 from contextlib import contextmanager
 from itertools import repeat
 from pathlib import Path
@@ -37,8 +36,12 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger, progbar
-from ..util.multiprocessing_util import handle_negative_jobs, pool_from_cfg
-from ..util.py_util import delay_keyboard_interrupt, panic
+from ..util.multiprocessing_util import (
+    buffered_map,
+    handle_negative_jobs,
+    pool_from_cfg,
+)
+from ..util.py_util import databag, delay_keyboard_interrupt, panic
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
@@ -167,13 +170,13 @@ class BasePeeler(BModule):
         if self.needs_precompute() or self.needs_fit():
             self.load_models(save_folder)
         if self.needs_precompute() or self.needs_fit():
+            save_folder.mkdir(exist_ok=True)
             computation_cfg = ensure_computation_config(computation_cfg)
             if self.needs_precompute():
                 self.precompute_models(
                     save_folder, overwrite=overwrite, computation_cfg=computation_cfg
                 )
             if self.needs_fit():
-                save_folder.mkdir(exist_ok=True)
                 self.fit_models(
                     save_folder, overwrite=overwrite, computation_cfg=computation_cfg
                 )
@@ -307,7 +310,7 @@ class BasePeeler(BModule):
             zip_strict = True
         assert residual_snips_per_chunk is not None
 
-        jobs = list(zip(chunks_to_do, residual_snips_per_chunk, strict=zip_strict))
+        jobs = zip(chunks_to_do, residual_snips_per_chunk, strict=zip_strict)
 
         if not chunks_to_do.size:
             return output_hdf5_filename
@@ -345,7 +348,9 @@ class BasePeeler(BModule):
                     self.to(computation_cfg.actual_device())
 
                 # launch the jobs and wrap in a progress bar
-                results = pool.map(_peeler_process_job, jobs)
+                results = buffered_map(
+                    pool, _peeler_process_job, jobs, buffersize=8 * n_jobs
+                )
                 if show_progress:
                     s_chunk = chunk_length_samples / self.recording.sampling_frequency
                     dtag = computation_cfg.actual_device().type
@@ -373,50 +378,51 @@ class BasePeeler(BModule):
                     total_residual_snips=total_residual_snips,
                 ) as (output_h5, h5_spike_datasets, residual_file, n_spikes):
                     batch_count = 0
-                    try:
-                        for result, chunk_start_samples in zip(
-                            results, chunks_to_do, strict=True
-                        ):
-                            n_new_spikes = self.gather_chunk_result(
-                                cur_n_spikes=n_spikes,
-                                chunk_start_samples=chunk_start_samples,
-                                chunk_result=result,
-                                h5_spike_datasets=h5_spike_datasets,
-                                output_h5=output_h5,
-                                residual_file=residual_file,
-                                ignore_resuming=ignore_resuming,
-                                skip_features=skip_features,
-                            )
-                            batch_count += 1
-                            n_spikes += n_new_spikes
-                            if show_progress:
-                                desc = f"{task_name}:{dtag}"
-                                if not skip_features:
-                                    assert s_chunk is not None
-                                    desc += f" [spk/{s_chunk:g}s={n_spikes / batch_count:0.1f}]"
-                                results.set_description(desc, refresh=False)
-
-                            # early stopping criteria
-                            # no early stopping if we're skipping features (used for residual)
-                            can_stop = not skip_features
-                            # only allow stop if we have enough waveforms
-                            if stop_after_n_waveforms is not None:
-                                enough_spikes = n_spikes >= stop_after_n_waveforms
-                                can_stop = can_stop and enough_spikes
-                            else:
-                                can_stop = False
-                            # prevent stop if we're asked to cover but didn't
-                            if ensure_coverage is not None:
-                                chunks_done = batch_count + last_chunk_index + 1
-                                covered = chunks_done / n_chunks_orig >= ensure_coverage
-                                can_stop = can_stop and covered
-                            if can_stop:
-                                pool.shutdown(cancel_futures=True)
-                    except CancelledError:
+                    for result, chunk_start_samples in zip(
+                        results, chunks_to_do, strict=True
+                    ):
+                        n_new_spikes = self.gather_chunk_result(
+                            cur_n_spikes=n_spikes,
+                            chunk_start_samples=chunk_start_samples,
+                            chunk_result=result,
+                            h5_spike_datasets=h5_spike_datasets,
+                            output_h5=output_h5,
+                            residual_file=residual_file,
+                            ignore_resuming=ignore_resuming,
+                            skip_features=skip_features,
+                        )
+                        batch_count += 1  # noqa: SIM113
+                        n_spikes += n_new_spikes
                         if show_progress:
-                            results.write(
-                                f"Got {n_spikes} spikes, enough to stop early."
-                            )
+                            desc = f"{task_name}:{dtag}"
+                            if not skip_features:
+                                assert s_chunk is not None
+                                desc += (
+                                    f" [spk/{s_chunk:g}s={n_spikes / batch_count:0.1f}]"
+                                )
+                            results.set_description(desc, refresh=False)
+
+                        # early stopping criteria
+                        # no early stopping if we're skipping features (used for residual)
+                        can_stop = not skip_features
+                        # only allow stop if we have enough waveforms
+                        if stop_after_n_waveforms is not None:
+                            enough_spikes = n_spikes >= stop_after_n_waveforms
+                            can_stop = can_stop and enough_spikes
+                        else:
+                            can_stop = False
+                        # prevent stop if we're asked to cover but didn't
+                        if ensure_coverage is not None:
+                            chunks_done = batch_count + last_chunk_index + 1
+                            covered = chunks_done / n_chunks_orig >= ensure_coverage
+                            can_stop = can_stop and covered
+                        if can_stop:
+                            pool.shutdown(cancel_futures=True)
+                            if show_progress:
+                                results.write(
+                                    f"Got {n_spikes} spikes, enough to stop early."
+                                )
+                            break
         finally:
             self.to("cpu")
 
@@ -1280,16 +1286,15 @@ peeling_empty_result = PeelingBatchResult(n_spikes=0)
 # -- helper functions and objects for parallelism
 
 
+@databag
 class PeelerProcessContext:
-    def __init__(
-        self, peeler, compute_residual, skip_features, chunk_length_samples, to_cpu
-    ):
-        self.peeler = peeler
-        self.compute_residual = compute_residual
-        self.skip_features = skip_features
-        self.chunk_length_samples = chunk_length_samples
-        self.to_cpu = to_cpu
-        self.Ts = peeler.recording.get_num_samples()
+    peeler: BasePeeler
+    compute_residual: bool
+    skip_features: bool
+    chunk_length_samples: int | None
+    to_cpu: bool
+    recording_n_samples: int
+    stream: torch.cuda.Stream | None
 
 
 # this state will be set on each thread globally
@@ -1298,14 +1303,14 @@ _peeler_process_context.ctx = None
 
 
 def _peeler_process_init(
-    peeler,
-    device,
+    peeler: BasePeeler,
+    device: torch.device | str | None,
     rank_queue,
-    compute_residual,
-    skip_features,
-    chunk_length_samples,
-    is_local,
-    to_cpu,
+    compute_residual: bool,
+    skip_features: bool,
+    chunk_length_samples: int | None,
+    is_local: bool,
+    to_cpu: bool,
 ):
     # figure out what device to work on
     my_rank = rank_queue.get()
@@ -1322,28 +1327,48 @@ def _peeler_process_init(
         peeler.to(device)
     peeler.eval()
 
+    # give workers their own streams
+    stream = None
+    if device.type == "cuda":
+        stream = torch.cuda.Stream(device=device)
+        stream.wait_stream(torch.cuda.default_stream(device))
+
     # update process-local variables
     _peeler_process_context.ctx = PeelerProcessContext(
-        peeler, compute_residual, skip_features, chunk_length_samples, to_cpu
+        peeler=peeler,
+        compute_residual=compute_residual,
+        skip_features=skip_features,
+        chunk_length_samples=chunk_length_samples,
+        to_cpu=to_cpu,
+        recording_n_samples=peeler.recording.get_num_samples(),
+        stream=stream,
     )
 
 
-def _peeler_process_job(chunk_start_samples__n_resid_snips):
+def _peeler_process_job(
+    chunk_start_samples__n_resid_snips: tuple[int, int | None],
+) -> PeelingBatchResult:
     chunk_start_samples, n_resid_snips = chunk_start_samples__n_resid_snips
+    ctx = _peeler_process_context.ctx
+    assert isinstance(ctx, PeelerProcessContext)
     # by returning here, we are implicitly relying on pickle
     # TODO: replace with manual np.saves
-    with torch.no_grad():
-        chlen = _peeler_process_context.ctx.chunk_length_samples
-        if chlen is not None:
-            chunk_end_samples = chunk_start_samples + chlen
-            chunk_end_samples = min(chunk_end_samples, _peeler_process_context.ctx.Ts)
+    with torch.no_grad(), torch.cuda.stream(ctx.stream):
+        if ctx.chunk_length_samples is not None:
+            chunk_end_samples = chunk_start_samples + ctx.chunk_length_samples
+            chunk_end_samples = min(chunk_end_samples, ctx.recording_n_samples)
         else:
             chunk_end_samples = None
-        return _peeler_process_context.ctx.peeler.process_chunk(
+        result = ctx.peeler.process_chunk(
             chunk_start_samples,
             n_resid_snips=n_resid_snips,
             chunk_end_samples=chunk_end_samples,
-            return_residual=_peeler_process_context.ctx.compute_residual,
-            skip_features=_peeler_process_context.ctx.skip_features,
-            to_cpu=_peeler_process_context.ctx.to_cpu,
+            return_residual=ctx.compute_residual,
+            skip_features=ctx.skip_features,
+            to_cpu=ctx.to_cpu,
         )
+    # need a sync to make sure things are valid across threads
+    # doesn't matter if we're .cpu()ing immediately anyway, which is usually true, but...
+    if ctx.stream is not None:
+        ctx.stream.synchronize()
+    return result

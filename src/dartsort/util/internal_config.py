@@ -479,7 +479,8 @@ class TemplateMergeConfig:
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
 ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
-KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
+KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp", "significance"]
+KmeansppSampling = Literal["d2", "significance"]
 
 
 @cfg_dataclass
@@ -544,6 +545,9 @@ class RefinementConfig:
     kmeanspp_neighb_overlap: float | None = None
     kmeanspp_selection: KmeansppSelection = "marginal"
     kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
+    kmeanspp_sampling: KmeansppSampling = "d2"
+    kmeanspp_alpha: float = 2.0
+    kmeanspp_z0: float = 3.0
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
@@ -567,22 +571,13 @@ class RefinementConfig:
 
     # agglomeration: which pairs are allowed to merge
     glom_force_merge_template_distance: float = 0.3
-    glom_qda_overlap: bool = False
-    glom_qda_bimodality: bool = False
-    qda_uni_score: float = 0.95
-    qda_threshold: float = 0.35
-    qda_min_ratio: float = 0.1
-    qda_min_coverage: float = 0.35
-    qda_min_iou: float = 0.5
 
-    # agglomeration: refractory violations across a pair
+    # agglomeration: refractory violations across groups
     glom_violation_ms: float = 1.0
     glom_jitter_ms: float = 20.0
-    glom_min_violation_evidence: float = 4.6
-    glom_violation_linkage: Literal["average", "complete"] = "average"
+    glom_min_violation_evidence: float = 10.0
     glom_violation_threshold: float | None = 0.3
     glom_veto_threshold: float | None = None
-    glom_veto_min_evidence: float = 10.0
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
@@ -728,7 +723,7 @@ class SubtractionConfig:
     chunk_length_samples: int = 30_000
     fit_only: bool = False
 
-    detection_proposal: DetectionProposal = "voltage"
+    detection_proposal: DetectionProposal = "tpca"
     proposal_filters: int = 1
     propose_with_score_net: bool = False
 
@@ -762,7 +757,7 @@ class SubtractionConfig:
     subtraction_denoising_cfg: FeaturizationConfig = FeaturizationConfig(
         denoise_only=True,
         do_nn_denoise=True,
-        tpca_denoise_fit="during_nn_training",
+        tpca_denoise_fit="peeling",
         extract_radius=200.0,
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
@@ -969,6 +964,7 @@ default_clustering_features_cfg = ClusteringFeaturesConfig()
 default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
+default_motion_computation_cfg = ComputationConfig(n_jobs_gpu=2)
 default_refinement_cfg = RefinementConfig()
 default_initial_refinement_cfg = RefinementConfig(
     mixture_steps=("split", "demolish", "demolish")
@@ -1012,6 +1008,7 @@ class DARTsortInternalConfig:
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
     computation_cfg: ComputationConfig = default_computation_cfg
+    motion_computation_cfg: ComputationConfig = default_motion_computation_cfg
 
     # high level behavior
     dredge_only: bool = False
@@ -1182,6 +1179,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         clustering_features_cfg=_clustering_features_cfg(cfg),
         motion_estimation_cfg=_motion_estimation_cfg(cfg),
         computation_cfg=_computation_cfg(cfg),
+        motion_computation_cfg=_motion_computation_cfg(cfg),
         preprocessing=cfg.preprocessing,
         already_preprocessed=cfg.already_preprocessed,
         preprocessing_dtype=cfg.preprocessing_dtype,
@@ -1354,6 +1352,9 @@ def _refinement_cfg(
         kmeanspp_neighb_overlap=cfg.kmeanspp_neighb_overlap,
         kmeanspp_selection=cfg.kmeanspp_selection,
         kmeanspp_stopping=cfg.kmeanspp_stopping,
+        kmeanspp_sampling=cfg.kmeanspp_sampling,
+        kmeanspp_alpha=cfg.kmeanspp_alpha,
+        kmeanspp_z0=cfg.kmeanspp_z0,
         train_batch_size=cfg.gmm_batch_size,
         eval_batch_size=cfg.gmm_batch_size,
         robust_df=cfg.robust_df,
@@ -1421,17 +1422,6 @@ def _matching_cfg(
     )
 
 
-def _tpca_denoise_fit(cfg: "DeveloperConfig") -> TPCADenoiserFitStage:
-    if cfg.tpca_denoise_fit is not None:
-        return cfg.tpca_denoise_fit
-    trains_decollider = (
-        cfg.use_nn_in_subtraction
-        and cfg.nn_denoiser_class_name == "Decollider"
-        and cfg.nn_denoiser_pretrained_path is None
-    )
-    return "during_nn_training" if trains_decollider else "peeling"
-
-
 def _initial_detection_cfg(
     cfg: "DeveloperConfig", whiten_cfg: WhiteningConfig
 ) -> SubtractionConfig | ThresholdingConfig | MatchingConfig:
@@ -1441,7 +1431,7 @@ def _initial_detection_cfg(
             extract_radius=cfg.subtraction_radius_um,
             do_nn_denoise=cfg.use_nn_in_subtraction,
             do_tpca_denoise=cfg.do_tpca_denoise,
-            tpca_denoise_fit=_tpca_denoise_fit(cfg),
+            tpca_denoise_fit=cfg.tpca_denoise_fit,
             tpca_rank=cfg.temporal_pca_rank,
             tpca_fit_radius=cfg.fit_radius_um,
             input_waveforms_name="raw",
@@ -1526,16 +1516,12 @@ def _agglomerate_cfg(
             template_cfg=replace(template_cfg, whitening=agg_whiten_cfg),
         ),
         glom_force_merge_template_distance=cfg.agg_force_merge_template_distance,
-        glom_qda_overlap=cfg.agg_qda_overlap,
-        glom_qda_bimodality=cfg.agg_qda_bimodality,
         censor_ms=cfg.deduplication_ms,
         glom_violation_ms=cfg.agg_violation_ms,
         glom_jitter_ms=cfg.agg_jitter_ms,
         glom_min_violation_evidence=cfg.agg_min_violation_evidence,
-        glom_violation_linkage=cfg.agg_violation_linkage,
         glom_violation_threshold=cfg.agg_violation_threshold,
         glom_veto_threshold=cfg.agg_veto_threshold,
-        glom_veto_min_evidence=cfg.agg_veto_min_evidence,
     )
 
 
@@ -1639,6 +1625,10 @@ def _computation_cfg(cfg: "DeveloperConfig") -> ComputationConfig:
         executor=cfg.executor,
         tmpdir_parent=cfg.tmpdir_parent,
     )
+
+
+def _motion_computation_cfg(cfg: "DeveloperConfig") -> ComputationConfig:
+    return replace(_computation_cfg(cfg), n_jobs_gpu=cfg.motion_n_jobs_gpu)
 
 
 def _motion_estimation_cfg(cfg: "DeveloperConfig") -> MotionEstimationConfig:

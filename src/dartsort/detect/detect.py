@@ -209,13 +209,12 @@ def is_extreme_transpose_no_pad(
             torch.amax(Xneighb, dim=2, out=Xmax[i0:i1])
     else:
         Xmax = X[:, :-1]
-    Xmax = F.max_pool2d(
-        Xmax[None, None, :, :],
-        stride=(1, 1),
-        kernel_size=(2 * dt + 1, 1),
-        padding=(dt, 0),
-    )
-    Xmax = Xmax[0, 0]
+    Xmax = F.max_pool1d(
+        Xmax.T.contiguous(),
+        stride=1,
+        kernel_size=2 * dt + 1,
+        padding=dt,
+    ).T
 
     # if max pool made you grow, or if thresholding made you grow,
     # then you were not a peak

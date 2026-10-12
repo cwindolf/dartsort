@@ -29,7 +29,9 @@ def test_all_developer_flags_used():
     read |= {f.name for f in dataclasses.fields(internal_config.MotionEstimationConfig)}
 
     unread = [
-        f.name for f in dataclasses.fields(dartsort.DeveloperConfig) if f.name not in read
+        f.name
+        for f in dataclasses.fields(dartsort.DeveloperConfig)
+        if f.name not in read
     ]
     assert not unread
 
@@ -86,7 +88,9 @@ def test_shared_flags_agree(detection_type):
         assert whitening_cfg.estimator == "sparsechol", name
         assert whitening_cfg.radius == 123.0, name
         assert whitening_cfg.temporal_length == 7, name
-        assert whitening_cfg.interp_params == internal_config.clampna_interp_params, name
+        assert whitening_cfg.interp_params == internal_config.clampna_interp_params, (
+            name
+        )
 
 
 def test_waveform_config():

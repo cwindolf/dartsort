@@ -267,11 +267,9 @@ class SubtractionPeeler(BasePeeler):
         whitener = whitener[0].whitener
         assert whitener is not None
         local_whiteners = whitener.local_whiteners(self.sub_channel_index)  # type: ignore
-        self.del_none_buffer("local_whiteners")
-        self.register_buffer("local_whiteners", local_whiteners)
+        self.set_buffer("local_whiteners", local_whiteners)
         if whitener.temporal:
-            self.del_none_buffer("whitening_kernel")
-            self.register_buffer("whitening_kernel", whitener.b.temporal_kernel.clone())
+            self.set_buffer("whitening_kernel", whitener.b.temporal_kernel.clone())
         self.threshold = self.p.subtraction_threshold
 
     def _install_proposal_filters(self):
@@ -283,11 +281,7 @@ class SubtractionPeeler(BasePeeler):
             self.p.proposal_filters,
         )
         filters = filters.to(self.b.sub_channel_index.device)
-        if self.b.proposal_filters is None:
-            self.del_none_buffer("proposal_filters")
-            self.register_buffer("proposal_filters", filters)
-        else:
-            self.proposal_filters = filters
+        self.set_buffer("proposal_filters", filters)
         self.proposal_filter_trough_offset = trough_offset
 
     def save_models(self, save_folder: str | Path):

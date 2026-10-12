@@ -806,7 +806,9 @@ def count_violations(
             buffer,
         )
     else:
-        weights = _jitter_spread_violation_weights(censor_samples, viol_samples, jitter_samples)
+        weights = _jitter_spread_violation_weights(
+            censor_samples, viol_samples, jitter_samples
+        )
         _violation_weight_matrix(
             times,
             labels,

@@ -140,7 +140,7 @@ class DARTsortGroundTruthComparison:
         return res
 
     def soft_assignment_key(
-        self, to_try=("merged_responsibilities", "gmm_responsibilities")
+        self, to_try=("gmm_responsibilities",)
     ) -> str | None:
         if hasattr(self, "_soft_assignment_key"):
             return self._soft_assignment_key

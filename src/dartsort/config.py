@@ -7,6 +7,7 @@ from .util.internal_config import (
     DetectionProposal,
     InterpKernel,
     InterpMethod,
+    KmeansppSampling,
     KmeansppSelection,
     KmeansppStopping,
     MixtureStep,
@@ -92,6 +93,9 @@ class DARTsortUserConfig:
 
     n_jobs_gpu: int = 0
     """Number of parallel workers to use when running on GPU."""
+
+    motion_n_jobs_gpu: Annotated[int, Field(ge=0)] = 2
+    """Like n_jobs_gpu, but for the motion tracking spike detection (cheaper jobs, so default to 2)."""
 
     n_jobs_small: int = -2
     """Max workers to use for small jobs."""
@@ -284,13 +288,13 @@ class DeveloperConfig(DARTsortUserConfig):
     nn_denoiser_noise_waveforms: int = 100 * 256
     nn_denoiser_extra_kwargs: dict | None = None
     score_filter_radius_um: float = 0.0
-    detection_proposal: DetectionProposal = "voltage"
+    detection_proposal: DetectionProposal = "tpca"
     proposal_filters: int = 1
     propose_with_score_net: bool = False
     proposal_threshold: float = 5.0
     score_net_threshold: float = 5.0
     do_tpca_denoise: bool = True
-    tpca_denoise_fit: TPCADenoiserFitStage | None = None
+    tpca_denoise_fit: TPCADenoiserFitStage = "peeling"
     first_denoiser_thinning: float = 0.0
     first_denoiser_spatial_dedup_radius: float = 100.0
     realign_to_denoiser: bool = True
@@ -376,6 +380,9 @@ class DeveloperConfig(DARTsortUserConfig):
     kmeanspp_neighb_overlap: float | None = None
     kmeanspp_selection: KmeansppSelection = "marginal"
     kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
+    kmeanspp_sampling: KmeansppSampling = "d2"
+    kmeanspp_alpha: Annotated[float, Field(gt=0)] = 2.0
+    kmeanspp_z0: float = 3.0
 
     # filters
     gmm_isolation_threshold: float | None = None
@@ -424,15 +431,11 @@ class DeveloperConfig(DARTsortUserConfig):
     # agglomeration
     agg_max_template_distance: float = 0.6
     agg_force_merge_template_distance: float = 0.3
-    agg_qda_overlap: bool = False
-    agg_qda_bimodality: bool = False
     agg_violation_ms: float = 1.0
     agg_jitter_ms: float = 20.0
-    agg_min_violation_evidence: float = 4.6
-    agg_violation_linkage: Literal["average", "complete"] = "average"
+    agg_min_violation_evidence: float = 10.0
     agg_violation_threshold: float | None = 0.3
     agg_veto_threshold: float | None = None
-    agg_veto_min_evidence: float = 10.0
     agg_template_linkage: Literal["single", "complete"] = "complete"
     agg_template_whiten_strategy: WhiteningStrategy = "none"
 

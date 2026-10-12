@@ -82,6 +82,8 @@ class DARTsortSorting:
 
         It's more common to construct from an HDF5 file with .from_peeling_hdf5() or from
         a .npz with .load().
+
+        persistent_features must already be datasets in parent_h5_path.
         """
         self.n_spikes = times_samples.shape[0]
         if parent_h5_path is not None:
@@ -105,7 +107,9 @@ class DARTsortSorting:
         if persistent_features is not None:
             for k, v in persistent_features.items():
                 check_shape = not self._no_check_needed(k)
-                self._register_persistent_feature(k, v, check_shape=check_shape)
+                self._register_persistent_feature(
+                    k, v, check_shape=check_shape, try_insert=False
+                )
 
         if ephemeral_features is not None:
             for k, v in ephemeral_features.items():
@@ -153,7 +157,7 @@ class DARTsortSorting:
     ) -> NumpySorting:
         """Clean up and produce a spikeinterface NumpySorting object."""
         if drop_doubles:
-            self = self.drop_doubles()
+            self = self.drop_doubles()  # noqa: PLW0642
         assert self.labels is not None
         st = self.drop_missing()
         assert st.labels is not None
@@ -469,7 +473,12 @@ class DARTsortSorting:
                         return self._persistent_features[name]
                 if self.has_dataset(name):
                     feature = self.load_dataset(name)
-                    self._register_persistent_feature(name, feature, try_insert=False)
+                    if self.get_mask_indices() is None:
+                        self._register_persistent_feature(
+                            name, feature, try_insert=False
+                        )
+                    else:
+                        self.add_ephemeral_feature(name, feature)
                     return feature
         raise AttributeError
 
@@ -489,10 +498,11 @@ class DARTsortSorting:
         if check_shape:
             self._check_shape(feature_name, feature)
 
-        already_ephemeral = feature_name in self._ephemeral_features
-        already_attr = hasattr(self, feature_name)
-        if already_ephemeral:
-            assert already_attr
+        already_attr = (
+            feature_name in self._ephemeral_features
+            or feature_name in self._persistent_features
+            or feature_name in self.__dict__
+        )
         if already_attr and not overwrite:
             raise ValueError(
                 f"Can't add feature {feature_name}, since it already exists."
@@ -558,6 +568,8 @@ class DARTsortSorting:
 
         if not try_insert:
             return
+        if self.get_mask_indices() is not None:
+            raise ValueError("Can't write to the h5 with a mask.")
 
         try:
             with h5py.File(
@@ -861,24 +873,18 @@ class DARTsortSorting:
         else:
             labels = self.labels[mask]
 
-        eph = {}
-        for k in self._ephemeral_features:
-            assert k != "mask_indices"  # no recursion...
-            v = getattr(self, k)
-            if self._no_check_needed(k):
-                eph[k] = v
-            else:
-                eph[k] = v[mask]
-        eph["mask_indices"] = mask
-
         per = {}
-        for k in self._persistent_features:
+        eph = {}
+        for k in (*self._ephemeral_features, *self._persistent_features):
             assert k != "mask_indices"  # no recursion...
             v = getattr(self, k)
-            if self._no_check_needed(k):
+            if not self._no_check_needed(k):
+                eph[k] = v[mask]
+            elif k in self._persistent_features:
                 per[k] = v
             else:
-                per[k] = v[mask]
+                eph[k] = v
+        eph["mask_indices"] = mask
 
         return self.__class__(
             times_samples=self.times_samples[mask],
@@ -956,12 +962,7 @@ class DARTsortSorting:
         return self.ephemeral_replace(**new_props)
 
     def remap_gmm_properties(
-        self,
-        remap: np.ndarray,
-        *,
-        new_K: int,
-        in_place: bool,
-        prefixes=("merged", "gmm"),
+        self, remap: np.ndarray, *, new_K: int, in_place: bool
     ) -> dict[str, np.ndarray]:
         """Apply `remap` to GMM candidates, optionally in-place
 
@@ -969,32 +970,33 @@ class DARTsortSorting:
         top candidates but still exist in the lower ranks -- have their
         probability added to the noise component.
         """
-        for prefix in prefixes:
-            cand_key = f"{prefix}_candidates"
-            if in_place and self.has_dataset_on_disk_not_loaded(cand_key):
-                assert self.parent_h5_path is not None
-                _gmm_remap_on_disk(self.parent_h5_path, remap, prefix=prefix)
-                return {}
-            if not self.has_dataset(cand_key):
-                continue
+        if (
+            in_place
+            and self.get_mask_indices() is None
+            and self.has_dataset_on_disk_not_loaded("gmm_candidates")
+        ):
+            assert self.parent_h5_path is not None
+            _gmm_remap_on_disk(self.parent_h5_path, remap)
+            return {}
+        if not self.has_dataset("gmm_candidates"):
+            return {}
 
-            resp_key = f"{prefix}_responsibilities"
-            loglik_key = f"{prefix}_log_liks"
-            candidates = cast(np.ndarray, getattr(self, cand_key))
-            resps = cast(np.ndarray, getattr(self, resp_key))
-            logliks = cast(np.ndarray, getattr(self, loglik_key))
-            if not in_place:
-                candidates = candidates.copy()
-                resps = resps.copy()
-                logliks = logliks.copy()
+        candidates = self.gmm_candidates
+        resps = self.gmm_responsibilities
+        logliks = self.gmm_log_liks
+        if not in_place:
+            candidates = candidates.copy()
+            resps = resps.copy()
+            logliks = logliks.copy()
 
-            apply_label_remapping_in_place(candidates, remap, allow_over=True)
-            vacuum_neg_candidate_prob(new_K, candidates, resps, logliks)
+        apply_label_remapping_in_place(candidates, remap, allow_over=True)
+        vacuum_neg_candidate_prob(new_K, candidates, resps, logliks)
 
-            # if "merged" were present, then labels don't match "gmm"
-            return {cand_key: candidates, resp_key: resps, loglik_key: logliks}
-
-        return {}
+        return dict(
+            gmm_candidates=candidates,
+            gmm_responsibilities=resps,
+            gmm_log_liks=logliks,
+        )
 
     def __str__(self):
         name = self.__class__.__name__
@@ -1557,27 +1559,15 @@ def sorting_isis(sorting: DARTsortSorting):
     return isis_ms
 
 
-def gmm_score_prefix(
-    sorting: DARTsortSorting, prefixes: Sequence[str] = ("merged", "gmm")
-) -> str:
-    """The prefix of the soft assignment arrays attached to this sorting."""
-    for prefix in prefixes:
-        if getattr(sorting, f"{prefix}_candidates", None) is not None:
-            return prefix
-    raise AttributeError("No scores attached to sorting.")
-
-
-def get_gmm_scores(
-    sorting: DARTsortSorting, prefixes: Sequence[str] = ("merged", "gmm")
-) -> "Scores":
+def get_gmm_scores(sorting: DARTsortSorting) -> "Scores":
     from ..clustering.mixture import Scores
 
-    prefix = gmm_score_prefix(sorting, prefixes)
-    cand = getattr(sorting, f"{prefix}_candidates", None)
-    log_liks = getattr(sorting, f"{prefix}_log_liks", None)
-    resp = getattr(sorting, f"{prefix}_responsibilities", None)
+    cand = getattr(sorting, "gmm_candidates", None)
+    log_liks = getattr(sorting, "gmm_log_liks", None)
+    resp = getattr(sorting, "gmm_responsibilities", None)
 
-    assert cand is not None
+    if cand is None:
+        raise AttributeError("No scores attached to sorting.")
     assert log_liks is not None
     assert resp is not None
 
@@ -1593,8 +1583,8 @@ def get_gmm_scores(
 
 def explode_soft_assignment_sorting(
     sorting: DARTsortSorting,
-    responsibilities_key: str | None = None,
-    candidates_key: str | None = None,
+    responsibilities_key: str = "gmm_responsibilities",
+    candidates_key: str = "gmm_candidates",
 ) -> DARTsortSorting:
     """Convert a hard-assigned sorting to a soft-assigned one
 
@@ -1604,11 +1594,6 @@ def explode_soft_assignment_sorting(
     the output sorting.
     """
     from .spiketorch import entropy
-
-    if responsibilities_key is None or candidates_key is None:
-        prefix = gmm_score_prefix(sorting)
-        responsibilities_key = responsibilities_key or f"{prefix}_responsibilities"
-        candidates_key = candidates_key or f"{prefix}_candidates"
 
     t_s = sorting.times_seconds
 
@@ -2266,7 +2251,7 @@ def subsample_waveforms(
 
 def fit_reweighting(
     voltages: np.ndarray | torch.Tensor | None = None,
-    h5=None,
+    h5: h5py.File | None = None,
     hdf5_path=None,
     log_voltages=True,
     fit_sampling: Literal["random", "amp_reweighted"] = "random",
@@ -2281,7 +2266,7 @@ def fit_reweighting(
         if h5 is not None:
             voltages: np.ndarray = h5[voltages_dataset_name][:]
         elif hdf5_path is not None:
-            with h5py.File(hdf5_path) as h5:
+            with h5py.File(hdf5_path) as h5:  # noqa: PLR1704
                 voltages: np.ndarray = h5[voltages_dataset_name][:]
         else:
             panic()
@@ -2351,23 +2336,20 @@ def divide_randomly(
     return things_per_bin
 
 
-def _gmm_remap_on_disk(
-    hdf5_path: Path, remap: np.ndarray, prefix: str, default_len=4096 * 64
-):
-    ck = f"{prefix}_candidates"
-    lk = f"{prefix}_log_liks"
-    rk = f"{prefix}_responsibilities"
+def _gmm_remap_on_disk(hdf5_path: Path, remap: np.ndarray, default_len=4096 * 64):
+    """Remap the gmm_* and labels datasets in place, chunk by chunk
+
+    Before remapping, labels must be the top candidate wherever they're >= 0, and this is checked.
+    """
     new_K = remap.max() + 1
     with h5py.File(hdf5_path, "r+") as h5:
-        assert ck in h5
-        assert lk in h5
-        assert rk in h5
-        cd = h5[ck]
-        ld = h5[lk]
-        rd = h5[rk]
+        cd = h5["gmm_candidates"]
+        ld = h5["gmm_log_liks"]
+        rd = h5["gmm_responsibilities"]
+        labd = h5["labels"]
 
         chunk_len = default_len
-        for dd in (cd, ld, rd):
+        for dd in (cd, ld, rd, labd):
             if dd.chunks is None:
                 continue
             for c, s in zip(dd.chunks[1:], dd.shape[1:], strict=True):
@@ -2378,7 +2360,17 @@ def _gmm_remap_on_disk(
                 logger.warning(f"Unaligned {chunk_len=} {dd.chunks=}")
 
         n = cd.shape[0]
-        assert n == ld.shape[0] == rd.shape[0]
+        assert n == ld.shape[0] == rd.shape[0] == labd.shape[0]
+        for i0 in range(0, n, chunk_len):
+            i1 = min(i0 + chunk_len, n)
+            labels = labd[i0:i1]
+            labeled = labels >= 0
+            if not np.array_equal(labels[labeled], cd[i0:i1, 0][labeled]):
+                raise ValueError(
+                    f"{hdf5_path}'s labels are not its top gmm_candidates, so "
+                    "they are in different unit ID spaces and can't be remapped."
+                )
+
         for i0 in range(0, n, chunk_len):
             i1 = min(i0 + chunk_len, n)
 
@@ -2387,10 +2379,13 @@ def _gmm_remap_on_disk(
             resp = rd[i0:i1]
             loglik = ld[i0:i1]
             vacuum_neg_candidate_prob(new_K, cand, resp, loglik)
+            labels = labd[i0:i1]
+            apply_label_remapping_in_place(labels, remap)
 
             cd[i0:i1] = cand
             rd[i0:i1] = resp
             ld[i0:i1] = loglik
+            labd[i0:i1] = labels
 
 
 @numba.njit(parallel=True)
