@@ -170,13 +170,13 @@ class BasePeeler(BModule):
         if self.needs_precompute() or self.needs_fit():
             self.load_models(save_folder)
         if self.needs_precompute() or self.needs_fit():
+            save_folder.mkdir(exist_ok=True)
             computation_cfg = ensure_computation_config(computation_cfg)
             if self.needs_precompute():
                 self.precompute_models(
                     save_folder, overwrite=overwrite, computation_cfg=computation_cfg
                 )
             if self.needs_fit():
-                save_folder.mkdir(exist_ok=True)
                 self.fit_models(
                     save_folder, overwrite=overwrite, computation_cfg=computation_cfg
                 )
