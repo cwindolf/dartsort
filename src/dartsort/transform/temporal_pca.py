@@ -478,11 +478,13 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
     def forward(self, waveforms, *, channels, time_shifts=None, **unused):
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         dev = waveforms.device
-        channels_in_probe, waveforms_in_probe = get_channels_in_probe(
-            waveforms, channels.to(device=dev), self.b.channel_index.to(device=dev)
-        )
-        waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
-        return set_channels_in_probe(waveforms_in_probe, waveforms, channels_in_probe)
+        channel_index = self.b.channel_index.to(device=dev)
+        in_probe = channel_index[channels.to(device=dev)] < channel_index.shape[0]
+        n, t, c = waveforms.shape
+        rows = waveforms.permute(0, 2, 1).reshape(n * c, t)
+        projected = self._project_in_probe(rows).view(n, c, t).permute(0, 2, 1)
+        out = torch.empty_like(waveforms)
+        return torch.where(in_probe[:, None, :], projected, waveforms, out=out)
 
 
 class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
