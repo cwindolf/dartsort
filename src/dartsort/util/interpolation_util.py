@@ -1234,14 +1234,27 @@ class ToFullProbeInterpolator(BModule):
 
 
 class FromFullProbeInterpolator(BModule):
-    """Interpolate from the registered geom to appropriate drifting geom channels."""
+    """Interpolate from the registered geom to appropriate drifting geom channels.
+
+    The registered geom is motion.rgeom unless registered_geom is given.
+    In which case, maybe it could be a denser grid for templates to live on...
+    """
 
     def __init__(
-        self, *, motion: MotionInfo, params: InterpolationParams, device: torch.device
+        self,
+        *,
+        motion: MotionInfo,
+        params: InterpolationParams,
+        device: torch.device,
+        registered_geom: np.ndarray | None = None,
     ):
         super().__init__()
+        if registered_geom is None:
+            registered_geom = motion.rgeom
+        assert registered_geom.ndim == 2
+        assert registered_geom.shape[1] == motion.geom.shape[1]
         geom = torch.asarray(motion.geom, dtype=torch.float, device=device)
-        rgeom = torch.asarray(motion.rgeom, dtype=torch.float, device=device)
+        rgeom = torch.asarray(registered_geom, dtype=torch.float, device=device)
 
         self.erp_params = params.normalize()
         rchannel_index = make_channel_index(

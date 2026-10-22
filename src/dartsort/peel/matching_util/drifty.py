@@ -86,6 +86,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         interp_up_radius: int = 8,
         up_interp_params: InterpolationParams = default_upsampling_params,
         drift_interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
+        registered_geom: np.ndarray | None = None,
         device: torch.device,
     ):
         """
@@ -93,6 +94,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
         ----------
         up_method:
             How to pick the upsampling index? If we have a coarse match at time t,
+        registered_geom:
+            spatial_sing channel geom (falling back to motion.rgeom)
         """
         super().__init__()
         self.up_factor = up_factor
@@ -108,13 +111,20 @@ class DriftyMatchingTemplates(MatchingTemplates):
         assert rank == temporal_comps.shape[0]
         self.spike_length_samples = temporal_comps.shape[1]
         assert trough_offset_samples <= self.spike_length_samples
+        if registered_geom is None:
+            registered_geom = motion.rgeom
+        assert n_channels == len(registered_geom)
 
         if self.interpolating:
             logger.dartsortdebug("Drifty matching will interpolate templates.")
             self.erp = FromFullProbeInterpolator(
-                motion=motion, params=drift_interp_params, device=device
+                motion=motion,
+                params=drift_interp_params,
+                device=device,
+                registered_geom=registered_geom,
             )
         else:
+            assert n_channels == len(motion.geom)
             logger.dartsortdebug("No interpolation in matching.")
             self.erp = None
 
@@ -203,7 +213,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             ct = t
         self.register_buffer("time_ix", torch.arange(ct, device=device))
         self.register_buffer("sub_time_ix", torch.arange(t, device=device))
-        self.register_buffer("chan_ix", torch.arange(n_channels, device=device))
+        self.register_buffer("chan_ix", torch.arange(len(motion.geom), device=device))
         self.register_buffer("rank_ix", torch.arange(rank, device=device))
         self.register_buffer("conv_lags", torch.arange(-ct + 1, ct, device=device))
         offset = torch.asarray(trough_offset_samples, device=device)
@@ -266,6 +276,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             up_method=matching_cfg.up_method,
             interp_up_radius=matching_cfg.upsampling_radius,
             drift_interp_params=matching_cfg.drift_interp_params,
+            registered_geom=template_data.registered_geom,
             whitener=whitener,
             whiten_strategy=matching_cfg.whitening.strategy,
             whiten_features=matching_cfg.whiten_features,
