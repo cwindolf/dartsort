@@ -2028,7 +2028,8 @@ def get_tpca_norms(
     out_dataset: str | None = "collisioncleaned_tpca_rms",
     show_progress: bool = False,
 ):
-    with h5py.File(sorting.parent_h5_path, "r+") as h5:
+    mode = "r+" if out_dataset is not None else "r"
+    with h5py.File(sorting.parent_h5_path, mode) as h5:
         ind = h5[tpca_dataset]
         if out_dataset is not None:
             outd = h5.create_dataset(
