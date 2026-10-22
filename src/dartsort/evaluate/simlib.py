@@ -15,7 +15,7 @@ from spikeinterface.core import (
     BaseRecording,
     BaseSorting,
     NumpySorting,
-    read_binary_folder,
+    load,
 )
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from spikeinterface.preprocessing.basepreprocessor import (
@@ -1002,7 +1002,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
         if recording_dir.exists():
             try:
-                recording = read_binary_folder(recording_dir)
+                recording = load(recording_dir)
                 logger.info("Loaded %s", recording_dir)
             except Exception:
                 recording = None

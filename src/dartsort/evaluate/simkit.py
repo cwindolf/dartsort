@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from dredge import motion_util
 from scipy.signal import sawtooth
-from spikeinterface.core import BaseRecording, read_binary_folder
+from spikeinterface.core import BaseRecording, load
 
 from ..templates import TemplateData
 from ..util.data_util import DARTsortSorting, ensure_path
@@ -207,7 +207,7 @@ def load_simulation(folder):
     sorting_h5 = folder / "dartsort_sorting.h5"
     unit_info_csv = folder / "unit_information.csv"
 
-    recording = read_binary_folder(recording_dir)
+    recording = load(recording_dir)
     templates = TemplateData.from_npz(templates_npz)
     sorting = DARTsortSorting.from_peeling_hdf5(sorting_h5)
     motion = MotionInfo.try_load(folder)

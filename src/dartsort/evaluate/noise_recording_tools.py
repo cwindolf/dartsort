@@ -2,7 +2,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from spikeinterface.core import BaseRecording, BaseRecordingSegment, read_binary_folder
+from spikeinterface.core import BaseRecording, BaseRecordingSegment, load
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessor,
@@ -32,7 +32,7 @@ def get_background_recording(
 ):
     if not overwrite and noise_recording_folder is not None:
         if (noise_recording_folder / "binary.json").exists():
-            return read_binary_folder(noise_recording_folder)
+            return load(noise_recording_folder)
 
     if geom is None:
         geom = generate_geom(**probe_kwargs or {})
