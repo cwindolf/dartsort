@@ -436,6 +436,16 @@ def test_main_object():
     del tdata
 
 
+def test_shared_basis_truncates_precomputed_basis():
+    rg = np.random.default_rng(0)
+    n, t, c, basis_rank, rank = 6, 21, 4, 8, 5
+    basis = np.linalg.qr(rg.normal(size=(t, basis_rank)))[0].T
+    temps = rg.normal(size=(n, t, c))
+    sbt = template_util.shared_basis_compress_templates(temps, rank=rank, precomputed_basis=basis)
+    np.testing.assert_array_equal(sbt.temporal_components, basis[:rank])
+    np.testing.assert_allclose(sbt.spatial_singular, np.einsum("rt,ntc->nrc", basis[:rank], temps))
+
+
 @pytest.mark.parametrize("unit_ids", [np.arange(5), np.array([0, 0, 1, 1, 2])])
 def test_pconv(tmp_path, unit_ids):
     # want to make sure drift handling is as expected
