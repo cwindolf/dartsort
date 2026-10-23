@@ -428,7 +428,13 @@ def reorder_by_depth(
 
 
 def closest_registered_channels(
-    *, times_seconds, x, z_abs, z_reg=None, motion: MotionInfo
+    *,
+    times_seconds,
+    x,
+    z_abs,
+    z_reg=None,
+    motion: MotionInfo,
+    registered_geom: np.ndarray | None = None,
 ) -> np.ndarray:
     """Assign spikes to the drift-extended channel closest to their registered position"""
     if z_reg is None:
@@ -436,7 +442,14 @@ def closest_registered_channels(
         z_reg = motion.correct_s(times_seconds, z_abs)
     reg_pos = np.c_[x, z_reg]
 
-    _, reg_channels = motion.rgeom_kdt.query(reg_pos)
+    if registered_geom is None or (
+        registered_geom.shape == motion.rgeom.shape
+        and np.allclose(registered_geom, motion.rgeom)
+    ):
+        kdt = motion.rgeom_kdt
+    else:
+        kdt = KDTree(registered_geom)
+    _, reg_channels = kdt.query(reg_pos)
     reg_channels = np.atleast_1d(reg_channels)
 
     return reg_channels

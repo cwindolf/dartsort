@@ -1287,18 +1287,24 @@ class FromFullProbeInterpolator(BModule):
             assert disp.shape[1] == 1
             shift[:, 1].copy_(torch.tensor(disp[:, 0]))
 
-        # which rgeom channel does each shifted geom channel land on?
-        sgeom = self.b.geom - shift
-        dist = torch.cdist(sgeom, self.b.rgeom)
-        # closest rgeom channel to each shifted channel determines which
-        # precomputed solver is selected
-        solver_map = dist.argmin(1)
-
         # interpolate from static geom to shifted geom
+        return self.interp_to(self.b.geom - shift, waveforms)
+
+    def interpolation_kernel_at_time(self, t_s: float) -> torch.Tensor:
+        eye = torch.eye(self.c_src, device=self.b.rgeom.device)[:, None, :]
+        return self.interp_at_time(t_s, eye)[:, 0, :].T
+
+    def interp_to(self, target_pos: torch.Tensor, waveforms: torch.Tensor) -> torch.Tensor:
+        assert waveforms.shape[2] == self.c_src
+
+        # closest rgeom channel to each target determines which
+        # precomputed solver is selected
+        solver_map = torch.cdist(target_pos, self.b.rgeom).argmin(1)
+
         return kernel_interpolate(
             features=waveforms,
             source_pos=self.b.rgeom,
-            target_pos=self.b.geom - shift,
+            target_pos=target_pos,
             precomputed_data=self.b.data,
             neighborhoods=self.b.rchannel_index,
             solver_map=solver_map,

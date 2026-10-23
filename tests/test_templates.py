@@ -11,7 +11,11 @@ from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
 from test_util import no_overlap_recording_sorting
 
 import dartsort
-from dartsort.evaluate import config_grid, simkit
+from dartsort.evaluate import config_grid, simkit, simlib
+from dartsort.evaluate.sim_template_tools import (
+    get_template_simulator,
+    singlechan_to_probe,
+)
 from dartsort.peel.matching_util import pairwise, pairwise_util
 from dartsort.templates import (
     estimate_template_library,
@@ -20,6 +24,7 @@ from dartsort.templates import (
     template_util,
     templates,
 )
+from dartsort.util import drift_util
 from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.internal_config import (
     InterpolationParams,
@@ -28,6 +33,7 @@ from dartsort.util.internal_config import (
     WaveformConfig,
     raw_template_cfg,
 )
+from dartsort.util.interpolation_util import FromFullProbeInterpolator
 from dartsort.util.motion import MotionInfo
 
 nearest_erp = InterpolationParams(method="nearest", extrap_method="clampna").normalize()
@@ -398,6 +404,78 @@ def test_drifting_templates(tmp_path):
             assert temps8.shape == (2, 3, 7)
             assert temps8[0, 0, 5] == 1
             assert temps8[1, 0, 6] == 2
+
+
+@pytest.mark.parametrize("reduction", ["superresmean", "superresmedian"])
+def test_superres_templates(tmp_path, reduction):
+    geom = simlib.generate_geom(num_contact_per_column=12)
+    template_simulator = get_template_simulator(
+        n_units=8, geom=geom, common_reference=False, temporal_jitter=1, force_no_offset=True
+    )
+    sim = simkit.generate_simulation(
+        tmp_path / "sim",
+        tmp_path / "noise",
+        geom=geom,
+        template_simulator=template_simulator,
+        n_units=8,
+        duration_seconds=60.0,
+        noise_kind="zero",
+        drift_speed=1.5,
+        drift_period=60.0,
+        temporal_jitter=1,
+        amplitude_jitter=0,
+        common_reference=False,
+        min_fr_hz=10.0,
+        max_fr_hz=15.0,
+        globally_refractory=True,
+        refractory_ms=4.5,
+    )
+    motion = sim["motion"]
+    srgeom = drift_util.superres_registered_geometry(geom, motion.rgeom)
+    assert srgeom is not None
+
+    def estimate(reduction, n_jobs):
+        return templates.TemplateData.from_config(
+            recording=sim["recording"],
+            sorting=sim["sorting"],
+            template_cfg=TemplateConfig(reduction=reduction),
+            motion=motion,
+            save_folder=None,
+            save_npz_name=None,
+            computation_cfg=dartsort.ComputationConfig.from_n_jobs(n_jobs),
+        )
+
+    td_sr = estimate(reduction, 1)
+    td_sr_parallel = estimate(reduction, 3)
+    td_mean = estimate("mean", 1)
+    np.testing.assert_array_equal(td_sr.registered_geom, srgeom)
+    np.testing.assert_array_equal(td_sr_parallel.registered_geom, srgeom)
+    np.testing.assert_array_equal(td_mean.registered_geom, motion.rgeom)
+    scale = np.abs(td_sr.templates).max()
+    np.testing.assert_allclose(td_sr_parallel.templates, td_sr.templates, atol=1e-4 * scale)
+
+    # truth on srgeom, vs superres and vs the mean templates interpolated to srgeom
+    srgeom3 = np.zeros((len(srgeom), 3))
+    srgeom3[:, [0, 2]] = srgeom
+    truth = singlechan_to_probe(
+        template_simulator.template_pos,
+        template_simulator.template_alpha,
+        template_simulator.singlechan_templates,
+        srgeom3,
+        decay_model=template_simulator.decay_model,
+    )
+    rgeom_erp = FromFullProbeInterpolator(
+        motion=motion,
+        params=TemplateConfig().superres_interp_params,
+        device=torch.device("cpu"),
+    )
+    mean_on_srgeom = rgeom_erp.interp_to(
+        torch.asarray(srgeom, dtype=torch.float), torch.asarray(td_mean.templates)
+    ).numpy()
+    norm = np.linalg.norm(truth, axis=(1, 2))
+    err_sr = np.linalg.norm(td_sr.templates - truth, axis=(1, 2)) / norm
+    err_mean = np.linalg.norm(mean_on_srgeom - truth, axis=(1, 2)) / norm
+    assert np.median(err_sr) < 0.75 * np.median(err_mean)
 
 
 def test_main_object():

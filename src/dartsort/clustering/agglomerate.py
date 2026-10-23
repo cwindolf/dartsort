@@ -561,6 +561,7 @@ def template_distances(
             sorting=sorting,
             motion=motion,
             radius=template_merge_cfg.weighted_dist_radius,
+            registered_geom=template_data.registered_geom,
         )
         spatial_weights = radial_weights(radial_counts)
         assert np.isfinite(spatial_weights).all()
@@ -876,23 +877,34 @@ def bimod_stats(h):
     return a, b
 
 
-def radial_spike_counts(sorting: DARTsortSorting, motion: MotionInfo, radius: float):
+def radial_spike_counts(
+    sorting: DARTsortSorting,
+    motion: MotionInfo,
+    radius: float,
+    registered_geom: np.ndarray | None = None,
+):
     assert sorting.labels is not None
+    if registered_geom is None:
+        registered_geom = motion.rgeom
     kept = np.flatnonzero(sorting.labels >= 0)
 
     # which reg chans do the spikes land on?
     x, z = motion.geom[sorting.channels[kept]].T
     cc = closest_registered_channels(
-        times_seconds=sorting.times_seconds[kept], x=x, z_abs=z, motion=motion
+        times_seconds=sorting.times_seconds[kept],
+        x=x,
+        z_abs=z,
+        motion=motion,
+        registered_geom=registered_geom,
     )
 
     # count by label
     ll = sorting.labels[kept]
-    counts = np.zeros((ll.max() + 1, motion.rgeom.shape[0]), dtype=np.int64)
+    counts = np.zeros((ll.max() + 1, registered_geom.shape[0]), dtype=np.int64)
     np.add.at(counts, (ll, cc), 1)
 
     # get radial neighborhoods
-    ci = make_channel_index(motion.rgeom, radius, to_torch=False)
+    ci = make_channel_index(registered_geom, radius, to_torch=False)
 
     # puff out with radial neighborhood and sum up the counts by label
     radial_counts = np.zeros(counts.shape)
@@ -901,7 +913,7 @@ def radial_spike_counts(sorting: DARTsortSorting, motion: MotionInfo, radius: fl
         ii = np.flatnonzero(row)
         for channel, value in zip(ii, row[ii], strict=True):
             cixs = ci[channel]
-            cixs = cixs[cixs < motion.rgeom.shape[0]]
+            cixs = cixs[cixs < registered_geom.shape[0]]
             radial_counts[uu, cixs] += value
 
     return radial_counts

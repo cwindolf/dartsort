@@ -356,7 +356,7 @@ class TemplateConfig:
 
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
-    reduction: Literal["median", "mean"] = "median"
+    reduction: Literal["median", "mean", "superresmean", "superresmedian"] = "median"
     algorithm: (
         Literal[
             "unitextract",
@@ -376,6 +376,12 @@ class TemplateConfig:
     min_fraction_at_shift: float = 0.25
     min_count_at_shift: int = 25
     template_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
+
+    superres_max_row_pitch_um: float = 21.0
+    superres_fit_radius_um: float = 300.0
+    superres_smoothness: float = 1.0
+    superres_shrinkage: float = 1e-6
+    superres_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
     # low rank denoising?
     denoising_rank: int = 5

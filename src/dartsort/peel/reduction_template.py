@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
 import torch
@@ -13,13 +13,17 @@ from ..templates.get_templates import denoising_weights, fit_tsvd
 from ..templates.templates import TemplateData
 from ..transform.interp import WaveformInterpolator
 from ..transform.pipeline import WaveformPipeline
-from ..transform.reduction import TemplateWaveformReducer
+from ..transform.reduction import (
+    SuperresTemplateWaveformReducer,
+    TemplateWaveformReducer,
+)
 from ..transform.temporal_pca import FullProbeTemporalPCAEmbedder
 from ..transform.whiten import WaveformWhitener
 from ..util.data_util import (
     DARTsortSorting,
     subsample_by_count_and_valid_time,
 )
+from ..util.drift_util import superres_registered_geometry
 from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
@@ -83,7 +87,7 @@ class ReductionTemplateData(TemplateData):
 
         # TODO: file not always needed
         *_, is_local = pool_from_cfg(computation_cfg, check_local=True)
-        if template_cfg.reduction == "mean" and not is_local:
+        if template_cfg.reduction != "median" and not is_local:
             # running means with process workers: fall back to single job for now
             computation_cfg = ComputationConfig(
                 device=computation_cfg.actual_device().type,
@@ -166,7 +170,7 @@ class ReductionTemplateData(TemplateData):
             raw_std_dev=raw_std,
             spike_counts=spike_counts,
             spike_counts_by_channel=count,
-            registered_geom=motion.rgeom,
+            registered_geom=p.registered_geom(motion),
             trough_offset_samples=trough,
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
@@ -289,6 +293,8 @@ class TemplateReduction(GrabAndFeaturize):
         # if raw is included, interp at beginning, else after SVD (cheaper)
         interp_early = motion.drifting and template_cfg.denoising_method == "none"
         interp_late = motion.drifting and not interp_early
+        srgeom = template_srgeom(template_cfg, motion)
+        reduction = base_reduction(template_cfg, srgeom)
         if interp_early:
             assert interp is not None
             transformers.append(interp)
@@ -303,12 +309,26 @@ class TemplateReduction(GrabAndFeaturize):
                     recording.sampling_frequency
                 ),
                 output_channels=len(rgeom),
-                reduction=template_cfg.reduction,
+                reduction=reduction,
             )
             transformers.append(raw_reduce)
         if template_cfg.use_svd:
             assert tsvd is not None
             transformers.append(tsvd)
+        if srgeom is not None:
+            transformers.append(
+                SuperresTemplateWaveformReducer(
+                    geom=geom,
+                    channel_index=channel_index,
+                    srgeom=srgeom,
+                    n_units=sorting.n_units,
+                    feature_dim=rank,
+                    interp_params=template_cfg.superres_interp_params,
+                    fit_radius_um=template_cfg.superres_fit_radius_um,
+                    smoothness=template_cfg.superres_smoothness,
+                    shrinkage=template_cfg.superres_shrinkage,
+                )
+            )
         if interp_late:
             assert interp is not None
             transformers.append(interp)
@@ -328,7 +348,7 @@ class TemplateReduction(GrabAndFeaturize):
                 n_units=sorting.n_units,
                 feature_dim=rank,
                 output_channels=len(rgeom),
-                reduction=template_cfg.reduction,
+                reduction=reduction,
             )
             transformers.append(svd_reduce)
 
@@ -358,6 +378,21 @@ class TemplateReduction(GrabAndFeaturize):
             fit_sampling_cfg=template_cfg.denoising_fit_sampling_cfg,
             waveform_cfg=padded_waveform_cfg,
         )
+
+    def _superres_reducer(self) -> SuperresTemplateWaveformReducer | None:
+        assert self.featurization_pipeline is not None
+        transformers = self.featurization_pipeline.transformers
+        superres = [
+            f for f in transformers if isinstance(f, SuperresTemplateWaveformReducer)
+        ]
+        assert len(superres) <= 1
+        return superres[0] if superres else None
+
+    def registered_geom(self, motion: MotionInfo) -> np.ndarray:
+        superres_f = self._superres_reducer()
+        if superres_f is None:
+            return motion.rgeom
+        return superres_f.srgeom
 
     def temporal_svd(self) -> PCA | None:
         assert self.featurization_pipeline is not None
@@ -419,6 +454,24 @@ class TemplateReduction(GrabAndFeaturize):
             assert svd_counts is not None
             counts = svd_counts
 
+        # superres solve, with mean or median as prior
+        superres_f = self._superres_reducer()
+        if superres_f is not None:
+            assert raw_f is None and svd_mean is not None
+            (tsvd,) = [
+                f for f in transformers if isinstance(f, FullProbeTemporalPCAEmbedder)
+            ]
+            prior = torch.asarray(svd_mean)
+            prior_templates = tsvd.force_reconstruct(prior)
+            ptp = prior_templates.amax(1) - prior_templates.amin(1)
+            main_channels = ptp.argmax(1)
+            del prior_templates, ptp
+            counts, svd_mean = superres_f.superres_results(
+                prior=prior,
+                main_channels=main_channels,
+                device=ensure_computation_config(computation_cfg).actual_device(),
+            )
+
         # reconstruct SVD mean
         if svd_mean is not None:
             (tsvd,) = [
@@ -430,6 +483,29 @@ class TemplateReduction(GrabAndFeaturize):
             svd_mean = svd_mean.numpy(force=True)
 
         return counts, raw_mean, raw_std, svd_mean
+
+
+def template_srgeom(
+    template_cfg: TemplateConfig, motion: MotionInfo
+) -> np.ndarray | None:
+    if not template_cfg.reduction.startswith("superres"):
+        return None
+    if not motion.drifting or template_cfg.denoising_method != "svd":
+        return None
+    return superres_registered_geometry(
+        motion.geom, motion.rgeom, template_cfg.superres_max_row_pitch_um
+    )
+
+
+def base_reduction(
+    template_cfg: TemplateConfig, srgeom: np.ndarray | None
+) -> Literal["mean", "median"]:
+    if template_cfg.reduction in ("mean", "median"):
+        return template_cfg.reduction
+    if template_cfg.reduction == "superresmean" and srgeom is not None:
+        return "mean"
+    assert template_cfg.reduction in ("superresmean", "superresmedian")
+    return "median"
 
 
 def _handle_internal_pad(

@@ -222,6 +222,22 @@ def superres_registered_geometry(
     return order_depth_major(lattice, get_orders(geom))
 
 
+def bending_laplacian(srgeom: np.ndarray, n_neighbors: int = 4) -> np.ndarray:
+    dist, neighbors = KDTree(srgeom).query(srgeom, k=n_neighbors + 1)
+    assert np.all(neighbors[:, 0] == np.arange(len(srgeom)))
+    rows = np.repeat(np.arange(len(srgeom)), n_neighbors)
+    cols = neighbors[:, 1:].ravel()
+    weights = np.zeros((len(srgeom), len(srgeom)))
+    weights[rows, cols] = 1.0 / np.square(dist[:, 1:].ravel())
+    np.maximum(weights, weights.T, out=weights)
+    del dist, neighbors, rows, cols
+
+    laplacian = np.diag(weights.sum(1)) - weights
+    del weights
+    laplacian /= np.sqrt(np.mean(np.square(laplacian).sum(0)))
+    return laplacian
+
+
 def registered_channels(
     channels, geom, n_pitches_shift, registered_geom, distance_upper_bound=None
 ):
