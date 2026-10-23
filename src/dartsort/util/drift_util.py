@@ -173,18 +173,53 @@ def registered_geometry(
         assert cur_ix <= len(unique_shifted_positions_toobig)
 
     unique_shifted_positions = unique_shifted_positions_toobig[:cur_ix]
-
-    # if axes are decreasing, maintain that -- it leads to less mashing.
-    sorter_positions = unique_shifted_positions
-    flips = get_orders(geom)
-    if (flips < 0).any():
-        sorter_positions = sorter_positions * flips
-
-    # order by depth first, then horizontal position (unique goes the other way)
-    registered_geom = unique_shifted_positions[np.lexsort(sorter_positions.T)]
+    registered_geom = order_depth_major(unique_shifted_positions, get_orders(geom))
     assert np.isclose(get_pitch(registered_geom), pitch)
 
     return registered_geom
+
+
+def order_depth_major(geom: np.ndarray, orders: np.ndarray) -> np.ndarray:
+    sorter_positions = geom
+    if (orders < 0).any():
+        sorter_positions = sorter_positions * orders
+    return geom[np.lexsort(sorter_positions.T)]
+
+
+def to_grid_layout(geom: np.ndarray, row_pitch: float) -> np.ndarray:
+    assert geom.ndim == 2 and geom.shape[1] == 2
+    unique_x = np.unique(geom[:, 0])
+    z = geom[:, 1]
+    grid_z = np.arange(z.min(), z.max() + row_pitch / 2, row_pitch)
+    grid_x = np.tile(unique_x, grid_z.size)
+    grid_z = np.repeat(grid_z, unique_x.size)
+    return np.c_[grid_x, grid_z].astype(geom.dtype)
+
+
+def superres_registered_geometry(
+    geom: np.ndarray, registered_geom: np.ndarray, max_row_pitch_um: float = 21.0
+) -> np.ndarray | None:
+    """The registered geometry with holes filled at a row spacing of at most max_row_pitch_um"""
+    assert geom.ndim == registered_geom.ndim == 2
+    assert geom.shape[1] == registered_geom.shape[1] == 2
+
+    _, sites_per_column = np.unique(geom[:, 0], return_counts=True)
+    if sites_per_column.min() < 2:
+        return None
+
+    pitch = get_pitch(geom)
+    row_pitch = pitch
+    while row_pitch > max_row_pitch_um:
+        row_pitch = row_pitch / 2
+    if row_pitch == pitch:
+        return None
+
+    lattice = to_grid_layout(registered_geom, row_pitch)
+    dist, _ = KDTree(lattice).query(registered_geom)
+    if dist.max() > row_pitch / 100:
+        return None
+
+    return order_depth_major(lattice, get_orders(geom))
 
 
 def registered_channels(
