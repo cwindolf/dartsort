@@ -234,6 +234,10 @@ class WaveformPipeline(torch.nn.Module):
         for t in self.transformers:
             t.register_cpu_workers(workers)
 
+    def register_workers(self, n_workers: int):
+        for t in self.transformers:
+            t.register_workers(n_workers)
+
     def needs_residual(self):
         return any(t.needs_residual for t in self.transformers)
 

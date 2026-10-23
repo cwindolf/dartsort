@@ -40,6 +40,7 @@ from ..util.multiprocessing_util import (
     buffered_map,
     handle_negative_jobs,
     pool_from_cfg,
+    set_current_worker_rank,
 )
 from ..util.py_util import databag, delay_keyboard_interrupt, panic
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
@@ -120,7 +121,12 @@ class BasePeeler(BModule):
         for kind in featurization_pipelines:
             if kind not in get_args(WaveformKind):
                 panic(kind)
-        self.featurization_pipelines = torch.nn.ModuleDict(featurization_pipelines)  # ty: ignore[invalid-argument-type]
+        self.featurization_pipelines = cast(
+            Mapping[WaveformKind, WaveformPipeline],
+            torch.nn.ModuleDict(
+                cast(Mapping[str, torch.nn.Module], featurization_pipelines)
+            ),
+        )
         self.fixed_property_keys: Sequence[str] = fixed_property_keys
 
         # subclasses can append to this if they want to store more fixed
@@ -140,14 +146,14 @@ class BasePeeler(BModule):
     def featurization_pipeline(self) -> WaveformPipeline | None:
         if "collisioncleaned" not in self.featurization_pipelines:
             return None
-        return cast(WaveformPipeline, self.featurization_pipelines["collisioncleaned"])
+        return self.featurization_pipelines["collisioncleaned"]
 
     @property
     def waveform_kinds(self) -> list[WaveformKind]:
-        return cast(list[WaveformKind], list(self.featurization_pipelines))
+        return list(self.featurization_pipelines)
 
     def get_pipeline(self, waveform_kind: WaveformKind) -> WaveformPipeline:
-        return cast(WaveformPipeline, self.featurization_pipelines[waveform_kind])
+        return self.featurization_pipelines[waveform_kind]
 
     # -- main functions for users to call
     # in practice users will interact with the functions `subtract(...)` in
@@ -329,6 +335,8 @@ class BasePeeler(BModule):
             n_jobs, Executor, context, rank_queue, is_local = pool_from_cfg(
                 computation_cfg, with_rank_queue=True, check_local=True
             )
+            for pipeline in self.featurization_pipelines.values():
+                pipeline.register_workers(n_jobs)
             with Executor(
                 max_workers=n_jobs,
                 mp_context=context,
@@ -772,17 +780,20 @@ class BasePeeler(BModule):
         # disable self's featurization pipelines, replacing each with a waveform
         # saving node. then, we'll use those waveforms to fit the originals
         wf_dsets = {k: f"peeled_{k}_waveforms_fit" for k in pipelines}
-        self.featurization_pipelines = torch.nn.ModuleDict(
-            {
-                kind: WaveformPipeline.from_class_names_and_kwargs(
-                    self.recording.get_channel_locations(),
-                    self.channel_index,
-                    self._fit_pipeline_nodes(kind, wf_dsets[kind]),
-                    waveform_cfg=self.waveform_cfg,
-                    sampling_frequency=self.recording.sampling_frequency,
-                )
-                for kind in pipelines
-            }
+        self.featurization_pipelines = cast(
+            Mapping[WaveformKind, WaveformPipeline],
+            torch.nn.ModuleDict(
+                {
+                    kind: WaveformPipeline.from_class_names_and_kwargs(
+                        self.recording.get_channel_locations(),
+                        self.channel_index,
+                        self._fit_pipeline_nodes(kind, wf_dsets[kind]),
+                        waveform_cfg=self.waveform_cfg,
+                        sampling_frequency=self.recording.sampling_frequency,
+                    )
+                    for kind in pipelines
+                }
+            ),
         )
 
         if tmp_dir is None:
@@ -842,7 +853,10 @@ class BasePeeler(BModule):
                         **fixed_properties,
                     )
                     pipeline.to("cpu")
-                self.featurization_pipelines = torch.nn.ModuleDict(pipelines)  # ty: ignore[invalid-argument-type]
+                self.featurization_pipelines = cast(
+                    Mapping[WaveformKind, WaveformPipeline],
+                    torch.nn.ModuleDict(pipelines),  # ty: ignore[invalid-argument-type]
+                )
             finally:
                 self.to(device="cpu")
                 if temp_hdf5_filename.exists():
@@ -1328,10 +1342,11 @@ def _peeler_process_init(
     peeler.eval()
 
     # give workers their own streams
-    stream = None
     if device.type == "cuda":
         stream = torch.cuda.Stream(device=device)
         stream.wait_stream(torch.cuda.default_stream(device))
+    else:
+        stream = None
 
     # update process-local variables
     _peeler_process_context.ctx = PeelerProcessContext(
@@ -1343,6 +1358,7 @@ def _peeler_process_init(
         recording_n_samples=peeler.recording.get_num_samples(),
         stream=stream,
     )
+    set_current_worker_rank(my_rank)
 
 
 def _peeler_process_job(

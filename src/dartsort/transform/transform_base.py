@@ -163,6 +163,9 @@ class BaseWaveformModule(BModule):
     def register_cpu_workers(self, workers: int):
         pass
 
+    def register_workers(self, n_workers: int):
+        pass
+
     def precompute(self):
         pass
 

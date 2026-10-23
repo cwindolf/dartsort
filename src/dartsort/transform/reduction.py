@@ -9,11 +9,12 @@ import torch
 from ..util.internal_config import ComputationConfig
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import progbar
-from ..util.multiprocessing_util import pool_from_cfg
+from ..util.multiprocessing_util import current_worker_rank, pool_from_cfg
 from ..util.py_util import databag
 from .transform_base import BaseWaveformFeaturizer
 
 _my_name = "reduction_data"
+_worker_bufnames = ("count", "mean", "batch_xbar", "meansq", "batch_xsqbar")
 
 
 class TemplateWaveformReducer(BaseWaveformFeaturizer):
@@ -71,22 +72,27 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         if not waveforms.numel():
             return {}
 
-        # else, Welford running mean algorithm below
+        # else, Welford running mean algorithm below, in per rank bufs
+        rank = current_worker_rank()
+        assert rank < self.b.count.shape[0]
+        count = self.b.count[rank]
+        mean = self.b.mean[rank]
 
         # zero the scratch storage
-        batch_xbar = self.b.batch_xbar.zero_()
+        batch_xbar = self.b.batch_xbar[rank].zero_()
         if self.with_raw_std_dev:
-            batch_xsqbar = self.b.batch_xsqbar.zero_()
+            meansq = self.b.meansq[rank]
+            batch_xsqbar = self.b.batch_xsqbar[rank].zero_()
         else:
-            batch_xsqbar = None
+            meansq = batch_xsqbar = None
 
         # sum weight per unit
         # TODO this isn't hit by any code. but it could be if weighting was a thing.
         if "weights" in spike_data:
             weights = spike_data["weights"]
         else:
-            weights = self.b.count.new_ones((1,)).broadcast_to(labels.shape)
-        batch_w = self.b.count.new_zeros(self.n_units)
+            weights = count.new_ones((1,)).broadcast_to(labels.shape)
+        batch_w = count.new_zeros(self.n_units)
         batch_w.scatter_add_(index=labels, dim=0, src=weights)
 
         # per-spike weight for averaging inside the batch
@@ -99,19 +105,19 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         batch_w = batch_w[:, None] * nz
 
         # Welford weights
-        self.b.count += batch_w
-        batch_w /= self.b.count
+        count += batch_w
+        batch_w /= count
         batch_w.nan_to_num_()
 
         # handle means
         labels_ix = labels[:, None, None].broadcast_to(wx.shape)
         batch_xbar.scatter_add_(dim=0, index=labels_ix, src=wx)
-        self.b.mean += batch_xbar.sub_(self.b.mean).mul_(batch_w[:, None])
+        mean += batch_xbar.sub_(mean).mul_(batch_w[:, None])
         if self.with_raw_std_dev:
             wxx = x.mul_(wx)
-            assert batch_xsqbar is not None
+            assert meansq is not None and batch_xsqbar is not None
             batch_xsqbar.scatter_add_(dim=0, index=labels_ix, src=wxx)
-            self.b.meansq += batch_xsqbar.sub_(self.b.meansq).mul_(batch_w[:, None])
+            meansq += batch_xsqbar.sub_(meansq).mul_(batch_w[:, None])
 
         return {}
 
@@ -123,14 +129,17 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         computation_cfg: ComputationConfig | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
         """Gather mean or median results."""
-        # if reduction was mean, done already
+        # if reduction was mean, merge per-worker means
         if self.online:
-            if self.with_raw_std_dev:
-                std = self.b.meansq.sub_(self.b.mean.square()).abs_().sqrt_()
+            count, mean, meansq = _welford_merge(
+                self.b.count, self.b.mean, self.get_optional_buffer("meansq")
+            )
+            if meansq is not None:
+                std = meansq.sub_(mean.square()).abs_().sqrt_()
                 std = std.numpy(force=True)
             else:
                 std = None
-            return self.b.count.numpy(force=True), self.b.mean.numpy(force=True), std
+            return count.numpy(force=True), mean.numpy(force=True), std
 
         # else, nanmedian in a loop
         computation_cfg = ensure_computation_config(computation_cfg)
@@ -181,15 +190,39 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
     def _initialize(self, wf_shape: tuple[int, int]):
         if not self.online:
             return
-        self.register_buffer("count", torch.zeros((self.n_units, wf_shape[1])))
-        self.register_buffer("mean", torch.zeros((self.n_units, *wf_shape)))
-        self.register_buffer("batch_xbar", torch.zeros((self.n_units, *wf_shape)))
+        self.register_buffer("count", torch.zeros((1, self.n_units, wf_shape[1])))
+        self.register_buffer("mean", torch.zeros((1, self.n_units, *wf_shape)))
+        self.register_buffer("batch_xbar", torch.zeros((1, self.n_units, *wf_shape)))
         if self.with_raw_std_dev:
             self.register_buffer("meansq", self.b.mean.clone())
             self.register_buffer("batch_xsqbar", self.b.mean.clone())
         else:
             self.register_buffer_or_none("meansq", None)
             self.register_buffer_or_none("batch_xsqbar", None)
+
+    def register_workers(self, n_workers: int):
+        if not self.online:
+            return
+        for name in _worker_bufnames:
+            buf = self.get_optional_buffer(name)
+            if buf is not None:
+                buf.resize_((n_workers, *buf.shape[1:])).zero_()
+
+
+def _welford_merge(
+    count: torch.Tensor, mean: torch.Tensor, meansq: torch.Tensor | None
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    total = count[0]
+    merged_mean = mean[0]
+    merged_meansq = None if meansq is None else meansq[0]
+    for w in range(1, count.shape[0]):
+        total += count[w]
+        weight = (count[w] / total).nan_to_num_()[:, None]
+        merged_mean += (mean[w] - merged_mean).mul_(weight)
+        if merged_meansq is not None:
+            assert meansq is not None
+            merged_meansq += (meansq[w] - merged_meansq).mul_(weight)
+    return total, merged_mean, merged_meansq
 
 
 _reduction_stuff = local()

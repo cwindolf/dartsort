@@ -29,6 +29,7 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
+from ..util.multiprocessing_util import pool_from_cfg
 from ..util.noise_util import Whitener
 from ..util.py_util import ensure_path, panic
 from ..util.waveform_util import full_channel_index
@@ -81,8 +82,9 @@ class ReductionTemplateData(TemplateData):
         )
 
         # TODO: file not always needed
-        if template_cfg.reduction == "mean":
-            # TODO: reducer doesn't work in parallel when gathering means, go to single job
+        *_, is_local = pool_from_cfg(computation_cfg, check_local=True)
+        if template_cfg.reduction == "mean" and not is_local:
+            # running means with process workers: fall back to single job for now
             computation_cfg = ComputationConfig(
                 device=computation_cfg.actual_device().type,
                 n_jobs_small=computation_cfg.n_jobs_small,
