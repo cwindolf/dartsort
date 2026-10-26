@@ -406,7 +406,7 @@ def test_drifting_templates(tmp_path):
             assert temps8[1, 0, 6] == 2
 
 
-@pytest.mark.parametrize("reduction", ["superresmean", "superresmedian"])
+@pytest.mark.parametrize("reduction", ["mean", "median"])
 def test_superres_templates(tmp_path, reduction):
     geom = simlib.generate_geom(num_contact_per_column=12)
     template_simulator = get_template_simulator(
@@ -434,20 +434,21 @@ def test_superres_templates(tmp_path, reduction):
     srgeom = drift_util.superres_registered_geometry(geom, motion.rgeom)
     assert srgeom is not None
 
-    def estimate(reduction, n_jobs):
+    def estimate(template_cfg, n_jobs):
         return templates.TemplateData.from_config(
             recording=sim["recording"],
             sorting=sim["sorting"],
-            template_cfg=TemplateConfig(reduction=reduction),
+            template_cfg=template_cfg,
             motion=motion,
             save_folder=None,
             save_npz_name=None,
             computation_cfg=dartsort.ComputationConfig.from_n_jobs(n_jobs),
         )
 
-    td_sr = estimate(reduction, 1)
-    td_sr_parallel = estimate(reduction, 3)
-    td_mean = estimate("mean", 1)
+    superres_cfg = TemplateConfig(reduction=reduction, superres=True)
+    td_sr = estimate(superres_cfg, 1)
+    td_sr_parallel = estimate(superres_cfg, 3)
+    td_mean = estimate(TemplateConfig(reduction="mean"), 1)
     np.testing.assert_array_equal(td_sr.registered_geom, srgeom)
     np.testing.assert_array_equal(td_sr_parallel.registered_geom, srgeom)
     np.testing.assert_array_equal(td_mean.registered_geom, motion.rgeom)

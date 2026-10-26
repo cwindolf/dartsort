@@ -356,7 +356,7 @@ class TemplateConfig:
 
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
-    reduction: Literal["median", "mean", "superresmean", "superresmedian"] = "median"
+    reduction: Literal["median", "mean"] = "median"
     algorithm: (
         Literal[
             "unitextract",
@@ -377,6 +377,8 @@ class TemplateConfig:
     min_count_at_shift: int = 25
     template_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
+    # templates on superres_registered_geometry() when it exists, with prior `reduction`
+    superres: bool = False
     superres_max_row_pitch_um: float = 21.0
     superres_fit_radius_um: float = 300.0
     superres_smoothness: float = 1.0
@@ -408,6 +410,9 @@ class TemplateConfig:
         return self.denoising_method in ("svd", "exp_weighted")
 
     def actual_algorithm(self) -> str:
+        if self.superres:
+            assert self.algorithm in ("peelreduce", "peelreduce_if_mean")
+            return "peelreduce"
         if self.algorithm.endswith("_if_mean") and self.reduction == "mean":
             return self.algorithm.removesuffix("_if_mean")
         elif self.algorithm.endswith("_if_mean"):
@@ -476,6 +481,7 @@ class TemplateMergeConfig:
             template_cfg = self.template_cfg
         return replace(
             template_cfg,
+            superres=False,
             denoising_method="svd",
             denoising_rank=self.svd_compression_rank,
             whitening=self.whitening,
@@ -1290,6 +1296,10 @@ def _template_cfg(
         svd_method=cfg.template_svd_method,
         whitening=whiten_cfg,
         template_interp_params=_interp_params(cfg.template_interp_kind),
+        superres=cfg.template_superres,
+        superres_shrinkage=cfg.template_superres_shrinkage,
+        superres_smoothness=cfg.template_superres_smoothness,
+        superres_interp_params=_interp_params(cfg.matching_interp_kind),
         svd_alignment_iterations=cfg.svd_alignment_iterations,
         svd_alignment_ms=cfg.alignment_ms / 2,
     )

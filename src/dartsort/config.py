@@ -323,6 +323,9 @@ class DeveloperConfig(DARTsortUserConfig):
     postprocessing_merge_threshold: float = 0.05
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "median"
+    template_superres: bool = False
+    template_superres_shrinkage: float = 1e-6
+    template_superres_smoothness: float = 1.0
     template_denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
     min_template_snr: float = 0.0
     min_template_count: int = 10

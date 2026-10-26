@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import numpy as np
 import torch
@@ -87,7 +87,8 @@ class ReductionTemplateData(TemplateData):
 
         # TODO: file not always needed
         *_, is_local = pool_from_cfg(computation_cfg, check_local=True)
-        if template_cfg.reduction != "median" and not is_local:
+        online = template_cfg.reduction == "mean" or template_cfg.superres
+        if online and not is_local:
             # running means with process workers: fall back to single job for now
             computation_cfg = ComputationConfig(
                 device=computation_cfg.actual_device().type,
@@ -294,7 +295,6 @@ class TemplateReduction(GrabAndFeaturize):
         interp_early = motion.drifting and template_cfg.denoising_method == "none"
         interp_late = motion.drifting and not interp_early
         srgeom = template_srgeom(template_cfg, motion)
-        reduction = base_reduction(template_cfg, srgeom)
         if interp_early:
             assert interp is not None
             transformers.append(interp)
@@ -309,7 +309,7 @@ class TemplateReduction(GrabAndFeaturize):
                     recording.sampling_frequency
                 ),
                 output_channels=len(rgeom),
-                reduction=reduction,
+                reduction=template_cfg.reduction,
             )
             transformers.append(raw_reduce)
         if template_cfg.use_svd:
@@ -348,7 +348,7 @@ class TemplateReduction(GrabAndFeaturize):
                 n_units=sorting.n_units,
                 feature_dim=rank,
                 output_channels=len(rgeom),
-                reduction=reduction,
+                reduction=template_cfg.reduction,
             )
             transformers.append(svd_reduce)
 
@@ -488,24 +488,13 @@ class TemplateReduction(GrabAndFeaturize):
 def template_srgeom(
     template_cfg: TemplateConfig, motion: MotionInfo
 ) -> np.ndarray | None:
-    if not template_cfg.reduction.startswith("superres"):
+    if not template_cfg.superres:
         return None
     if not motion.drifting or template_cfg.denoising_method != "svd":
         return None
     return superres_registered_geometry(
         motion.geom, motion.rgeom, template_cfg.superres_max_row_pitch_um
     )
-
-
-def base_reduction(
-    template_cfg: TemplateConfig, srgeom: np.ndarray | None
-) -> Literal["mean", "median"]:
-    if template_cfg.reduction in ("mean", "median"):
-        return template_cfg.reduction
-    if template_cfg.reduction == "superresmean" and srgeom is not None:
-        return "mean"
-    assert template_cfg.reduction in ("superresmean", "superresmedian")
-    return "median"
 
 
 def _handle_internal_pad(
