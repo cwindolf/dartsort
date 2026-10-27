@@ -91,12 +91,14 @@ from ..util.noise_util import EmbeddedNoise
 from ..util.py_util import cfg_dataclass, databag, panic
 from ..util.spiketorch import (
     _nonzero_static,
+    cosine_cdist_from_dots,
     cosine_distance,
     csr_members_ordered,
     ecl,
     entropy,
     mean_elbo_dim1,
     normeuc_distance,
+    scaled_normeuc_cdist_from_dots,
     scaled_normeuc_distance,
     sign,
     sort_to_csr,
@@ -2253,7 +2255,8 @@ class BaseMixtureModel(BModule):
             d = cosine_distance(x)
         elif distance_kind == "normeuc":
             d = normeuc_distance(x)
-        elif distance_kind == "scaled_normeuc":
+        elif distance_kind == "scaled_normeuc" or distance_kind == "euc":
+            # no component euc yet: euc falls back to scaled_normeuc
             d = scaled_normeuc_distance(x, *self.p.scale_dist_args)
         else:
             panic(distance_kind)
@@ -4444,7 +4447,9 @@ def get_truncated_datasets(
             train_neighbs=train_neighbs,
             batch_size=refinement_cfg.eval_batch_size,
             n_tries=refinement_cfg.kmeanspp_tries,
-            stop_rms=refinement_cfg.kmeanspp_stop_rms,
+            metric=refinement_cfg.distance_metric,
+            scale_dist_args=refinement_cfg.scale_dist_args,
+            stop_dist=refinement_cfg.kmeanspp_stop_dist,
             min_count=refinement_cfg.min_count,
             patience=refinement_cfg.kmeanspp_patience,
             greedy_proposals=refinement_cfg.kmeanspp_greedy_proposals,
@@ -4823,7 +4828,9 @@ def truncated_kmeanspp(
     batch_size: int,
     n_tries: int,
     seed: np.random.Generator | int,
-    stop_rms: float = 5.0,
+    metric: ComponentDistanceMetric,
+    scale_dist_args: tuple[float, float, float],
+    stop_dist: float,
     min_count: int = 5,
     patience: int = 21,
     greedy_proposals: int = 1,
@@ -4836,6 +4843,13 @@ def truncated_kmeanspp(
     max_components_per_channel: int = 5,
 ) -> TruncatedKmeansppResult:
     """Neighborhood-sparsity-aware kmeans++"""
+    if metric == "euc":
+        pass
+    elif metric == "cosine" or metric == "normeuc" or metric == "scaled_normeuc":
+        assert sampling == "d2" and stopping != "significance"
+    else:
+        panic(metric)
+    scale_std, scale_min, scale_max = scale_dist_args
     base_rg = np.random.default_rng(seed)
     max_k = min(train_x.shape[0], max_components_per_channel * neighb_cov.n_channels)
     feat_rank = neighb_cov.feat_rank
@@ -4866,7 +4880,7 @@ def truncated_kmeanspp(
     centroid_ixs: Tensor | None = None
     best_score = torch.inf
     best_phi = torch.inf
-    centroid_cost = min_count * stop_rms**2 / whitenedx.shape[0]
+    centroid_cost = min_count * stop_dist**2 / whitenedx.shape[0]
     if logger.isEnabledFor(DARTSORTDEBUG):
         pbar = progrange(n_tries, desc="kmeans++ tries")
     else:
@@ -4880,12 +4894,14 @@ def truncated_kmeanspp(
             visible=visible,
             base_rg=base_rg,
             max_k=max_k,
-            stop_rms=stop_rms,
+            stop_dist=stop_dist,
             min_count=min_count,
             patience=patience,
             greedy_proposals=greedy_proposals,
             stopping=stopping,
             feat_rank=feat_rank,
+            metric=metric,
+            scale_dist_args=scale_dist_args,
             sampling=sampling,
             alpha=alpha,
             z0=z0,
@@ -4910,7 +4926,7 @@ def truncated_kmeanspp(
     assert centroid_ixs is not None
     n_centroids = centroid_ixs.shape[0]
     logger.dartsortdebug(
-        f"kmeans++: {n_centroids} centroids at rms={math.sqrt(best_phi):0.3f}, "
+        f"kmeans++: {n_centroids} centroids at {metric} dist={math.sqrt(best_phi):0.3f}, "
         f"best of {n_tries} by {selection} (centroid cost {centroid_cost:0.3g} "
         f"over {whitenedx.shape[0]} train spikes)."
     )
@@ -4925,9 +4941,7 @@ def truncated_kmeanspp(
     cent_visible = visible[:, cent_neighbs]
 
     full_labels = torch.full(x.shape[:1], -1, dtype=torch.long, device=device)
-    order, indptr, _ = sort_to_csr(
-        neighb_ids, neighborhoods.n_neighborhoods
-    )
+    order, indptr, _ = sort_to_csr(neighb_ids, neighborhoods.n_neighborhoods)
     indptr_list = indptr.tolist()
     for ni in range(neighborhoods.n_neighborhoods):
         members = order[indptr_list[ni] : indptr_list[ni + 1]]
@@ -4955,9 +4969,27 @@ def truncated_kmeanspp(
             )
             # foil, but only on overlap!
             xsq = wx.view(bix.shape[0], feat_rank, max_nc_obs).square().sum(dim=1)
-            d = xsq @ cmask.T
-            d = d.addmm_(wx, cvals.T, alpha=-2.0)
-            d = d.add_(cnormsq).div_(denom)
+            if metric == "euc":
+                d = xsq @ cmask.T
+                d = d.addmm_(wx, cvals.T, alpha=-2.0)
+                d = d.add_(cnormsq).div_(denom)
+            elif metric == "cosine":
+                d = cosine_cdist_from_dots(wx @ cvals.T, xsq @ cmask.T, cnormsq)
+            elif metric == "normeuc":
+                d = scaled_normeuc_cdist_from_dots(
+                    wx @ cvals.T, xsq @ cmask.T, cnormsq, scale_var=0.0
+                )
+            elif metric == "scaled_normeuc":
+                d = scaled_normeuc_cdist_from_dots(
+                    wx @ cvals.T,
+                    xsq @ cmask.T,
+                    cnormsq,
+                    scale_var=scale_std**2,
+                    scale_min=scale_min,
+                    scale_max=scale_max,
+                )
+            else:
+                panic(metric)
             full_labels[bix] = cand[d.argmin(dim=1)]
 
     n_unlabeled = (full_labels < 0).sum().item()
@@ -4982,12 +5014,14 @@ def _truncated_kmeanspp_inner(
     visible: Tensor,
     base_rg: np.random.Generator,
     max_k: int,
-    stop_rms: float,
+    stop_dist: float,
     min_count: float,
     patience: int,
     greedy_proposals: int,
     stopping: KmeansppStopping,
     feat_rank: int,
+    metric: ComponentDistanceMetric,
+    scale_dist_args: tuple[float, float, float],
     sampling: KmeansppSampling = "d2",
     alpha: float = 2.0,
     z0: float = 3.0,
@@ -5031,13 +5065,11 @@ def _truncated_kmeanspp_inner(
     train_centroid_ixs = X.new_full((max_k,), n, dtype=torch.long)
     distsq = X.new_full((n,), torch.inf)
     dof = X.new_zeros((n,))
-    order, indptr, counts = sort_to_csr(
-        Xneighbixs, n_neighb
-    )
+    order, indptr, counts = sort_to_csr(Xneighbixs, n_neighb)
 
     buf = torch.empty_like(distsq)
     wbuf = torch.empty_like(distsq)
-    stop_distsq = stop_rms**2
+    stop_distsq = stop_dist**2
     propose_kw = dict(
         X=X,
         Xneighbixs=Xneighbixs,
@@ -5048,6 +5080,8 @@ def _truncated_kmeanspp_inner(
         indptr=indptr,
         counts=counts,
         feat_rank=feat_rank,
+        metric=metric,
+        scale_dist_args=scale_dist_args,
     )
     k = 0
 
@@ -5111,7 +5145,9 @@ def _truncated_kmeanspp_inner(
     floor = min_count * stop_distsq
     centroid_budget = floor / n
     fails = 0
-    phase3_enabled = stopping != "significance" and (stopping != "patience" or patience > 0)
+    phase3_enabled = stopping != "significance" and (
+        stopping != "patience" or patience > 0
+    )
     while phase3_enabled and k < max_k:
         best_gain, best = -1.0, None
         w = _truncated_kmeanspp_sampling_weights(
@@ -5185,7 +5221,9 @@ def _truncated_kmeanspp_weights(distsq: Tensor, alpha: float, out: Tensor) -> Te
     return torch.pow(distsq, alpha / 2.0, out=out)
 
 
-def _truncated_kmeanspp_significance(distsq: Tensor, dof: Tensor, out: Tensor) -> Tensor:
+def _truncated_kmeanspp_significance(
+    distsq: Tensor, dof: Tensor, out: Tensor
+) -> Tensor:
     z = torch.div(dof, 2.0, out=out).sqrt_()
     return z.mul_(distsq.div(2.0).sub_(1.0))
 
@@ -5215,6 +5253,8 @@ def _truncated_kmeanspp_propose(
     indptr: Tensor,
     counts: Tensor,
     feat_rank: int,
+    metric: ComponentDistanceMetric,
+    scale_dist_args: tuple[float, float, float],
 ) -> tuple[Tensor, Tensor | None, Tensor | None]:
     cent_neighb = Xneighbixs[centroid_ix]
     (vis_neighbs,) = visible[cent_neighb].nonzero(as_tuple=True)
@@ -5228,13 +5268,45 @@ def _truncated_kmeanspp_propose(
     n_shared = shared.sum(dim=1)
     cent = F.pad(X[centroid_ix].view(feat_rank, max_nc_obs), (0, 1))
     cent = cent[:, rel_inds].permute(1, 0, 2)
+    n_feats = n_shared.mul(feat_rank).to(X)
+    xv = X[ix].view(ix.numel(), feat_rank, max_nc_obs)
 
-    d = X[ix].view(ix.numel(), feat_rank, max_nc_obs) - cent
-    d = d.square_().mul_(shared.unsqueeze(1)).sum(dim=(1, 2))
-    n_feats = n_shared.mul(feat_rank).to(d)
-    d = d.div_(n_feats.clamp(min=1))
+    if metric == "euc":
+        d = xv - cent
+        d = d.square_().mul_(shared.unsqueeze(1)).sum(dim=(1, 2))
+        d = d.div_(n_feats.clamp(min=1))
+    elif metric == "cosine":
+        d = cosine_cdist_from_dots(*_shared_dots_normsqs(xv, cent, shared))
+        d = d[:, 0].square_()
+    elif metric == "normeuc":
+        d = scaled_normeuc_cdist_from_dots(
+            *_shared_dots_normsqs(xv, cent, shared), scale_var=0.0
+        )
+        d = d[:, 0].square_()
+    elif metric == "scaled_normeuc":
+        scale_std, scale_min, scale_max = scale_dist_args
+        d = scaled_normeuc_cdist_from_dots(
+            *_shared_dots_normsqs(xv, cent, shared),
+            scale_var=scale_std**2,
+            scale_min=scale_min,
+            scale_max=scale_max,
+        )
+        d = d[:, 0].square_()
+    else:
+        panic(metric)
     d.masked_fill_(n_shared == 0, torch.inf)
     return ix, d, n_feats
+
+
+def _shared_dots_normsqs(
+    xv: Tensor, cent: Tensor, shared: Tensor
+) -> tuple[Tensor, Tensor, Tensor]:
+    # (n, 1) dots, (n,) and (n, 1) norms of spikes and centroid on each pair's shared chans
+    mask = shared.unsqueeze(1).to(xv)
+    xs = xv * mask
+    cs = cent * mask
+    dots = (xs * cs).sum(dim=(1, 2))[:, None]
+    return dots, xs.square().sum(dim=(1, 2)), cs.square().sum(dim=(1, 2))[:, None]
 
 
 def _truncated_kmeanspp_commit_(

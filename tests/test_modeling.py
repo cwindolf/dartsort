@@ -722,6 +722,8 @@ def test_truncated_kmeanspp_step():
             indptr=indptr,
             counts=counts,
             feat_rank=feat_rank,
+            metric="euc",
+            scale_dist_args=(0.01, 3.0 / 4.0, 4.0 / 3.0),
         )
         if d is not None:
             assert n_feats is not None
@@ -750,7 +752,10 @@ def test_truncated_kmeanspp(mini_simulations, sim_name, stopping, sampling):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     refinement_cfg = RefinementConfig(
-        kmeanspp_stop_rms=3.0, kmeanspp_stopping=stopping, kmeanspp_sampling=sampling
+        distance_metric="euc",
+        kmeanspp_stop_dist=3.0,
+        kmeanspp_stopping=stopping,
+        kmeanspp_sampling=sampling,
     )
     _, _, train_data, _, _, _, train_ixs, _ = mixture.get_truncated_datasets(
         sorting=unlabeled,

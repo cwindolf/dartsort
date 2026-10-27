@@ -527,15 +527,14 @@ def scaled_normeuc_cdist_from_dots(
         scale_min = 1.0 / scale_max
     else:
         assert scale_max is not None
-    assert row_normsq.shape == (dots.shape[0],)
-    assert col_normsq.shape == (dots.shape[1],)
+    row_normsq, col_normsq = _cdist_normsqs(dots, row_normsq, col_normsq)
 
     # rows scaled as the templates, then columns
     dist = _scaled_normeuc_rows_scaled(
         dots, row_normsq, col_normsq, scale_var, scale_min, scale_max
     )
     dist_t = _scaled_normeuc_rows_scaled(
-        dots.T, col_normsq, row_normsq, scale_var, scale_min, scale_max
+        dots.T, col_normsq.T, row_normsq.T, scale_var, scale_min, scale_max
     )
     dist = torch.minimum(dist, dist_t.T)
     del dist_t
@@ -559,22 +558,55 @@ def _scaled_normeuc_rows_scaled(
     if scale_var > 0:
         inv_lambda = 1.0 / scale_var
         b = dots + inv_lambda
-        a = row_normsq[:, None] + inv_lambda
+        a = row_normsq + inv_lambda
         sc = b.div_(a).clamp_(scale_min, scale_max)
     else:
         sc = torch.ones_like(dots)
 
     # euclidean distance identity
-    row_norm = sc * row_normsq.sqrt()[:, None]
-    dist = row_norm.square() + col_normsq[None, :]
+    row_norm = sc * row_normsq.sqrt()
+    dist = row_norm.square() + col_normsq
     dist -= sc.mul_(dots).mul_(2.0)
     del sc
     dist.relu_().sqrt_()
 
     # divide by geom mean of norms
     dist /= row_norm.sqrt_()
-    dist /= col_normsq.sqrt()[None, :].sqrt_()
+    dist /= col_normsq.sqrt().sqrt_()
 
+    return dist
+
+
+def _cdist_normsqs(
+    dots: Tensor, row_normsq: Tensor, col_normsq: Tensor
+) -> tuple[Tensor, Tensor]:
+    # per-item norms (m,) and (n,), or norms broadcastable to dots' (m, n)
+    m = dots.shape[0]
+    n = dots.shape[1]
+    if row_normsq.ndim == 1:
+        assert row_normsq.shape[0] == m
+        row_normsq = row_normsq[:, None]
+    if col_normsq.ndim == 1:
+        assert col_normsq.shape[0] == n
+        col_normsq = col_normsq[None, :]
+    assert row_normsq.ndim == 2 and col_normsq.ndim == 2
+    assert row_normsq.shape[0] == m
+    assert row_normsq.shape[1] == 1 or row_normsq.shape[1] == n
+    assert col_normsq.shape[1] == n
+    assert col_normsq.shape[0] == 1 or col_normsq.shape[0] == m
+    return row_normsq, col_normsq
+
+
+def cosine_cdist_from_dots(
+    dots: Tensor, row_normsq: Tensor, col_normsq: Tensor
+) -> Tensor:
+    # sqrt(2 (1 - cos)), as cosine_distance's true_distance
+    row_normsq, col_normsq = _cdist_normsqs(dots, row_normsq, col_normsq)
+    norms = row_normsq.sqrt() * col_normsq.sqrt()
+    blank = norms == 0
+    dist = dots / norms.masked_fill(blank, 1.0)
+    dist = dist.neg_().add_(1.0).mul_(2.0).clamp_(min=0.0).sqrt_()
+    dist.masked_fill_(blank, torch.inf)
     return dist
 
 

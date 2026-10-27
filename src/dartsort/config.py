@@ -376,7 +376,7 @@ class DeveloperConfig(DARTsortUserConfig):
     hellinger_weak: float = 0.0
     dpc_mop: bool = True
     n_neighbors_search: int | None = 50
-    kmeanspp_stop_rms: float = 5.0
+    kmeanspp_stop_dist: float = 4.0
     kmeanspp_tries: int = 5
     kmeanspp_patience: int = 21
     kmeanspp_greedy_proposals: int = 1
@@ -412,7 +412,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_cl_alpha: float = 0.05
     gmm_cl_split_only: bool = True
     gmm_em_atol: float = 5e-3
-    gmm_metric: Literal["cosine", "normeuc", "scaled_normeuc"] = "scaled_normeuc"
+    gmm_metric: Literal["euc", "cosine", "normeuc", "scaled_normeuc"] = "scaled_normeuc"
     gmm_n_candidates: int = 5
     gmm_n_search: int | None = 3
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5
@@ -420,6 +420,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     cov_kind: str = "factorizednoise"
+    gmm_euclidean_threshold: float = 3.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
     gmm_scaled_normeuc_threshold: float = 1.5

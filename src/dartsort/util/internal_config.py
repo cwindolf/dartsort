@@ -489,7 +489,7 @@ class TemplateMergeConfig:
 
 
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
-ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
+ComponentDistanceMetric = Literal["euc", "cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
 KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp", "significance"]
 KmeansppSampling = Literal["d2", "significance"]
@@ -551,7 +551,7 @@ class RefinementConfig:
     kmeans_tries: int = 10
     kmeans_beta: float = 50.0
     kmeanspp_tries: int = 5
-    kmeanspp_stop_rms: float = 5.0
+    kmeanspp_stop_dist: float = 4.0
     kmeanspp_patience: int = 21
     kmeanspp_greedy_proposals: int = 1
     kmeanspp_neighb_overlap: float | None = None
@@ -1328,14 +1328,16 @@ def _clustering_cfg(
 def _refinement_cfg(
     cfg: "DeveloperConfig", sampling_cfg: FitSamplingConfig
 ) -> RefinementConfig:
-    if cfg.gmm_metric == "cosine":
+    if cfg.gmm_metric == "euc":
+        dist_thresh = cfg.gmm_euclidean_threshold
+    elif cfg.gmm_metric == "cosine":
         dist_thresh = cfg.gmm_cosine_threshold
     elif cfg.gmm_metric == "normeuc":
         dist_thresh = cfg.gmm_normeuc_threshold
     elif cfg.gmm_metric == "scaled_normeuc":
         dist_thresh = cfg.gmm_scaled_normeuc_threshold
     else:
-        raise ValueError(f"Unknown {cfg.gmm_metric=}")
+        panic(cfg.gmm_metric)
     sb = 1.0 + cfg.amplitude_scaling_boundary
     return RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
@@ -1361,7 +1363,7 @@ def _refinement_cfg(
         robust_strategy=cfg.robust_strategy,
         robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
         robust_fixed_power=cfg.robust_fixed_power,
-        kmeanspp_stop_rms=cfg.kmeanspp_stop_rms,
+        kmeanspp_stop_dist=cfg.kmeanspp_stop_dist,
         kmeanspp_tries=cfg.kmeanspp_tries,
         kmeanspp_patience=cfg.kmeanspp_patience,
         kmeanspp_greedy_proposals=cfg.kmeanspp_greedy_proposals,
