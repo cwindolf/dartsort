@@ -1,4 +1,5 @@
 import tempfile
+from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from typing import cast
@@ -11,8 +12,10 @@ from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
 from test_util import no_overlap_recording_sorting
 
 import dartsort
+from dartsort import ensure_path
 from dartsort.evaluate import config_grid, simkit, simlib
 from dartsort.evaluate.sim_template_tools import (
+    PointSource3ExpSimulator,
     get_template_simulator,
     singlechan_to_probe,
 )
@@ -35,6 +38,7 @@ from dartsort.util.internal_config import (
 )
 from dartsort.util.interpolation_util import FromFullProbeInterpolator
 from dartsort.util.motion import MotionInfo
+from dartsort.util.py_util import panic
 
 nearest_erp = InterpolationParams(method="nearest", extrap_method="clampna").normalize()
 thin_erp_20 = InterpolationParams(
@@ -406,33 +410,78 @@ def test_drifting_templates(tmp_path):
             assert temps8[1, 0, 6] == 2
 
 
+@dataclass(frozen=True, kw_only=True)
+class DriftingSimulation:
+    geom: np.ndarray
+    template_simulator: PointSource3ExpSimulator
+    sim: dict
+
+
+@pytest.fixture(scope="module")
+def drifting_simulations(pytestconfig, tmp_path_factory) -> dict[str, DriftingSimulation]:
+    coarse_geom = simlib.generate_geom(num_contact_per_column=12)
+    fine_geom = simlib.generate_geom(num_contact_per_column=24, ypitch=20, stagger=10)
+    settings = {
+        "zero": (coarse_geom, "zero"),
+        "white": (coarse_geom, "white"),
+        "fine": (fine_geom, "zero"),
+    }
+
+    simulations = {}
+    for name, (geom, noise_kind) in settings.items():
+        template_simulator = get_template_simulator(
+            n_units=8, geom=geom, common_reference=False, temporal_jitter=1, force_no_offset=True
+        )
+        assert isinstance(template_simulator, PointSource3ExpSimulator)
+        cache_key = f"dartsort/drifting_{name}"
+        p = pytestconfig.cache.get(cache_key, None)
+        if p is None or not ensure_path(p).exists():
+            p = tmp_path_factory.mktemp(f"drifting_{name}")
+            pytestconfig.cache.set(cache_key, str(p))
+        p = ensure_path(p)
+        sim = simkit.generate_simulation(
+            p / "sim",
+            p / "noise",
+            geom=geom,
+            template_simulator=template_simulator,
+            n_units=8,
+            duration_seconds=60.0,
+            noise_kind=noise_kind,
+            drift_speed=1.5,
+            drift_period=60.0,
+            temporal_jitter=1,
+            amplitude_jitter=0,
+            common_reference=False,
+            min_fr_hz=10.0,
+            max_fr_hz=15.0,
+            globally_refractory=True,
+            refractory_ms=4.5,
+        )
+        simulations[name] = DriftingSimulation(
+            geom=geom, template_simulator=template_simulator, sim=sim
+        )
+    return simulations
+
+
+@pytest.mark.parametrize("grid", ["subdivided", "rgeom", "fine_pitch"])
 @pytest.mark.parametrize("reduction", ["mean", "median"])
-def test_superres_templates(tmp_path, reduction):
-    geom = simlib.generate_geom(num_contact_per_column=12)
-    template_simulator = get_template_simulator(
-        n_units=8, geom=geom, common_reference=False, temporal_jitter=1, force_no_offset=True
-    )
-    sim = simkit.generate_simulation(
-        tmp_path / "sim",
-        tmp_path / "noise",
-        geom=geom,
-        template_simulator=template_simulator,
-        n_units=8,
-        duration_seconds=60.0,
-        noise_kind="zero",
-        drift_speed=1.5,
-        drift_period=60.0,
-        temporal_jitter=1,
-        amplitude_jitter=0,
-        common_reference=False,
-        min_fr_hz=10.0,
-        max_fr_hz=15.0,
-        globally_refractory=True,
-        refractory_ms=4.5,
-    )
+def test_superres_templates(drifting_simulations, reduction, grid):
+    ds = drifting_simulations["fine" if grid == "fine_pitch" else "zero"]
+    sim = ds.sim
+    template_simulator = ds.template_simulator
     motion = sim["motion"]
-    srgeom = drift_util.superres_registered_geometry(geom, motion.rgeom)
-    assert srgeom is not None
+    srgeom = drift_util.superres_registered_geometry(ds.geom, motion.rgeom)
+    if grid == "subdivided":
+        assert srgeom is not None
+        registered_geom = srgeom
+    elif grid == "rgeom":
+        assert srgeom is not None
+        registered_geom = motion.rgeom
+    elif grid == "fine_pitch":
+        assert srgeom is None
+        registered_geom = motion.rgeom
+    else:
+        panic(grid)
 
     def estimate(template_cfg, n_jobs):
         return templates.TemplateData.from_config(
@@ -445,67 +494,63 @@ def test_superres_templates(tmp_path, reduction):
             computation_cfg=dartsort.ComputationConfig.from_n_jobs(n_jobs),
         )
 
-    superres_cfg = TemplateConfig(reduction=reduction, superres=True)
+    superres_cfg = TemplateConfig(
+        reduction=reduction, superres=True, superres_subdivide=grid != "rgeom"
+    )
     td_sr = estimate(superres_cfg, 1)
-    td_sr_parallel = estimate(superres_cfg, 3)
     td_mean = estimate(TemplateConfig(reduction="mean"), 1)
-    np.testing.assert_array_equal(td_sr.registered_geom, srgeom)
-    np.testing.assert_array_equal(td_sr_parallel.registered_geom, srgeom)
+    np.testing.assert_array_equal(td_sr.registered_geom, registered_geom)
     np.testing.assert_array_equal(td_mean.registered_geom, motion.rgeom)
-    scale = np.abs(td_sr.templates).max()
-    np.testing.assert_allclose(td_sr_parallel.templates, td_sr.templates, atol=1e-4 * scale)
+    assert np.isfinite(td_sr.templates).all()
+    if grid == "subdivided":
+        td_sr_parallel = estimate(superres_cfg, 3)
+        np.testing.assert_array_equal(td_sr_parallel.registered_geom, srgeom)
+        scale = np.abs(td_sr.templates).max()
+        np.testing.assert_allclose(
+            td_sr_parallel.templates, td_sr.templates, atol=1e-4 * scale
+        )
 
-    # truth on srgeom, vs superres and vs the mean templates interpolated to srgeom
-    srgeom3 = np.zeros((len(srgeom), 3))
-    srgeom3[:, [0, 2]] = srgeom
+    # truth on the template grid, vs superres and vs the mean templates on that grid
+    geom3 = np.zeros((len(registered_geom), 3))
+    geom3[:, [0, 2]] = registered_geom
     truth = singlechan_to_probe(
         template_simulator.template_pos,
         template_simulator.template_alpha,
         template_simulator.singlechan_templates,
-        srgeom3,
+        geom3,
         decay_model=template_simulator.decay_model,
     )
-    rgeom_erp = FromFullProbeInterpolator(
-        motion=motion,
-        params=TemplateConfig().superres_interp_params,
-        device=torch.device("cpu"),
-    )
-    mean_on_srgeom = rgeom_erp.interp_to(
-        torch.asarray(srgeom, dtype=torch.float), torch.asarray(td_mean.templates)
-    ).numpy()
+    if grid == "subdivided":
+        rgeom_erp = FromFullProbeInterpolator(
+            motion=motion,
+            params=TemplateConfig().superres_interp_params,
+            device=torch.device("cpu"),
+        )
+        mean_on_grid = rgeom_erp.interp_to(
+            torch.asarray(srgeom, dtype=torch.float), torch.asarray(td_mean.templates)
+        ).numpy()
+    else:
+        mean_on_grid = td_mean.templates
     norm = np.linalg.norm(truth, axis=(1, 2))
     err_sr = np.linalg.norm(td_sr.templates - truth, axis=(1, 2)) / norm
-    err_mean = np.linalg.norm(mean_on_srgeom - truth, axis=(1, 2)) / norm
-    assert np.median(err_sr) < 0.75 * np.median(err_mean)
+    err_mean = np.linalg.norm(mean_on_grid - truth, axis=(1, 2)) / norm
+    diff_mean = np.linalg.norm(td_sr.templates - mean_on_grid, axis=(1, 2))
+    diff_mean /= np.linalg.norm(mean_on_grid, axis=(1, 2))
+    if grid == "subdivided":
+        assert np.median(err_sr) < 0.75 * np.median(err_mean)
+    else:
+        assert np.median(err_sr) < np.median(err_mean)
+        assert np.median(diff_mean) < 0.15
 
 
 @pytest.mark.parametrize("superres", [False, True])
-def test_huber_templates(tmp_path, superres):
-    geom = simlib.generate_geom(num_contact_per_column=12)
-    template_simulator = get_template_simulator(
-        n_units=8, geom=geom, common_reference=False, temporal_jitter=1, force_no_offset=True
-    )
-    sim = simkit.generate_simulation(
-        tmp_path / "sim",
-        tmp_path / "noise",
-        geom=geom,
-        template_simulator=template_simulator,
-        n_units=8,
-        duration_seconds=60.0,
-        noise_kind="white",
-        drift_speed=1.5,
-        drift_period=60.0,
-        temporal_jitter=1,
-        amplitude_jitter=0,
-        common_reference=False,
-        min_fr_hz=10.0,
-        max_fr_hz=15.0,
-        globally_refractory=True,
-        refractory_ms=4.5,
-    )
+def test_huber_templates(drifting_simulations, superres):
+    ds = drifting_simulations["white"]
+    sim = ds.sim
+    template_simulator = ds.template_simulator
     motion = sim["motion"]
     if superres:
-        registered_geom = drift_util.superres_registered_geometry(geom, motion.rgeom)
+        registered_geom = drift_util.superres_registered_geometry(ds.geom, motion.rgeom)
         assert registered_geom is not None
     else:
         registered_geom = motion.rgeom
