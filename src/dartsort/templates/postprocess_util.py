@@ -132,7 +132,6 @@ def estimate_template_library(
         )
     else:
         featurization_basis = None
-    del templates0
 
     _check_still_valid(sorting)
     gc.collect()
@@ -149,7 +148,9 @@ def estimate_template_library(
         tsvd=tsvd,
         whitener=whitener,
         featurization_basis=featurization_basis,
+        pilot_templates=templates0,
     )
+    del templates0
     gc.collect()
     torch.cuda.empty_cache()
 

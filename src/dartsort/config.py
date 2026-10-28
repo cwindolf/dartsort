@@ -321,9 +321,9 @@ class DeveloperConfig(DARTsortUserConfig):
     matching_cd_iter: int = 0
     matching_coarse_cd: bool = True
     postprocessing_merge_threshold: float = 0.05
-    template_spikes_per_unit: int = 500
-    template_reduction: Literal["mean", "median"] = "median"
-    template_superres: bool = False
+    template_spikes_per_unit: int = 1024
+    template_reduction: Literal["mean", "median", "huber"] = "huber"
+    template_superres: bool = True
     template_superres_shrinkage: float = 1e-6
     template_superres_smoothness: float = 1.0
     template_denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"

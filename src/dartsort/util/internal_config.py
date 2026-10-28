@@ -354,9 +354,9 @@ TemplateSVDMethod = Literal[
 class TemplateConfig:
     """Template waveform estimation parameters"""
 
-    spikes_per_unit: int = 500
+    spikes_per_unit: int = 1024
     with_raw_std_dev: bool = False
-    reduction: Literal["median", "mean"] = "median"
+    reduction: Literal["median", "mean", "huber"] = "median"
     algorithm: (
         Literal[
             "unitextract",
@@ -377,13 +377,15 @@ class TemplateConfig:
     min_count_at_shift: int = 25
     template_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
-    # templates on superres_registered_geometry() when it exists, with prior `reduction`
     superres: bool = False
+    superres_subdivide: bool = True
     superres_max_row_pitch_um: float = 21.0
     superres_fit_radius_um: float = 300.0
     superres_smoothness: float = 1.0
     superres_shrinkage: float = 1e-6
     superres_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
+    huber_quantile: float = 0.9
+    huber_radius_um: float = 75.0
 
     # low rank denoising?
     denoising_rank: int = 5
@@ -410,7 +412,14 @@ class TemplateConfig:
         return self.denoising_method in ("svd", "exp_weighted")
 
     def actual_algorithm(self) -> str:
-        if self.superres:
+        if self.reduction == "huber":
+            svd_align = self.svd_alignment_iterations and self.svd_alignment_ms
+            if self.denoising_method != "svd" or self.svd_method == "peeler" or svd_align:
+                raise ValueError(
+                    "Huber template reduction needs denoising_method='svd', a "
+                    "pre-fit svd_method, and no SVD alignment."
+                )
+        if self.superres or self.reduction == "huber":
             assert self.algorithm in ("peelreduce", "peelreduce_if_mean")
             return "peelreduce"
         if self.algorithm.endswith("_if_mean") and self.reduction == "mean":
@@ -481,7 +490,7 @@ class TemplateMergeConfig:
             template_cfg = self.template_cfg
         return replace(
             template_cfg,
-            superres=False,
+            superres_subdivide=False,
             denoising_method="svd",
             denoising_rank=self.svd_compression_rank,
             whitening=self.whitening,
@@ -969,7 +978,9 @@ default_subtraction_cfg = SubtractionConfig()
 default_thresholding_cfg = ThresholdingConfig()
 default_template_cfg = TemplateConfig()
 default_matching_template_cfg = TemplateConfig(
-    whitening=WhiteningConfig(strategy="prewhiten_postapply")
+    reduction="huber",
+    superres=True,
+    whitening=WhiteningConfig(strategy="prewhiten_postapply"),
 )
 default_clustering_cfg = ClusteringConfig()
 default_clustering_features_cfg = ClusteringFeaturesConfig()
@@ -985,7 +996,11 @@ default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 default_agglomerate_cfg = RefinementConfig(
     refinement_strategy="agglomerate",
     template_merge_cfg=TemplateMergeConfig(
-        merge_distance_threshold=0.6, linkage="complete"
+        merge_distance_threshold=0.6,
+        linkage="complete",
+        template_cfg=TemplateConfig(
+            reduction="huber", superres=True, superres_subdivide=False
+        ),
     ),
 )
 default_post_refinement_cfg = RefinementConfig(
@@ -1177,7 +1192,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         featurization_cfg=_featurization_cfg(cfg),
         initial_detection_cfg=initial_detection_cfg,
         peeler_sampling_cfg=_peeler_sampling_cfg(cfg),
-        template_cfg=template_cfg,
+        template_cfg=_matching_template_cfg(template_cfg),
         clustering_cfg=_clustering_cfg(cfg, clustering_sampling_cfg),
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=_initial_refinement_cfg(cfg, refinement_cfg),
@@ -1297,12 +1312,17 @@ def _template_cfg(
         whitening=whiten_cfg,
         template_interp_params=_interp_params(cfg.template_interp_kind),
         superres=cfg.template_superres,
+        superres_subdivide=False,
         superres_shrinkage=cfg.template_superres_shrinkage,
         superres_smoothness=cfg.template_superres_smoothness,
         superres_interp_params=_interp_params(cfg.matching_interp_kind),
         svd_alignment_iterations=cfg.svd_alignment_iterations,
         svd_alignment_ms=cfg.alignment_ms / 2,
     )
+
+
+def _matching_template_cfg(template_cfg: TemplateConfig) -> TemplateConfig:
+    return replace(template_cfg, superres_subdivide=True)
 
 
 def _clustering_cfg(

@@ -52,7 +52,9 @@ class UnitExtractTemplateData(TemplateData):
         whitener: Whitener | None = None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
+        pilot_templates: TemplateData | None = None,
     ) -> TemplateData:
+        del pilot_templates
         computation_cfg = ensure_computation_config(computation_cfg)
         assert whitener is None
         assert template_cfg.whitening.strategy == "none"

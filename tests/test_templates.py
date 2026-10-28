@@ -479,6 +479,75 @@ def test_superres_templates(tmp_path, reduction):
     assert np.median(err_sr) < 0.75 * np.median(err_mean)
 
 
+@pytest.mark.parametrize("superres", [False, True])
+def test_huber_templates(tmp_path, superres):
+    geom = simlib.generate_geom(num_contact_per_column=12)
+    template_simulator = get_template_simulator(
+        n_units=8, geom=geom, common_reference=False, temporal_jitter=1, force_no_offset=True
+    )
+    sim = simkit.generate_simulation(
+        tmp_path / "sim",
+        tmp_path / "noise",
+        geom=geom,
+        template_simulator=template_simulator,
+        n_units=8,
+        duration_seconds=60.0,
+        noise_kind="white",
+        drift_speed=1.5,
+        drift_period=60.0,
+        temporal_jitter=1,
+        amplitude_jitter=0,
+        common_reference=False,
+        min_fr_hz=10.0,
+        max_fr_hz=15.0,
+        globally_refractory=True,
+        refractory_ms=4.5,
+    )
+    motion = sim["motion"]
+    if superres:
+        registered_geom = drift_util.superres_registered_geometry(geom, motion.rgeom)
+        assert registered_geom is not None
+    else:
+        registered_geom = motion.rgeom
+
+    # unit 0 gets extra spikes, 25% of its count, from the unit farthest away
+    depths = template_simulator.template_pos[:, 2]  # ty: ignore[unresolved-attribute]
+    target = 0
+    source = int(np.argmax(np.abs(depths - depths[target])))
+    labels = sim["sorting"].labels.copy()
+    n_target = int((labels == target).sum())
+    moved = np.random.default_rng(0).choice(
+        np.flatnonzero(labels == source), size=n_target // 4, replace=False
+    )
+    labels[moved] = target
+    sorting = sim["sorting"].ephemeral_replace(labels=labels)
+
+    def estimate(reduction):
+        td = templates.TemplateData.from_config(
+            recording=sim["recording"],
+            sorting=sorting,
+            template_cfg=TemplateConfig(reduction=reduction, superres=superres),
+            motion=motion,
+            save_folder=None,
+            save_npz_name=None,
+        )
+        np.testing.assert_array_equal(td.registered_geom, registered_geom)
+        assert target in td.unit_ids
+        return td.templates[np.flatnonzero(td.unit_ids == target)[0]]
+
+    geom3 = np.zeros((len(registered_geom), 3))
+    geom3[:, [0, 2]] = registered_geom
+    truth = singlechan_to_probe(
+        template_simulator.template_pos[target : target + 1],  # ty: ignore[unresolved-attribute]
+        template_simulator.template_alpha[target : target + 1],  # ty: ignore[unresolved-attribute]
+        template_simulator.singlechan_templates[target : target + 1],  # ty: ignore[unresolved-attribute]
+        geom3,
+        decay_model=template_simulator.decay_model,  # ty: ignore[unresolved-attribute]
+    )[0]
+    err = {r: np.linalg.norm(estimate(r) - truth) / np.linalg.norm(truth) for r in ("mean", "huber")}
+    assert err["huber"] < err["mean"], err
+
+
 def test_main_object():
     probe = np.c_[np.zeros(7), np.arange(7).astype(float)]
     rec = np.zeros((11, 7))

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 from threading import local
 from typing import Literal, cast
@@ -5,6 +6,7 @@ from typing import Literal, cast
 import h5py
 import numpy as np
 import torch
+from scipy.stats import chi2
 
 from ..util.drift_util import bending_laplacian
 from ..util.internal_config import ComputationConfig, InterpolationParams
@@ -20,11 +22,26 @@ _my_name = "reduction_data"
 _worker_bufnames = ("count", "mean", "batch_xbar", "meansq", "batch_xsqbar")
 
 
-class TemplateWaveformReducer(BaseWaveformFeaturizer):
-    """Running mean or save-then-median template waveforms
+@dataclass(frozen=True, kw_only=True)
+class HuberParams:
+    """One-step Huber weights helper
 
-    Algorithm switches between on the fly Welford with no backing storage
-    or nanmedian over an h5 dataset. Final templates are gathered from my
+    If resid = x - pilot has dof d, weight is min(1, threshold(d) / |x - pilot|)
+    """
+
+    noise_variance: float
+    quantile: float
+    radius_um: float
+
+    def threshold(self, dof: np.ndarray | int) -> np.ndarray:
+        return np.sqrt(chi2.ppf(self.quantile, dof) * self.noise_variance)
+
+
+class TemplateWaveformReducer(BaseWaveformFeaturizer):
+    """Running mean, running Huber-weighted mean, or save-then-median template waveforms
+
+    Algorithm switches between on the fly Welford (possibly Huber-weighted) with no
+    backing storage or nanmedian over an h5 dataset. Final templates are gathered from
     `.reduction_results()` method.
 
     Some reduction logic could break out to a base class if there's ever
@@ -44,9 +61,12 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         n_units: int,
         feature_dim: int,
         output_channels: int,
-        reduction: Literal["mean", "median"],
+        reduction: Literal["mean", "median", "huber"],
+        huber: HuberParams | None = None,
+        pilot: torch.Tensor | None = None,
         dtype=torch.float32,
     ):
+        assert (reduction == "huber") == (huber is not None) == (pilot is not None)
         self.online = reduction != "median"
         if name_prefix is None:
             pfx = ""
@@ -63,6 +83,14 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         self.dtype = [] if self.online else [dtype]
         self.with_raw_std_dev = with_raw_std_dev
         self._initialize((self.feature_dim, output_channels))
+        if huber is None:
+            self.register_buffer_or_none("pilot", None)
+            self.huber_threshold = None
+        else:
+            assert pilot is not None
+            assert pilot.shape == (n_units, feature_dim, output_channels)
+            self.register_buffer("pilot", pilot.to(torch.float))
+            self.huber_threshold = float(huber.threshold(feature_dim))
 
     def transform(self, waveforms: torch.Tensor, **spike_data: torch.Tensor):
         assert waveforms.shape[1] == self.feature_dim
@@ -89,23 +117,15 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         else:
             meansq = batch_xsqbar = None
 
-        # sum weight per unit
-        # TODO this isn't hit by any code. but it could be if weighting was a thing.
-        if "weights" in spike_data:
-            weights = spike_data["weights"]
-        else:
-            weights = count.new_ones((1,)).broadcast_to(labels.shape)
-        batch_w = count.new_zeros(self.n_units)
-        batch_w.scatter_add_(index=labels, dim=0, src=weights)
+        # sum weight per unit and channel
+        weights = self._spike_channel_weights(waveforms, labels, spike_data.get("weights"))
+        batch_w = count.new_zeros(count.shape)
+        batch_w.index_add_(0, labels, weights)
 
-        # per-spike weight for averaging inside the batch
-        spike_w = weights / batch_w[labels]
+        # per-spike/channel weight for averaging inside the batch
+        spike_w = (weights / batch_w[labels]).nan_to_num_()
         x = waveforms.nan_to_num()
-        wx = x * spike_w[:, None, None]
-
-        # channelwise weights for this batch
-        nz = waveforms[0, 0].isfinite().to(batch_w)
-        batch_w = batch_w[:, None] * nz
+        wx = x * spike_w[:, None, :]
 
         # Welford weights
         count += batch_w
@@ -123,6 +143,18 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
             meansq += batch_xsqbar.sub_(meansq).mul_(batch_w[:, None])
 
         return {}
+
+    def _spike_channel_weights(
+        self, waveforms: torch.Tensor, labels: torch.Tensor, weights: torch.Tensor | None
+    ) -> torch.Tensor:
+        out = waveforms[:, 0, :].isfinite().to(waveforms.dtype)
+        if weights is not None:
+            out.mul_(weights[:, None])
+        if self.huber_threshold is not None:
+            resid = waveforms - self.b.pilot[labels]
+            huber_w = resid.square_().sum(dim=1).sqrt_().reciprocal_().mul_(self.huber_threshold)
+            out.mul_(huber_w.clamp_(max=1.0).nan_to_num_(nan=1.0))
+        return out
 
     def reduction_results(
         self,
@@ -227,6 +259,8 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         fit_radius_um: float,
         smoothness: float,
         shrinkage: float,
+        huber: HuberParams | None = None,
+        pilot: torch.Tensor | None = None,
         motion: MotionInfo | None = None,
     ):
         super().__init__(geom=geom, channel_index=channel_index, name=[])
@@ -246,8 +280,16 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         )
         self.srgeom_erp: FromFullProbeInterpolator | None = None
         self.rgeom_erp: FromFullProbeInterpolator | None = None
+        self._chunk_weights: list[dict[float, torch.Tensor]] = [{}]
         self._chunk_counts: list[dict[float, torch.Tensor]] = [{}]
         self._kernel_cache: list[tuple[float, torch.Tensor] | None] = [None]
+        self._rgeom_kernel_cache: list[tuple[float, torch.Tensor] | None] = [None]
+        assert (huber is None) == (pilot is None)
+        self.huber = huber
+        if pilot is not None:
+            assert pilot.shape[:2] == (n_units, feature_dim)
+            pilot = pilot.to(torch.float)
+        self.register_buffer_or_none("pilot", pilot)
 
     def needs_precompute(self):
         return self.srgeom_erp is None
@@ -272,8 +314,10 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         for name in ("count", "mean"):
             buf = getattr(self.b, name)
             buf.resize_((n_workers, *buf.shape[1:])).zero_()
+        self._chunk_weights = [{} for _ in range(n_workers)]
         self._chunk_counts = [{} for _ in range(n_workers)]
         self._kernel_cache = [None] * n_workers
+        self._rgeom_kernel_cache = [None] * n_workers
 
     def transform(self, waveforms: torch.Tensor, **spike_data: torch.Tensor):
         if not waveforms.numel():
@@ -285,29 +329,63 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         t_s = float(spike_data["chunk_center_s"])
         kernel = self._kernel_at_time(rank, t_s)
 
-        # this batch's mean of erp(t)^T x per unit
+        # this batch's weighted mean of erp(t)^T x per unit
         units, inverse, unit_counts = torch.unique(
             spike_data["labels"].long(), return_inverse=True, return_counts=True
         )
         unit_counts = unit_counts.to(waveforms.dtype)
+        weights = self._spike_weights(rank, t_s, waveforms, units, inverse)
+        unit_weights = waveforms.new_zeros(units.numel()).index_add_(0, inverse, weights)
         batch_mean = waveforms.new_zeros((units.numel(), *waveforms.shape[1:]))
-        batch_mean.index_add_(0, inverse, waveforms)
-        batch_mean = batch_mean.div_(unit_counts[:, None, None]) @ kernel
+        batch_mean.index_add_(0, inverse, waveforms * weights[:, None, None])
+        batch_mean = batch_mean.div_(unit_weights[:, None, None]) @ kernel
 
         # Welford update
-        total = self.b.count[rank, units] + unit_counts[:, None]
+        total = self.b.count[rank, units] + unit_weights[:, None]
         self.b.count[rank, units] = total
-        weight = (unit_counts[:, None] / total)[:, :, None]
+        weight = (unit_weights[:, None] / total)[:, :, None]
         mean = self.b.mean[rank, units]
         self.b.mean[rank, units] = mean.add_((batch_mean - mean).mul_(weight))
 
-        chunk_counts = self._chunk_counts[rank].get(t_s)
-        if chunk_counts is None:
-            chunk_counts = waveforms.new_zeros(self.n_units)
-            self._chunk_counts[rank][t_s] = chunk_counts
-        chunk_counts[units] += unit_counts
+        for per_chunk, values in (
+            (self._chunk_weights[rank], unit_weights),
+            (self._chunk_counts[rank], unit_counts),
+        ):
+            if t_s not in per_chunk:
+                per_chunk[t_s] = waveforms.new_zeros(self.n_units)
+            per_chunk[t_s][units] += values
 
         return {}
+
+    def _spike_weights(
+        self,
+        rank: int,
+        t_s: float,
+        waveforms: torch.Tensor,
+        units: torch.Tensor,
+        inverse: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.huber is None:
+            return waveforms.new_ones(waveforms.shape[0])
+        rgeom_kernel = self._rgeom_kernel_at_time(rank, t_s)
+        pilot = self.b.pilot[units] @ rgeom_kernel.T
+        main = pilot.square().sum(dim=1).nan_to_num_(nan=-1.0).argmax(dim=1)
+        near = torch.cdist(self.b.geom[main], self.b.geom) <= self.huber.radius_um
+        resid = (waveforms - pilot[inverse]).square_().sum(dim=1)
+        energy = resid.mul_(near[inverse]).sum(dim=1)
+        dof = near.sum(dim=1).numpy(force=True) * self.feature_dim
+        threshold = torch.asarray(self.huber.threshold(dof), device=waveforms.device, dtype=waveforms.dtype)
+        weights = threshold[inverse] / energy.sqrt_()
+        return weights.clamp_(max=1.0).nan_to_num_(nan=1.0)
+
+    def _rgeom_kernel_at_time(self, rank: int, t_s: float) -> torch.Tensor:
+        cached = self._rgeom_kernel_cache[rank]
+        if cached is not None and cached[0] == t_s:
+            return cached[1]
+        assert self.rgeom_erp is not None
+        kernel = self.rgeom_erp.interpolation_kernel_at_time(t_s)
+        self._rgeom_kernel_cache[rank] = (t_s, kernel)
+        return kernel
 
     def _kernel_at_time(self, rank: int, t_s: float) -> torch.Tensor:
         cached = self._kernel_cache[rank]
@@ -327,11 +405,13 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Solve for each unit's local template (fit_radius_um) on srgeom
 
-        Minimizes sum_i ||x_i - A(t_i) F||^2 + n shrinkage ||F - F0||^2 + smoothness ||L F||^2
+        Minimizes sum_i w_i ||x_i - A(t_i) F||^2 + (sum_i w_i) shrinkage ||F - F0||^2 + smoothness ||L F||^2,
+        with w_i Huber's weights if huber, else 1s
         """
         assert self.srgeom_erp is not None and self.rgeom_erp is not None
         self.to(device)
         count, mean, _ = _welford_merge(self.b.count, self.b.mean, None)
+        chunk_weights = _merge_chunk_counts(self._chunk_weights, device)
         chunk_counts = _merge_chunk_counts(self._chunk_counts, device)
 
         # prior on srgeom, and fit nodes
@@ -355,16 +435,16 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         gram = prior.new_zeros((self.n_units, fit_nodes.shape[1], fit_nodes.shape[1]))
         cross = prior.new_zeros((self.n_units, fit_nodes.shape[1], self.feature_dim))
         node_counts = prior.new_zeros((self.n_units, n_nodes))
-        for t_s in sorted(chunk_counts):
-            (units,) = chunk_counts[t_s].nonzero(as_tuple=True)
-            n = chunk_counts[t_s][units][:, None, None]
+        for t_s in sorted(chunk_weights):
+            (units,) = chunk_weights[t_s].nonzero(as_tuple=True)
+            n = chunk_weights[t_s][units][:, None, None]
             kernel = self.srgeom_erp.interpolation_kernel_at_time(t_s)
             kernel_fit = kernel[:, fit_nodes[units]].permute(1, 0, 2)
             kernel_fit.mul_(valid[units][:, None, :])
             gram[units] += n * torch.bmm(kernel_fit.mT, kernel_fit)
             model_out = prior_out[units] @ kernel.T
             cross[units] += n * torch.bmm(kernel_fit.mT, model_out.mT)
-            node_counts[units] += n[:, :, 0] * kernel.ne(0).any(dim=0)
+            node_counts[units] += chunk_counts[t_s][units][:, None] * kernel.ne(0).any(dim=0)
             del kernel, kernel_fit, model_out
 
         # solve in batches of units

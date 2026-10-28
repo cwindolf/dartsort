@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import ClassVar
 
+import h5py
 import numpy as np
 import torch
 from sklearn.decomposition import PCA, TruncatedSVD
@@ -11,9 +12,11 @@ from spikeinterface.core import BaseRecording
 
 from ..templates.get_templates import denoising_weights, fit_tsvd
 from ..templates.templates import TemplateData
+from ..templates.templib import quick_mean_templates
 from ..transform.interp import WaveformInterpolator
 from ..transform.pipeline import WaveformPipeline
 from ..transform.reduction import (
+    HuberParams,
     SuperresTemplateWaveformReducer,
     TemplateWaveformReducer,
 )
@@ -61,8 +64,18 @@ class ReductionTemplateData(TemplateData):
         whitener: Whitener | None = None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
+        pilot_templates: TemplateData | None = None,
     ) -> TemplateData:
         computation_cfg = ensure_computation_config(computation_cfg)
+        if template_cfg.reduction == "huber" and pilot_templates is None:
+            pilot_templates = quick_mean_templates(
+                recording=recording,
+                sorting=sorting,
+                waveform_cfg=waveform_cfg,
+                computation_cfg=computation_cfg,
+                motion=motion,
+            )
+
         # subsample sorting
         sorting = subsample_by_count_and_valid_time(
             sorting,
@@ -73,6 +86,11 @@ class ReductionTemplateData(TemplateData):
         sorting = sorting.ensure_no_missing()
 
         # build engine object
+        if template_cfg.reduction == "huber":
+            assert pilot_templates is not None
+            pilot = units_pilot(pilot_templates, sorting.unit_ids, motion)
+        else:
+            pilot = None
         sorting_flat = sorting.flatten()
         p = TemplateReduction.from_config(
             recording=recording,
@@ -83,11 +101,12 @@ class ReductionTemplateData(TemplateData):
             computation_cfg=computation_cfg,
             whitener=whitener,
             tsvd=tsvd,
+            pilot_templates=pilot,
         )
 
         # TODO: file not always needed
         *_, is_local = pool_from_cfg(computation_cfg, check_local=True)
-        online = template_cfg.reduction == "mean" or template_cfg.superres
+        online = template_cfg.reduction != "median" or template_cfg.superres
         if online and not is_local:
             # running means with process workers: fall back to single job for now
             computation_cfg = ComputationConfig(
@@ -198,6 +217,7 @@ class TemplateReduction(GrabAndFeaturize):
         template_cfg: TemplateConfig,
         computation_cfg: ComputationConfig,
         whitener: Whitener | None = None,
+        pilot_templates: np.ndarray | None = None,
     ):
         # geom processing
         rgeom = torch.asarray(motion.rgeom)
@@ -265,6 +285,10 @@ class TemplateReduction(GrabAndFeaturize):
         else:
             tsvd = None
 
+        huber = pilot = None
+        if template_cfg.reduction == "huber":
+            huber, pilot = huber_setup(template_cfg, tsvd, pilot_templates, sorting, do_align)
+
         # build a featurization pipeline which handles interpolation and
         # raw/svd waveform statistics
         transformers = []
@@ -327,6 +351,8 @@ class TemplateReduction(GrabAndFeaturize):
                     fit_radius_um=template_cfg.superres_fit_radius_um,
                     smoothness=template_cfg.superres_smoothness,
                     shrinkage=template_cfg.superres_shrinkage,
+                    huber=huber,
+                    pilot=pilot,
                 )
             )
         if interp_late:
@@ -349,6 +375,8 @@ class TemplateReduction(GrabAndFeaturize):
                 feature_dim=rank,
                 output_channels=len(rgeom),
                 reduction=template_cfg.reduction,
+                huber=huber,
+                pilot=pilot,
             )
             transformers.append(svd_reduce)
 
@@ -492,9 +520,74 @@ def template_srgeom(
         return None
     if not motion.drifting or template_cfg.denoising_method != "svd":
         return None
-    return superres_registered_geometry(
+    if not template_cfg.superres_subdivide:
+        return motion.rgeom
+    srgeom = superres_registered_geometry(
         motion.geom, motion.rgeom, template_cfg.superres_max_row_pitch_um
     )
+    if srgeom is None:
+        return motion.rgeom
+    return srgeom
+
+
+def units_pilot(
+    pilot_templates: TemplateData, unit_ids: np.ndarray, motion: MotionInfo
+) -> np.ndarray:
+    assert pilot_templates.registered_geom is not None
+    assert np.array_equal(pilot_templates.registered_geom, motion.rgeom)
+    templates = pilot_templates.templates
+    row_of = {u: i for i, u in enumerate(pilot_templates.unit_ids)}
+    pilot = np.full((len(unit_ids), *templates.shape[1:]), np.nan, dtype=np.float32)
+    for j, u in enumerate(unit_ids):
+        if u in row_of:
+            pilot[j] = templates[row_of[u]]
+    return pilot
+
+
+def huber_setup(
+    template_cfg: TemplateConfig,
+    tsvd: FullProbeTemporalPCAEmbedder | None,
+    pilot_templates: np.ndarray | None,
+    sorting: DARTsortSorting,
+    do_align: bool,
+) -> tuple[HuberParams, torch.Tensor]:
+    assert pilot_templates is not None
+    assert template_cfg.denoising_method == "svd"
+    assert tsvd is not None and not tsvd.needs_fit()
+    assert not do_align
+    assert pilot_templates.shape[0] == sorting.n_units
+    pilot = tsvd.force_embed(torch.asarray(pilot_templates, dtype=torch.float))
+
+    noise_variance = basis_noise_variance(sorting, tsvd)
+    if noise_variance is None:
+        logger.warning("No residual for Huber noise variance, using 1.")
+        noise_variance = 1.0
+    huber = HuberParams(
+        noise_variance=noise_variance,
+        quantile=template_cfg.huber_quantile,
+        radius_um=template_cfg.huber_radius_um,
+    )
+    return huber, pilot
+
+
+def basis_noise_variance(
+    sorting: DARTsortSorting,
+    tsvd: FullProbeTemporalPCAEmbedder,
+    residual_dataset_name: str = "residual",
+    max_snippets: int = 2048,
+) -> float | None:
+    """Mean square of residual tsvd"""
+    if sorting.parent_h5_path is None:
+        return None
+    with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+        if residual_dataset_name not in h5:
+            return None
+        snippets = h5[residual_dataset_name][:max_snippets]
+    snippets = torch.asarray(snippets, dtype=torch.float)
+    if not snippets.shape[0] or snippets.shape[1] != tsvd.b.components.shape[1]:
+        return None
+    coefficients = tsvd.force_embed(snippets)
+    return float(coefficients.square().nanmean())
 
 
 def _handle_internal_pad(
