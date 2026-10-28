@@ -10,6 +10,7 @@ from .util.internal_config import (
     KmeansppSampling,
     KmeansppSelection,
     KmeansppStopping,
+    KmeansppStrategy,
     MixtureStep,
     MotionBatchingMode,
     PreprocessingStrategy,
@@ -384,6 +385,7 @@ class DeveloperConfig(DARTsortUserConfig):
     kmeanspp_selection: KmeansppSelection = "marginal"
     kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
     kmeanspp_sampling: KmeansppSampling = "d2"
+    kmeanspp_strategy: KmeansppStrategy = "global"
     kmeanspp_alpha: Annotated[float, Field(gt=0)] = 2.0
     kmeanspp_z0: float = 3.0
 

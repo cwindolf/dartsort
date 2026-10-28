@@ -502,6 +502,23 @@ ComponentDistanceMetric = Literal["euc", "cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
 KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp", "significance"]
 KmeansppSampling = Literal["d2", "significance"]
+KmeansppStrategy = Literal["global", "stitch"]
+
+
+@cfg_dataclass
+class KmeansppConfig:
+    tries: int = 5
+    stop_dist: float = 4.0
+    patience: int = 21
+    greedy_proposals: int = 1
+    neighb_overlap: float | None = None
+    selection: KmeansppSelection = "marginal"
+    stopping: KmeansppStopping = "dpmeanspp"
+    sampling: KmeansppSampling = "d2"
+    strategy: KmeansppStrategy = "global"
+    alpha: float = 2.0
+    z0: float = 3.0
+    max_components_per_channel: int = 5
 
 
 @cfg_dataclass
@@ -559,16 +576,7 @@ class RefinementConfig:
     single_split_k: int = 3
     kmeans_tries: int = 10
     kmeans_beta: float = 50.0
-    kmeanspp_tries: int = 5
-    kmeanspp_stop_dist: float = 4.0
-    kmeanspp_patience: int = 21
-    kmeanspp_greedy_proposals: int = 1
-    kmeanspp_neighb_overlap: float | None = None
-    kmeanspp_selection: KmeansppSelection = "marginal"
-    kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
-    kmeanspp_sampling: KmeansppSampling = "d2"
-    kmeanspp_alpha: float = 2.0
-    kmeanspp_z0: float = 3.0
+    kmeanspp_cfg: KmeansppConfig = KmeansppConfig()
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
@@ -1383,16 +1391,19 @@ def _refinement_cfg(
         robust_strategy=cfg.robust_strategy,
         robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
         robust_fixed_power=cfg.robust_fixed_power,
-        kmeanspp_stop_dist=cfg.kmeanspp_stop_dist,
-        kmeanspp_tries=cfg.kmeanspp_tries,
-        kmeanspp_patience=cfg.kmeanspp_patience,
-        kmeanspp_greedy_proposals=cfg.kmeanspp_greedy_proposals,
-        kmeanspp_neighb_overlap=cfg.kmeanspp_neighb_overlap,
-        kmeanspp_selection=cfg.kmeanspp_selection,
-        kmeanspp_stopping=cfg.kmeanspp_stopping,
-        kmeanspp_sampling=cfg.kmeanspp_sampling,
-        kmeanspp_alpha=cfg.kmeanspp_alpha,
-        kmeanspp_z0=cfg.kmeanspp_z0,
+        kmeanspp_cfg=KmeansppConfig(
+            tries=cfg.kmeanspp_tries,
+            stop_dist=cfg.kmeanspp_stop_dist,
+            patience=cfg.kmeanspp_patience,
+            greedy_proposals=cfg.kmeanspp_greedy_proposals,
+            neighb_overlap=cfg.kmeanspp_neighb_overlap,
+            selection=cfg.kmeanspp_selection,
+            stopping=cfg.kmeanspp_stopping,
+            sampling=cfg.kmeanspp_sampling,
+            strategy=cfg.kmeanspp_strategy,
+            alpha=cfg.kmeanspp_alpha,
+            z0=cfg.kmeanspp_z0,
+        ),
         train_batch_size=cfg.gmm_batch_size,
         eval_batch_size=cfg.gmm_batch_size,
         robust_df=cfg.robust_df,

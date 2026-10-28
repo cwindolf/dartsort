@@ -65,9 +65,8 @@ from ..util.internal_config import (
     ComponentDistanceMetric,
     ComputationConfig,
     DARTsortInternalConfig,
+    KmeansppConfig,
     KmeansppSampling,
-    KmeansppSelection,
-    KmeansppStopping,
     RefinementConfig,
 )
 from ..util.interpolation_util import (
@@ -863,7 +862,7 @@ class TMMParams:
             single_split_k=refinement_cfg.single_split_k,
             kmeans_tries=refinement_cfg.kmeans_tries,
             kmeans_beta=refinement_cfg.kmeans_beta,
-            kmeanspp_tries=refinement_cfg.kmeanspp_tries,
+            kmeanspp_tries=refinement_cfg.kmeanspp_cfg.tries,
             min_channel_count=refinement_cfg.channels_count_min,
             em_iters=refinement_cfg.n_em_iters,
             criterion_em_iters=refinement_cfg.criterion_em_iters,
@@ -4446,20 +4445,11 @@ def get_truncated_datasets(
             train_ixs=train_ixs,
             train_neighbs=train_neighbs,
             batch_size=refinement_cfg.eval_batch_size,
-            n_tries=refinement_cfg.kmeanspp_tries,
+            seed=rg,
             metric=refinement_cfg.distance_metric,
             scale_dist_args=refinement_cfg.scale_dist_args,
-            stop_dist=refinement_cfg.kmeanspp_stop_dist,
             min_count=refinement_cfg.min_count,
-            patience=refinement_cfg.kmeanspp_patience,
-            greedy_proposals=refinement_cfg.kmeanspp_greedy_proposals,
-            neighb_overlap=refinement_cfg.kmeanspp_neighb_overlap,
-            selection=refinement_cfg.kmeanspp_selection,
-            stopping=refinement_cfg.kmeanspp_stopping,
-            sampling=refinement_cfg.kmeanspp_sampling,
-            alpha=refinement_cfg.kmeanspp_alpha,
-            z0=refinement_cfg.kmeanspp_z0,
-            seed=rg,
+            cfg=refinement_cfg.kmeanspp_cfg,
         )
         sorting = sorting.ephemeral_replace(
             labels=kmeanspp_res.full_labels.numpy(force=True)
@@ -4776,6 +4766,19 @@ def instantiate_and_bootstrap_tmm(
 
     if refinement_cfg.initialize_at_rank_0 and refinement_cfg.signal_rank > 0:
         tmm.em(train_data)
+        if save_kwargs is not None:
+            assert full_data is not None
+            full_scores = tmm.soft_assign(
+                data=full_data, full_proposal_view=True, needs_bootstrap=False
+            )
+            ds_save_intermediate_labels(
+                step_sorting=sorting.ephemeral_replace(
+                    labels=labels_from_scores(full_scores, remove_noise=True)
+                ),
+                **save_kwargs,
+                step_name="tmm000brank0em",
+            )
+            del full_scores
         scores = tmm.soft_assign(
             data=train_data,
             full_proposal_view=True,
@@ -4826,32 +4829,23 @@ def truncated_kmeanspp(
     train_ixs: Tensor | slice,
     train_neighbs: SpikeNeighborhoods,
     batch_size: int,
-    n_tries: int,
     seed: np.random.Generator | int,
     metric: ComponentDistanceMetric,
     scale_dist_args: tuple[float, float, float],
-    stop_dist: float,
-    min_count: int = 5,
-    patience: int = 21,
-    greedy_proposals: int = 1,
-    neighb_overlap: float | None = None,
-    selection: KmeansppSelection = "phi",
-    stopping: KmeansppStopping = "patience",
-    sampling: KmeansppSampling = "d2",
-    alpha: float = 2.0,
-    z0: float = 3.0,
-    max_components_per_channel: int = 5,
+    min_count: int,
+    cfg: KmeansppConfig,
 ) -> TruncatedKmeansppResult:
     """Neighborhood-sparsity-aware kmeans++"""
     if metric == "euc":
         pass
     elif metric == "cosine" or metric == "normeuc" or metric == "scaled_normeuc":
-        assert sampling == "d2" and stopping != "significance"
+        assert cfg.sampling == "d2" and cfg.stopping != "significance"
     else:
         panic(metric)
     scale_std, scale_min, scale_max = scale_dist_args
     base_rg = np.random.default_rng(seed)
-    max_k = min(train_x.shape[0], max_components_per_channel * neighb_cov.n_channels)
+    max_components = cfg.max_components_per_channel * neighb_cov.n_channels
+    max_k = min(train_x.shape[0], max_components)
     feat_rank = neighb_cov.feat_rank
     n_channels = neighb_cov.n_channels
     neighb_chans = neighborhoods.b.neighborhoods
@@ -4870,66 +4864,47 @@ def truncated_kmeanspp(
 
     neighb_rel_inds = _neighb_relative_index(neighb_chans, n_channels)
     obs = (neighb_rel_inds < max_nc_obs).to(whitenedx)
-    if neighb_overlap is None:
+    if cfg.neighb_overlap is None:
         neighb_adj = neighb_cov.b.neighb_adj
     else:
-        neighb_adj = neighborhoods.adjacency(neighb_overlap).to(whitenedx.device)
+        neighb_adj = neighborhoods.adjacency(cfg.neighb_overlap).to(whitenedx.device)
     visible = torch.logical_and(neighb_adj > 0, obs @ obs.T > 0)
     del obs
 
-    centroid_ixs: Tensor | None = None
-    best_score = torch.inf
-    best_phi = torch.inf
-    centroid_cost = min_count * stop_dist**2 / whitenedx.shape[0]
-    if logger.isEnabledFor(DARTSORTDEBUG):
-        pbar = progrange(n_tries, desc="kmeans++ tries")
-    else:
-        pbar = None
-    for _ in range(n_tries) if pbar is None else pbar:
-        try_ixs, phi = _truncated_kmeanspp_inner(
+    train_neighb_ids = train_neighbs.b.neighborhood_ids
+    if cfg.strategy == "global":
+        centroid_ixs = _kmeanspp_best_of_tries(
             X=whitenedx,
-            Xneighbixs=train_neighbs.b.neighborhood_ids,
+            Xneighbixs=train_neighb_ids,
+            base_rg=base_rg,
+            max_k=max_k,
+            cfg=cfg,
             neighborhoods=neighb_chans,
             neighb_rel_inds=neighb_rel_inds,
             visible=visible,
-            base_rg=base_rg,
-            max_k=max_k,
-            stop_dist=stop_dist,
-            min_count=min_count,
-            patience=patience,
-            greedy_proposals=greedy_proposals,
-            stopping=stopping,
             feat_rank=feat_rank,
             metric=metric,
             scale_dist_args=scale_dist_args,
-            sampling=sampling,
-            alpha=alpha,
-            z0=z0,
+            min_count=min_count,
         )
-        if selection == "phi":
-            score = phi
-        elif selection == "marginal":
-            score = phi + centroid_cost * try_ixs.shape[0]
-        else:
-            panic(selection)
-        logger.dartsortdebug(
-            f"kmeans++ try: k={try_ixs.shape[0]} phi={phi:.5f} score={score:.5f}"
+    elif cfg.strategy == "stitch":
+        centroid_ixs = _kmeanspp_stitch(
+            X=whitenedx,
+            Xneighbixs=train_neighb_ids,
+            base_rg=base_rg,
+            max_k=max_components,
+            cfg=cfg,
+            neighborhoods=neighb_chans,
+            neighb_rel_inds=neighb_rel_inds,
+            visible=visible,
+            feat_rank=feat_rank,
+            metric=metric,
+            scale_dist_args=scale_dist_args,
+            min_count=min_count,
         )
-        if centroid_ixs is None or score < best_score:
-            if pbar is not None:
-                pbar.set_description(
-                    f"best: k={try_ixs.shape[0]} phi={phi:.4f} {selection}={score:.4f}"
-                )
-            centroid_ixs = try_ixs
-            best_score = score
-            best_phi = phi
-    assert centroid_ixs is not None
+    else:
+        panic(cfg.strategy)
     n_centroids = centroid_ixs.shape[0]
-    logger.dartsortdebug(
-        f"kmeans++: {n_centroids} centroids at {metric} dist={math.sqrt(best_phi):0.3f}, "
-        f"best of {n_tries} by {selection} (centroid cost {centroid_cost:0.3g} "
-        f"over {whitenedx.shape[0]} train spikes)."
-    )
 
     # in batches, label each x by its best centroid
     device = whitenedx.device
@@ -5006,25 +4981,139 @@ def truncated_kmeanspp(
     )
 
 
-def _truncated_kmeanspp_inner(
+def _kmeanspp_best_of_tries(
+    *,
     X: Tensor,
     Xneighbixs: Tensor,
+    base_rg: np.random.Generator,
+    max_k: int,
+    cfg: KmeansppConfig,
     neighborhoods: Tensor,
     neighb_rel_inds: Tensor,
     visible: Tensor,
-    base_rg: np.random.Generator,
-    max_k: int,
-    stop_dist: float,
-    min_count: float,
-    patience: int,
-    greedy_proposals: int,
-    stopping: KmeansppStopping,
     feat_rank: int,
     metric: ComponentDistanceMetric,
     scale_dist_args: tuple[float, float, float],
-    sampling: KmeansppSampling = "d2",
-    alpha: float = 2.0,
-    z0: float = 3.0,
+    min_count: int,
+    first_neighb: int | None = None,
+) -> Tensor:
+    centroid_ixs: Tensor | None = None
+    best_score = torch.inf
+    best_phi = torch.inf
+    centroid_cost = min_count * cfg.stop_dist**2 / X.shape[0]
+    if logger.isEnabledFor(DARTSORTDEBUG):
+        pbar = progrange(cfg.tries, desc="kmeans++ tries")
+    else:
+        pbar = None
+    for _ in range(cfg.tries) if pbar is None else pbar:
+        try_ixs, phi = _truncated_kmeanspp_inner(
+            X=X,
+            Xneighbixs=Xneighbixs,
+            base_rg=base_rg,
+            max_k=max_k,
+            cfg=cfg,
+            neighborhoods=neighborhoods,
+            neighb_rel_inds=neighb_rel_inds,
+            visible=visible,
+            feat_rank=feat_rank,
+            metric=metric,
+            scale_dist_args=scale_dist_args,
+            min_count=min_count,
+            first_neighb=first_neighb,
+        )
+        if cfg.selection == "phi":
+            score = phi
+        elif cfg.selection == "marginal":
+            score = phi + centroid_cost * try_ixs.shape[0]
+        else:
+            panic(cfg.selection)
+        logger.dartsortdebug(
+            f"kmeans++ try: k={try_ixs.shape[0]} phi={phi:.5f} score={score:.5f}"
+        )
+        if centroid_ixs is None or score < best_score:
+            if pbar is not None:
+                pbar.set_description(
+                    f"best: k={try_ixs.shape[0]} phi={phi:.4f} {cfg.selection}={score:.4f}"
+                )
+            centroid_ixs = try_ixs
+            best_score = score
+            best_phi = phi
+    assert centroid_ixs is not None
+    logger.dartsortdebug(
+        f"kmeans++: {centroid_ixs.shape[0]} centroids at dist={math.sqrt(best_phi):0.3f}, "
+        f"best of {cfg.tries} by {cfg.selection} (centroid cost {centroid_cost:0.3g} "
+        f"over {X.shape[0]} train spikes)."
+    )
+    return centroid_ixs
+
+
+def _kmeanspp_stitch(
+    *,
+    X: Tensor,
+    Xneighbixs: Tensor,
+    base_rg: np.random.Generator,
+    max_k: int,
+    cfg: KmeansppConfig,
+    neighborhoods: Tensor,
+    neighb_rel_inds: Tensor,
+    visible: Tensor,
+    feat_rank: int,
+    metric: ComponentDistanceMetric,
+    scale_dist_args: tuple[float, float, float],
+    min_count: int,
+) -> Tensor:
+    n_neighb = visible.shape[0]
+    order, indptr, counts = sort_to_csr(Xneighbixs, n_neighb)
+    (present,) = (counts > 0).nonzero(as_tuple=True)
+    window_rgs = base_rg.spawn(present.numel())
+    accepted = []
+    for nj, rg in zip(present.tolist(), window_rgs, strict=True):
+        (window_neighbs,) = visible[nj].nonzero(as_tuple=True)
+        window = csr_members_ordered(order, indptr, counts, window_neighbs)
+        window_ixs = _kmeanspp_best_of_tries(
+            X=X[window],
+            Xneighbixs=Xneighbixs[window],
+            base_rg=rg,
+            max_k=min(window.numel(), max_k),
+            cfg=cfg,
+            neighborhoods=neighborhoods,
+            neighb_rel_inds=neighb_rel_inds,
+            visible=visible,
+            feat_rank=feat_rank,
+            metric=metric,
+            scale_dist_args=scale_dist_args,
+            min_count=min_count,
+            first_neighb=nj,
+        )
+        centroids = window[window_ixs]
+        accepted.append(centroids[Xneighbixs[centroids] == nj])
+    centroid_ixs = torch.cat(accepted)
+    assert centroid_ixs.unique().numel() == centroid_ixs.numel()
+    covered = visible[:, Xneighbixs[centroid_ixs]].any(dim=1)
+    assert covered[present].all(), (
+        f"stitch left {(~covered[present]).sum()} neighborhoods uncovered"
+    )
+    logger.dartsortdebug(
+        f"kmeans++ stitch: {centroid_ixs.numel()} centroids from {present.numel()} windows."
+    )
+    return centroid_ixs
+
+
+def _truncated_kmeanspp_inner(
+    *,
+    X: Tensor,
+    Xneighbixs: Tensor,
+    base_rg: np.random.Generator,
+    max_k: int,
+    cfg: KmeansppConfig,
+    neighborhoods: Tensor,
+    neighb_rel_inds: Tensor,
+    visible: Tensor,
+    feat_rank: int,
+    metric: ComponentDistanceMetric,
+    scale_dist_args: tuple[float, float, float],
+    min_count: int,
+    first_neighb: int | None = None,
 ) -> tuple[Tensor, float]:
     """Sparse flavor of kmeans++ which has some strategies for picking k
 
@@ -5053,13 +5142,12 @@ def _truncated_kmeanspp_inner(
     max_nc_obs = neighborhoods.shape[1]
     n_neighb = visible.shape[0]
     assert X.shape == (n, feat_rank * max_nc_obs)
-    assert alpha > 0
-    assert stopping != "significance" or sampling == "significance"
-    assert sampling != "significance" or alpha == 2.0
+    assert cfg.alpha > 0
+    assert cfg.stopping != "significance" or cfg.sampling == "significance"
+    assert cfg.sampling != "significance" or cfg.alpha == 2.0
     sampling_params = KmeansppSamplingParams(
-        sampling=sampling, alpha=alpha, z0=z0, min_count=int(min_count)
+        sampling=cfg.sampling, alpha=cfg.alpha, z0=cfg.z0, min_count=min_count
     )
-    assert sampling_params.min_count == min_count
 
     # Initialize
     train_centroid_ixs = X.new_full((max_k,), n, dtype=torch.long)
@@ -5069,32 +5157,34 @@ def _truncated_kmeanspp_inner(
 
     buf = torch.empty_like(distsq)
     wbuf = torch.empty_like(distsq)
-    stop_distsq = stop_dist**2
-    propose_kw = dict(
-        X=X,
-        Xneighbixs=Xneighbixs,
-        neighborhoods=neighborhoods,
-        neighb_rel_inds=neighb_rel_inds,
-        visible=visible,
-        order=order,
-        indptr=indptr,
-        counts=counts,
-        feat_rank=feat_rank,
-        metric=metric,
-        scale_dist_args=scale_dist_args,
-    )
+    stop_distsq = cfg.stop_dist**2
     k = 0
 
     # -- phase 1: cover neighborhoods so dists are finite
     covered = counts == 0
+    if first_neighb is not None:
+        assert counts[first_neighb] > 0
     while k < max_k and not covered.all():
-        (uncov,) = covered.logical_not().nonzero(as_tuple=True)
-        nj = uncov[torch.multinomial(counts[uncov].to(X), 1, generator=gen)[0]]
+        if k == 0 and first_neighb is not None:
+            nj = first_neighb
+        else:
+            (uncov,) = covered.logical_not().nonzero(as_tuple=True)
+            nj = uncov[torch.multinomial(counts[uncov].to(X), 1, generator=gen)[0]]
         j = torch.rand((), device=X.device, generator=gen).mul_(counts[nj]).long()
         train_centroid_ixs[k] = order[indptr[nj] + j]
         ix, d, n_feats = _truncated_kmeanspp_propose(
+            X=X,
             centroid_ix=train_centroid_ixs[k],
-            **propose_kw,  # ty: ignore[invalid-argument-type]
+            Xneighbixs=Xneighbixs,
+            neighborhoods=neighborhoods,
+            neighb_rel_inds=neighb_rel_inds,
+            visible=visible,
+            order=order,
+            indptr=indptr,
+            counts=counts,
+            feat_rank=feat_rank,
+            metric=metric,
+            scale_dist_args=scale_dist_args,
         )
         if d is not None:
             assert n_feats is not None
@@ -5103,7 +5193,7 @@ def _truncated_kmeanspp_inner(
         k += 1
 
     # -- significance: sample by excess over z0, until no neighborhood has enough
-    while stopping == "significance" and k < max_k:
+    while cfg.stopping == "significance" and k < max_k:
         w = _truncated_kmeanspp_sampling_weights(
             sampling_params, distsq, dof, Xneighbixs, n_neighb, out=wbuf
         )
@@ -5111,15 +5201,25 @@ def _truncated_kmeanspp_inner(
             break
         train_centroid_ixs[k] = _one_gumbel_nolog(w, gen, buf)
         ix, d, n_feats = _truncated_kmeanspp_propose(
+            X=X,
             centroid_ix=train_centroid_ixs[k],
-            **propose_kw,  # ty: ignore[invalid-argument-type]
+            Xneighbixs=Xneighbixs,
+            neighborhoods=neighborhoods,
+            neighb_rel_inds=neighb_rel_inds,
+            visible=visible,
+            order=order,
+            indptr=indptr,
+            counts=counts,
+            feat_rank=feat_rank,
+            metric=metric,
+            scale_dist_args=scale_dist_args,
         )
         assert d is not None and n_feats is not None
         _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
         k += 1
 
     # -- phase 2: regular kmeanspp until well covered neighborhoods
-    while stopping != "significance" and k < max_k:
+    while cfg.stopping != "significance" and k < max_k:
         mass = _truncated_kmeanspp_uncovered_mass(
             distsq, Xneighbixs, n_neighb, stop_distsq, buf
         )
@@ -5133,8 +5233,18 @@ def _truncated_kmeanspp_inner(
             break
         train_centroid_ixs[k] = _one_gumbel_nolog(w, gen, buf)
         ix, d, n_feats = _truncated_kmeanspp_propose(
+            X=X,
             centroid_ix=train_centroid_ixs[k],
-            **propose_kw,  # ty: ignore[invalid-argument-type]
+            Xneighbixs=Xneighbixs,
+            neighborhoods=neighborhoods,
+            neighb_rel_inds=neighb_rel_inds,
+            visible=visible,
+            order=order,
+            indptr=indptr,
+            counts=counts,
+            feat_rank=feat_rank,
+            metric=metric,
+            scale_dist_args=scale_dist_args,
         )
         if d is not None:
             assert n_feats is not None
@@ -5145,8 +5255,8 @@ def _truncated_kmeanspp_inner(
     floor = min_count * stop_distsq
     centroid_budget = floor / n
     fails = 0
-    phase3_enabled = stopping != "significance" and (
-        stopping != "patience" or patience > 0
+    phase3_enabled = cfg.stopping != "significance" and (
+        cfg.stopping != "patience" or cfg.patience > 0
     )
     while phase3_enabled and k < max_k:
         best_gain, best = -1.0, None
@@ -5159,29 +5269,42 @@ def _truncated_kmeanspp_inner(
         # TODO maybe remove significance and alpha
         # TODO parallel proposals for patience: many proposals at once, take the first that passes
         # TODO proposals are entirely independent for neighborhoods that don't overlap, could segment the adjacency into a checkerboard...
-        for _ in range(greedy_proposals):
+        for _ in range(cfg.greedy_proposals):
             cix = _one_gumbel_nolog(w, gen, buf)
-            ix, d, n_feats = _truncated_kmeanspp_propose(centroid_ix=cix, **propose_kw)  # ty: ignore[invalid-argument-type]
+            ix, d, n_feats = _truncated_kmeanspp_propose(
+                X=X,
+                centroid_ix=cix,
+                Xneighbixs=Xneighbixs,
+                neighborhoods=neighborhoods,
+                neighb_rel_inds=neighb_rel_inds,
+                visible=visible,
+                order=order,
+                indptr=indptr,
+                counts=counts,
+                feat_rank=feat_rank,
+                metric=metric,
+                scale_dist_args=scale_dist_args,
+            )
             if d is None:
                 continue
             assert n_feats is not None
             gain = distsq[ix].sub_(d).clamp_(min=0.0).sum().item()
             if gain > best_gain:
                 best_gain, best = gain, (cix, ix, d, n_feats)
-        if stopping in ("patience", "patientdpmeanspp"):
+        if cfg.stopping in ("patience", "patientdpmeanspp"):
             if best is None or best_gain < floor:
                 fails += 1
-                if fails >= patience:
+                if fails >= cfg.patience:
                     break
                 continue
             fails = 0
-        if stopping in ("dpmeanspp", "patientdpmeanspp"):
+        if cfg.stopping in ("dpmeanspp", "patientdpmeanspp"):
             if best is None:
                 break
             if distsq.mean().item() <= centroid_budget * k * (math.log2(k) + 2):
                 break
         if best is None:
-            panic(stopping)
+            panic(cfg.stopping)
         train_centroid_ixs[k], ix, d, n_feats = best
         _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
         k += 1

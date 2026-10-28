@@ -6,7 +6,11 @@ import torch
 import torch.nn.functional as F
 
 from dartsort.clustering import mixture
-from dartsort.util.internal_config import ClusteringFeaturesConfig, RefinementConfig
+from dartsort.util.internal_config import (
+    ClusteringFeaturesConfig,
+    KmeansppConfig,
+    RefinementConfig,
+)
 from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
 from dartsort.util.motion import MotionInfo
@@ -753,9 +757,7 @@ def test_truncated_kmeanspp(mini_simulations, sim_name, stopping, sampling):
 
     refinement_cfg = RefinementConfig(
         distance_metric="euc",
-        kmeanspp_stop_dist=3.0,
-        kmeanspp_stopping=stopping,
-        kmeanspp_sampling=sampling,
+        kmeanspp_cfg=KmeansppConfig(stop_dist=3.0, stopping=stopping, sampling=sampling),
     )
     _, _, train_data, _, _, _, train_ixs, _ = mixture.get_truncated_datasets(
         sorting=unlabeled,
