@@ -4844,8 +4844,7 @@ def truncated_kmeanspp(
         panic(metric)
     scale_std, scale_min, scale_max = scale_dist_args
     base_rg = np.random.default_rng(seed)
-    max_components = cfg.max_components_per_channel * neighb_cov.n_channels
-    max_k = min(train_x.shape[0], max_components)
+    max_k = min(train_x.shape[0], cfg.max_components_per_channel * neighb_cov.n_channels)
     feat_rank = neighb_cov.feat_rank
     n_channels = neighb_cov.n_channels
     neighb_chans = neighborhoods.b.neighborhoods
@@ -4871,39 +4870,20 @@ def truncated_kmeanspp(
     visible = torch.logical_and(neighb_adj > 0, obs @ obs.T > 0)
     del obs
 
-    train_neighb_ids = train_neighbs.b.neighborhood_ids
-    if cfg.strategy == "global":
-        centroid_ixs = _kmeanspp_best_of_tries(
-            X=whitenedx,
-            Xneighbixs=train_neighb_ids,
-            base_rg=base_rg,
-            max_k=max_k,
-            cfg=cfg,
-            neighborhoods=neighb_chans,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-            min_count=min_count,
-        )
-    elif cfg.strategy == "stitch":
-        centroid_ixs = _kmeanspp_stitch(
-            X=whitenedx,
-            Xneighbixs=train_neighb_ids,
-            base_rg=base_rg,
-            max_k=max_components,
-            cfg=cfg,
-            neighborhoods=neighb_chans,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-            min_count=min_count,
-        )
-    else:
-        panic(cfg.strategy)
+    centroid_ixs = _kmeanspp_best_of_tries(
+        X=whitenedx,
+        Xneighbixs=train_neighbs.b.neighborhood_ids,
+        base_rg=base_rg,
+        max_k=max_k,
+        cfg=cfg,
+        neighborhoods=neighb_chans,
+        neighb_rel_inds=neighb_rel_inds,
+        visible=visible,
+        feat_rank=feat_rank,
+        metric=metric,
+        scale_dist_args=scale_dist_args,
+        min_count=min_count,
+    )
     n_centroids = centroid_ixs.shape[0]
 
     # in batches, label each x by its best centroid
@@ -4995,7 +4975,6 @@ def _kmeanspp_best_of_tries(
     metric: ComponentDistanceMetric,
     scale_dist_args: tuple[float, float, float],
     min_count: int,
-    first_neighb: int | None = None,
 ) -> Tensor:
     centroid_ixs: Tensor | None = None
     best_score = torch.inf
@@ -5019,7 +4998,6 @@ def _kmeanspp_best_of_tries(
             metric=metric,
             scale_dist_args=scale_dist_args,
             min_count=min_count,
-            first_neighb=first_neighb,
         )
         if cfg.selection == "phi":
             score = phi
@@ -5047,58 +5025,6 @@ def _kmeanspp_best_of_tries(
     return centroid_ixs
 
 
-def _kmeanspp_stitch(
-    *,
-    X: Tensor,
-    Xneighbixs: Tensor,
-    base_rg: np.random.Generator,
-    max_k: int,
-    cfg: KmeansppConfig,
-    neighborhoods: Tensor,
-    neighb_rel_inds: Tensor,
-    visible: Tensor,
-    feat_rank: int,
-    metric: ComponentDistanceMetric,
-    scale_dist_args: tuple[float, float, float],
-    min_count: int,
-) -> Tensor:
-    n_neighb = visible.shape[0]
-    order, indptr, counts = sort_to_csr(Xneighbixs, n_neighb)
-    (present,) = (counts > 0).nonzero(as_tuple=True)
-    window_rgs = base_rg.spawn(present.numel())
-    accepted = []
-    for nj, rg in zip(present.tolist(), window_rgs, strict=True):
-        (window_neighbs,) = visible[nj].nonzero(as_tuple=True)
-        window = csr_members_ordered(order, indptr, counts, window_neighbs)
-        window_ixs = _kmeanspp_best_of_tries(
-            X=X[window],
-            Xneighbixs=Xneighbixs[window],
-            base_rg=rg,
-            max_k=min(window.numel(), max_k),
-            cfg=cfg,
-            neighborhoods=neighborhoods,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-            min_count=min_count,
-            first_neighb=nj,
-        )
-        centroids = window[window_ixs]
-        accepted.append(centroids[Xneighbixs[centroids] == nj])
-    centroid_ixs = torch.cat(accepted)
-    assert centroid_ixs.unique().numel() == centroid_ixs.numel()
-    covered = visible[:, Xneighbixs[centroid_ixs]].any(dim=1)
-    assert covered[present].all(), (
-        f"stitch left {(~covered[present]).sum()} neighborhoods uncovered"
-    )
-    logger.dartsortdebug(
-        f"kmeans++ stitch: {centroid_ixs.numel()} centroids from {present.numel()} windows."
-    )
-    return centroid_ixs
-
-
 def _truncated_kmeanspp_inner(
     *,
     X: Tensor,
@@ -5113,7 +5039,6 @@ def _truncated_kmeanspp_inner(
     metric: ComponentDistanceMetric,
     scale_dist_args: tuple[float, float, float],
     min_count: int,
-    first_neighb: int | None = None,
 ) -> tuple[Tensor, float]:
     """Sparse flavor of kmeans++ which has some strategies for picking k
 
@@ -5162,14 +5087,9 @@ def _truncated_kmeanspp_inner(
 
     # -- phase 1: cover neighborhoods so dists are finite
     covered = counts == 0
-    if first_neighb is not None:
-        assert counts[first_neighb] > 0
     while k < max_k and not covered.all():
-        if k == 0 and first_neighb is not None:
-            nj = first_neighb
-        else:
-            (uncov,) = covered.logical_not().nonzero(as_tuple=True)
-            nj = uncov[torch.multinomial(counts[uncov].to(X), 1, generator=gen)[0]]
+        (uncov,) = covered.logical_not().nonzero(as_tuple=True)
+        nj = uncov[torch.multinomial(counts[uncov].to(X), 1, generator=gen)[0]]
         j = torch.rand((), device=X.device, generator=gen).mul_(counts[nj]).long()
         train_centroid_ixs[k] = order[indptr[nj] + j]
         ix, d, n_feats = _truncated_kmeanspp_propose(

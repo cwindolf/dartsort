@@ -10,7 +10,6 @@ from .util.internal_config import (
     KmeansppSampling,
     KmeansppSelection,
     KmeansppStopping,
-    KmeansppStrategy,
     MixtureStep,
     MotionBatchingMode,
     PreprocessingStrategy,
@@ -271,10 +270,10 @@ class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
     # high level behavior
-    initial_steps: Sequence[MixtureStep] = ("split", "demolish", "demolish")
+    initial_steps: Sequence[MixtureStep] = ("split", "demolish", "split", "demolish")
     later_steps: Sequence[MixtureStep] = ("split", "merge", "demolish")
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
-    cluster_strategy: str = "dpc"
+    cluster_strategy: str = "none"
     refinement_strategy: str = "tmm"
     recluster_after_matching: bool = False
 
@@ -377,7 +376,7 @@ class DeveloperConfig(DARTsortUserConfig):
     hellinger_weak: float = 0.0
     dpc_mop: bool = True
     n_neighbors_search: int | None = 50
-    kmeanspp_stop_dist: float = 4.0
+    kmeanspp_stop_dist: float = 4.5
     kmeanspp_tries: int = 5
     kmeanspp_patience: int = 21
     kmeanspp_greedy_proposals: int = 1
@@ -385,7 +384,6 @@ class DeveloperConfig(DARTsortUserConfig):
     kmeanspp_selection: KmeansppSelection = "marginal"
     kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
     kmeanspp_sampling: KmeansppSampling = "d2"
-    kmeanspp_strategy: KmeansppStrategy = "global"
     kmeanspp_alpha: Annotated[float, Field(gt=0)] = 2.0
     kmeanspp_z0: float = 3.0
 
@@ -401,7 +399,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # gaussian mixture high level
     initial_rank: int | None = None
-    initialize_at_rank_0: bool = False
+    initialize_at_rank_0: bool = True
     signal_rank: Annotated[int, Field(ge=0)] = 3
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_048_000
     kmeansk: int = 4

@@ -287,7 +287,7 @@ class ClusteringFeaturesConfig:
 class ClusteringConfig:
     """Initial clustering parameters"""
 
-    cluster_strategy: str = "dpc"
+    cluster_strategy: str = "none"
     sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
     # global parameters
@@ -502,20 +502,18 @@ ComponentDistanceMetric = Literal["euc", "cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
 KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp", "significance"]
 KmeansppSampling = Literal["d2", "significance"]
-KmeansppStrategy = Literal["global", "stitch"]
 
 
 @cfg_dataclass
 class KmeansppConfig:
     tries: int = 5
-    stop_dist: float = 4.0
+    stop_dist: float = 4.5
     patience: int = 21
     greedy_proposals: int = 1
     neighb_overlap: float | None = None
     selection: KmeansppSelection = "marginal"
     stopping: KmeansppStopping = "dpmeanspp"
     sampling: KmeansppSampling = "d2"
-    strategy: KmeansppStrategy = "global"
     alpha: float = 2.0
     z0: float = 3.0
     max_components_per_channel: int = 5
@@ -548,7 +546,7 @@ class RefinementConfig:
     split_min_count: int = 5
     channels_count_min: int = 1
     signal_rank: int = 3
-    initialize_at_rank_0: bool = False
+    initialize_at_rank_0: bool = True
     cl_alpha: float = 0.05
     cl_split_only: bool = True
     demolish_cl_alpha: float = 0.0
@@ -998,7 +996,7 @@ default_computation_cfg = ComputationConfig()
 default_motion_computation_cfg = ComputationConfig(n_jobs_gpu=2)
 default_refinement_cfg = RefinementConfig()
 default_initial_refinement_cfg = RefinementConfig(
-    mixture_steps=("split", "demolish", "demolish")
+    mixture_steps=("split", "demolish", "split", "demolish")
 )
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 default_agglomerate_cfg = RefinementConfig(
@@ -1400,7 +1398,6 @@ def _refinement_cfg(
             selection=cfg.kmeanspp_selection,
             stopping=cfg.kmeanspp_stopping,
             sampling=cfg.kmeanspp_sampling,
-            strategy=cfg.kmeanspp_strategy,
             alpha=cfg.kmeanspp_alpha,
             z0=cfg.kmeanspp_z0,
         ),
