@@ -1643,7 +1643,7 @@ class TruncatedSpikeData(BatchedSpikeData):
          - explore = candidates[:, n_candidates + n_search*n_candidates:]
                    = candidates[:, -n_explore:]
         """
-        device = noise_logliks.device
+        device = neighborhoods.neighborhood_ids.device
         super().__init__(
             N=whitenedx.shape[0],
             n_candidates=n_candidates,
@@ -1669,8 +1669,12 @@ class TruncatedSpikeData(BatchedSpikeData):
         assert self.candidates.shape[1] >= n_candidates
 
         assert noise_logliks.shape == (self.N,)
-        assert whitenedx.device == neighborhoods.neighborhood_ids.device == device
         assert neighborhoods.neighborhood_ids.shape == (self.N,)
+        self.storage_device = whitenedx.device
+        assert self.storage_device in (device, torch.device("cpu"))
+        for f in (xt, whitenedx, CmoCooinvx, noise_logliks):
+            assert f is None or f.device == self.storage_device
+            assert self.storage_device == device or f is None or f.is_pinned()
 
         self.score_only = xt is None
         assert self.score_only == (CmoCooinvx is None)
@@ -1870,43 +1874,63 @@ class TruncatedSpikeData(BatchedSpikeData):
             duties = None
         else:
             duties = self.duties[spike_indices]
-        xt, CmoCooinvx = self.fit_features(spike_indices)
+        xt, whitenedx, CmoCooinvx, noise_logliks = self.features(spike_indices)
         return SpikeDataBatch(
             batch=spike_indices,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
             xt=xt,
             candidates=candidates,
             CmoCooinvx=CmoCooinvx,
-            whitenedx=self.whitenedx[spike_indices],
-            noise_logliks=self.noise_logliks[spike_indices],
+            whitenedx=whitenedx,
+            noise_logliks=noise_logliks,
             duties=duties,
             candidate_count=int(self.batch_candidate_counts[batch_index]),
         )
 
-    def fit_features(
+    def features(
         self, spike_indices: Tensor | slice
-    ) -> tuple[Tensor | None, Tensor | None]:
-        if self.score_only:
-            return None, None
-        assert self.xt is not None
-        assert self.CmoCooinvx is not None
-        return self.xt[spike_indices], self.CmoCooinvx[spike_indices]
+    ) -> tuple[Tensor | None, Tensor, Tensor | None, Tensor]:
+        """xt, whitenedx, CmoCooinvx, noise_logliks -> device"""
+        if self.storage_device == self.device:
+            return (
+                None if self.xt is None else self.xt[spike_indices],
+                self.whitenedx[spike_indices],
+                None if self.CmoCooinvx is None else self.CmoCooinvx[spike_indices],
+                self.noise_logliks[spike_indices],
+            )
+        if torch.is_tensor(spike_indices):
+            spike_indices = spike_indices.cpu()
+        dev = self.device
+        if self.xt is None:
+            xt = None
+        else:
+            xt = self.xt[spike_indices].to(dev, non_blocking=True)
+        if self.CmoCooinvx is None:
+            CmoCooinvx = None
+        else:
+            CmoCooinvx = self.CmoCooinvx[spike_indices].to(dev, non_blocking=True)
+        return (
+            xt,
+            self.whitenedx[spike_indices].to(dev, non_blocking=True),
+            CmoCooinvx,
+            self.noise_logliks[spike_indices].to(dev, non_blocking=True),
+        )
 
     def dense_slice(self, spike_indices: Tensor) -> DenseSpikeData:
         if self.duties is None:
             duties = None
         else:
             duties = self.duties[spike_indices]
-        xt, CmoCooinvx = self.fit_features(spike_indices)
+        xt, whitenedx, CmoCooinvx, noise_logliks = self.features(spike_indices)
         return DenseSpikeData(
             indices=spike_indices,
             neighborhoods=self.neighborhoods,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
             neighb_supset=self.neighb_supset,
             xt=xt,
-            whitenedx=self.whitenedx[spike_indices],
+            whitenedx=whitenedx,
             CmoCooinvx=CmoCooinvx,
-            noise_logliks=self.noise_logliks[spike_indices],
+            noise_logliks=noise_logliks,
             duties=duties,
             batch_size=self.batch_size,
         )
@@ -2136,15 +2160,15 @@ class FullProposalDataView(BatchedSpikeData):
             duties = None
         else:
             duties = self.duties[spike_indices]
-        xt, CmoCooinvx = self.data.fit_features(spike_indices)
+        xt, whitenedx, CmoCooinvx, noise_logliks = self.data.features(spike_indices)
         return SpikeDataBatch(
             batch=spike_indices,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
             xt=xt,
             candidates=candidates,
             CmoCooinvx=CmoCooinvx,
-            whitenedx=self.data.whitenedx[spike_indices],
-            noise_logliks=self.data.noise_logliks[spike_indices],
+            whitenedx=whitenedx,
+            noise_logliks=noise_logliks,
             duties=duties,
             candidate_count=None,
         )
@@ -3252,7 +3276,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             eval_data=split_eval_data,
             pair_mask=pair_mask,
             cur_scores=cur_scores_batch,
-            cur_unit_ids=torch.as_tensor(group, device=train_data.whitenedx.device),
+            cur_unit_ids=torch.as_tensor(group, device=train_data.device),
             responsibilities=kmeans_responsibilities,
             debug=debug,
         )
@@ -3518,7 +3542,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             pair_mask=pair_mask,
             cur_scores=group_scores,
             responsibilities=None,
-            cur_unit_ids=torch.as_tensor(group, device=train_data.whitenedx.device),
+            cur_unit_ids=torch.as_tensor(group, device=train_data.device),
             use_cl_alpha=not self.p.cl_split_only,
             debug=debug,
         )
@@ -4433,7 +4457,13 @@ def get_truncated_datasets(
         neighb_overlap=refinement_cfg.neighb_overlap,
     )
 
-    train_x = full_features[train_ixs].to(device=device)
+    if refinement_cfg.spike_storage == "device" or not sorting.n_units:
+        train_x = full_features[train_ixs].to(device=device)
+    elif refinement_cfg.spike_storage == "cpu":
+        assert full_features.device.type == "cpu"
+        train_x = full_features[train_ixs]
+    else:
+        panic(refinement_cfg.spike_storage)
 
     if not sorting.n_units:
         logger.dartsortdebug("Initializing GMM with kmeans++")
@@ -4463,6 +4493,11 @@ def get_truncated_datasets(
         _t_CmoCooinvx = kmeanspp_res.CmoCooinvx
         _t_noise_logliks = kmeanspp_res.noise_logliks
         del kmeanspp_res
+        if refinement_cfg.spike_storage == "cpu" and device.type != "cpu":
+            _t_xt = _pinned_copy(_t_xt)
+            _t_whitenedx = _pinned_copy(_t_whitenedx)
+            _t_CmoCooinvx = _pinned_copy(_t_CmoCooinvx)
+            _t_noise_logliks = _pinned_copy(_t_noise_logliks)
         cleanup_and_log_gpu_usage(computation_cfg=None, message="kmeanspp", dev=device)
     else:
         _t_xt = _t_whitenedx = _t_CmoCooinvx = _t_noise_logliks = None
@@ -4516,6 +4551,8 @@ def get_truncated_datasets(
         noise_logliks=_t_noise_logliks,
     )
     del train_x, _t_xt, _t_whitenedx, _t_CmoCooinvx, _t_noise_logliks
+    on_device = train_data.storage_device == train_data.device
+    assert on_device == (refinement_cfg.spike_storage == "device" or device.type == "cpu")
     assert torch.equal(full_neighbs.b.neighborhoods, train_neighbs.b.neighborhoods)
     val_n_candidates = min(
         sorting.n_units, max(refinement_cfg.merge_group_size, n_candidates)
@@ -4528,6 +4565,13 @@ def get_truncated_datasets(
             val_duties = None
         else:
             val_duties = duties[val_ixs].to(device=device)
+        if refinement_cfg.spike_storage == "device":
+            val_x = full_features[val_ixs].to(device=device)
+        elif refinement_cfg.spike_storage == "cpu":
+            assert full_features.device.type == "cpu"
+            val_x = full_features[val_ixs]
+        else:
+            panic(refinement_cfg.spike_storage)
         val_data = TruncatedSpikeData.initialize_from_labels(
             n_candidates=val_n_candidates,
             n_search=n_search,
@@ -4538,7 +4582,7 @@ def get_truncated_datasets(
             dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
             labels=labels[val_ixs].to(device=device),
             explore_neighb_steps=0,
-            x=full_features[val_ixs].to(device=device),
+            x=val_x,
             neighborhoods=val_neighbs,
             duties=val_duties,
             neighb_cov=neighb_cov,
@@ -4546,6 +4590,11 @@ def get_truncated_datasets(
             batch_size=refinement_cfg.eval_batch_size,
             allow_gaps=True,
             score_only=True,
+        )
+        del val_x
+        on_device = val_data.storage_device == val_data.device
+        assert on_device == (
+            refinement_cfg.spike_storage == "device" or device.type == "cpu"
         )
         assert torch.equal(
             val_data.neighborhoods.b.neighborhoods,
@@ -5580,7 +5629,7 @@ def initialize_parameters_by_unit(
         log_proportions = rank0_model.b.log_proportions
         noise_log_prop = rank0_model.b.noise_log_prop
 
-    dev = data.noise_logliks.device
+    dev = data.device
     if rank0_model is None:
         means = torch.zeros((puff_K, feat_rank, nc), device=dev)
         means = means.resize_(K, *means.shape[1:])
@@ -6801,28 +6850,36 @@ def _whiten_and_noise_score(
     neighb_cov: NeighborhoodCovariance,
     batch_size=1024,
 ) -> tuple[Tensor, Tensor]:
-    wx = torch.empty_like(x)
+    dev = neighborhoods.neighborhood_ids.device
+    on_device = x.device == dev
+    if on_device:
+        wx = torch.empty_like(x)
+        noise_loglik = wx.new_zeros((len(x),))
+    else:
+        assert x.device.type == "cpu"
+        wx = torch.empty(x.shape, dtype=x.dtype, pin_memory=True)
+        noise_loglik = torch.zeros((len(x),), dtype=x.dtype, pin_memory=True)
     assert neighborhoods.n_neighborhoods == neighb_cov.b.obs_ix.shape[0]
-
-    noise_loglik = wx.new_zeros((len(x),))
 
     for ni in range(neighborhoods.n_neighborhoods):
         inni = neighborhoods.neighborhood_members(ni)
+        if not on_device:
+            inni = inni.cpu()
 
         right_factor = neighb_cov.b.Linv[ni].T
         nll_const = neighb_cov.b.logdet[ni] + LOG_2PI * neighb_cov.b.nobs[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
-            wxb = x[binni] @ right_factor
+            wxb = x[binni].to(dev) @ right_factor  # ty: ignore[no-matching-overload]
 
-            wx[binni] = wxb
+            wx[binni] = wxb.to(wx.device)
 
             nll = wxb.square_().sum(dim=1)
             nll += nll_const
             nll *= -0.5
             assert nll.isfinite().all()
-            noise_loglik[binni] = nll
+            noise_loglik[binni] = nll.to(noise_loglik.device)
 
     return wx, noise_loglik
 
@@ -6834,16 +6891,24 @@ def _whiten_impute_and_noise_score(
     neighb_cov: NeighborhoodCovariance,
     batch_size=1024,
 ):
-    wx = torch.empty_like(x)
+    dev = neighborhoods.neighborhood_ids.device
+    on_device = x.device == dev
+    cmo_shape = (len(x), neighb_cov.max_nc_miss_near, neighb_cov.feat_rank)
+    if on_device:
+        wx = torch.empty_like(x)
+        noise_loglik = wx.new_zeros((len(x),))
+        CmoCooinvx = wx.new_empty(cmo_shape)
+    else:
+        assert x.device.type == "cpu"
+        wx = torch.empty(x.shape, dtype=x.dtype, pin_memory=True)
+        noise_loglik = torch.zeros((len(x),), dtype=x.dtype, pin_memory=True)
+        CmoCooinvx = torch.empty(cmo_shape, dtype=x.dtype, pin_memory=True)
     assert neighborhoods.n_neighborhoods == neighb_cov.b.obs_ix.shape[0]
-
-    noise_loglik = wx.new_zeros((len(x),))
-    CmoCooinvx = wx.new_empty(
-        (len(x), neighb_cov.max_nc_miss_near, neighb_cov.feat_rank)
-    )
 
     for ni in range(neighborhoods.n_neighborhoods):
         inni = neighborhoods.neighborhood_members(ni)
+        if not on_device:
+            inni = inni.cpu()
 
         right_factor = neighb_cov.b.Linv[ni].T
         neighb_CooinvCom = neighb_cov.b.CooinvCom[ni]
@@ -6852,27 +6917,36 @@ def _whiten_impute_and_noise_score(
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
-            xb = x[binni]
+            xb = x[binni].to(dev)
             wxb = xb @ right_factor
 
-            wx[binni] = wxb
+            wx[binni] = wxb.to(wx.device)
 
             CmoCooinvx_batch = xb @ neighb_CooinvCom
             CmoCooinvx_batch = CmoCooinvx_batch.view(
                 binni.numel(), neighb_cov.feat_rank, neighb_cov.max_nc_miss_near
             )
-            CmoCooinvx[binni] = CmoCooinvx_batch.mT
+            CmoCooinvx[binni] = CmoCooinvx_batch.mT.to(CmoCooinvx.device)
 
             nll = wxb.square_().sum(dim=1)
             nll += nll_const
             nll *= -0.5
             assert nll.isfinite().all()
-            noise_loglik[binni] = nll
+            noise_loglik[binni] = nll.to(noise_loglik.device)
 
     xt = x.view(x.shape[0], neighb_cov.feat_rank, neighb_cov.max_nc_obs)
-    xt = xt.transpose(1, 2).contiguous()
+    if on_device:
+        xt = xt.transpose(1, 2).contiguous()
+    else:
+        xt = _pinned_copy(xt.transpose(1, 2))
 
     return xt, wx, CmoCooinvx, noise_loglik
+
+
+def _pinned_copy(x: Tensor) -> Tensor:
+    pinned = torch.empty(x.shape, dtype=x.dtype, pin_memory=True)
+    pinned.copy_(x)
+    return pinned
 
 
 def _whiten_and_noise_score_batch(

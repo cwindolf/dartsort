@@ -502,6 +502,7 @@ ComponentDistanceMetric = Literal["euc", "cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
 KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp", "significance"]
 KmeansppSampling = Literal["d2", "significance"]
+SpikeStorage = Literal["device", "cpu"]
 
 
 @cfg_dataclass
@@ -560,6 +561,7 @@ class RefinementConfig:
     n_explore: int | None = None
     train_batch_size: int = 4096
     eval_batch_size: int = 4096
+    spike_storage: SpikeStorage = "device"
     split_friend_distance: float = 0.8
     split_distance_threshold: float = 1.5
     merge_distance_threshold: float = 1.5
@@ -1404,6 +1406,7 @@ def _refinement_cfg(
         ),
         train_batch_size=cfg.gmm_batch_size,
         eval_batch_size=cfg.gmm_batch_size,
+        spike_storage=cfg.gmm_spike_storage,
         robust_df=cfg.robust_df,
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,
