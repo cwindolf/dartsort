@@ -118,6 +118,7 @@ def test_truncated_mixture(
         n_candidates=K,
         em_converged_atol=1e-4,
         demolish_during_selection=demoinsel,
+        initialize_at_rank_0=False,
     )
     no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
 
@@ -425,6 +426,7 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
         signal_rank=sim["M"],
         n_candidates=n_candidates,
         em_converged_atol=1e-4,
+        initialize_at_rank_0=False,
     )
     no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
 

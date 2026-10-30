@@ -1266,6 +1266,7 @@ if hasattr(torch.serialization, "add_safe_globals"):
             ClusteringConfig,
             ClusteringFeaturesConfig,
             FeaturizationConfig,
+            KmeansppConfig,
             RefinementConfig,
             InterpolationParams,
             TemplateMergeConfig,
