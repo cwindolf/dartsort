@@ -521,6 +521,33 @@ def scaled_normeuc_cdist_from_dots(
     scale_min: float | None = None,
     scale_max: float | None = None,
 ) -> Tensor:
+    out = torch.empty_like(dots)
+    bufs = dots.new_empty((3, dots.shape[0], dots.shape[1]))
+    return scaled_normeuc_cdist_from_dots_(
+        dots,
+        row_normsq,
+        col_normsq,
+        out=out,
+        bufs=bufs,
+        scale_var=scale_var,
+        scale_boundary=scale_boundary,
+        scale_min=scale_min,
+        scale_max=scale_max,
+    )
+
+
+def scaled_normeuc_cdist_from_dots_(
+    dots: Tensor,
+    row_normsq: Tensor,
+    col_normsq: Tensor,
+    out: Tensor,
+    bufs: Tensor,
+    scale_var: float = 0.01**2,
+    scale_boundary: float = 1.0 / 3.0,
+    scale_min: float | None = None,
+    scale_max: float | None = None,
+) -> Tensor:
+    """scaled_normeuc_cdist_from_dots into out, with scratch bufs (3, *dots.shape)"""
     if scale_min is None:
         assert scale_max is None
         scale_max = 1.0 + scale_boundary
@@ -528,53 +555,59 @@ def scaled_normeuc_cdist_from_dots(
     else:
         assert scale_max is not None
     row_normsq, col_normsq = _cdist_normsqs(dots, row_normsq, col_normsq)
+    assert out.shape == dots.shape
+    assert bufs.shape[0] == 3 and bufs.shape[1:] == dots.shape
+    sc = bufs[0]
+    norm = bufs[1]
+    dist_t = bufs[2]
 
     # rows scaled as the templates, then columns
-    dist = _scaled_normeuc_rows_scaled(
-        dots, row_normsq, col_normsq, scale_var, scale_min, scale_max
+    _scaled_normeuc_rows_scaled_(
+        dots, row_normsq, col_normsq, scale_var, scale_min, scale_max, out, sc, norm
     )
-    dist_t = _scaled_normeuc_rows_scaled(
-        dots.T, col_normsq.T, row_normsq.T, scale_var, scale_min, scale_max
+    _scaled_normeuc_rows_scaled_(
+        dots, col_normsq, row_normsq, scale_var, scale_min, scale_max, dist_t, sc, norm
     )
-    dist = torch.minimum(dist, dist_t.T)
-    del dist_t
+    torch.minimum(out, dist_t, out=out)
 
     # handle blanks
-    dist.masked_fill_(dots == 0.0, torch.inf)
+    out.masked_fill_(dots == 0.0, torch.inf)
 
-    return dist
+    return out
 
 
-def _scaled_normeuc_rows_scaled(
+def _scaled_normeuc_rows_scaled_(
     dots: Tensor,
     row_normsq: Tensor,
     col_normsq: Tensor,
     scale_var: float,
     scale_min: float,
     scale_max: float,
+    out: Tensor,
+    sc: Tensor,
+    norm: Tensor,
 ) -> Tensor:
     # optimal penalized scaling
     # columns are targets ("recording"), rows are the "templates"
     if scale_var > 0:
         inv_lambda = 1.0 / scale_var
-        b = dots + inv_lambda
-        a = row_normsq + inv_lambda
-        sc = b.div_(a).clamp_(scale_min, scale_max)
+        torch.add(dots, inv_lambda, out=sc)
+        sc.div_(row_normsq + inv_lambda).clamp_(scale_min, scale_max)
     else:
-        sc = torch.ones_like(dots)
+        sc.fill_(1.0)
 
     # euclidean distance identity
-    row_norm = sc * row_normsq.sqrt()
-    dist = row_norm.square() + col_normsq
-    dist -= sc.mul_(dots).mul_(2.0)
-    del sc
-    dist.relu_().sqrt_()
+    torch.mul(sc, row_normsq.sqrt(), out=norm)
+    torch.square(norm, out=out)
+    out += col_normsq
+    out -= sc.mul_(dots).mul_(2.0)
+    out.relu_().sqrt_()
 
     # divide by geom mean of norms
-    dist /= row_norm.sqrt_()
-    dist /= col_normsq.sqrt().sqrt_()
+    out /= norm.sqrt_()
+    out /= col_normsq.sqrt().sqrt_()
 
-    return dist
+    return out
 
 
 def _cdist_normsqs(
