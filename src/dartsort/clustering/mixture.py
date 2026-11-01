@@ -4861,6 +4861,14 @@ class TruncatedKmeansppResult:
     noise_logliks: Tensor
 
 
+@databag
+class NeighborhoodCenters:
+    values: Tensor
+    shared: Tensor
+    normsq: Tensor
+    n_feats: Tensor
+
+
 class TruncatedKmeanspp:
     """Neighborhood-sparsity-aware kmeans++
 
@@ -5009,17 +5017,10 @@ class TruncatedKmeanspp:
         batch_size: int,
     ) -> Tensor:
         """In batches, label each x by its best centroid"""
-        scale_std, scale_min, scale_max = self.scale_dist_args
-        feat_rank = self.feat_rank
         max_nc_obs = self.neighborhoods.shape[1]
-        n_centroids = centroid_ixs.shape[0]
         device = self.X.device
         neighb_ids = neighborhoods.b.neighborhood_ids
-        cent_neighbs = self.Xneighbixs[centroid_ixs]
-        cent_rel_inds = self.neighb_rel_inds[cent_neighbs]
-        cent = self.X[centroid_ixs].view(n_centroids, feat_rank, max_nc_obs)
-        cent = F.pad(cent, (0, 1))
-        cent_visible = self.visible[:, cent_neighbs]
+        cent_visible = self.visible[:, self.Xneighbixs[centroid_ixs]]
 
         full_labels = torch.full(x.shape[:1], -1, dtype=torch.long, device=device)
         order, indptr, _ = sort_to_csr(neighb_ids, neighborhoods.n_neighborhoods)
@@ -5033,14 +5034,7 @@ class TruncatedKmeanspp:
             if not cand.numel():
                 # kmeans++ ran out of components before covering this neighborhood
                 continue
-            rel_inds = cent_rel_inds[:, self.neighborhoods[ni]]
-            shared = rel_inds < max_nc_obs
-            n_shared = shared.sum(dim=1)
-            cvals = torch.take_along_dim(cent[cand], rel_inds[cand][:, None, :], dim=2)
-            cvals = cvals.reshape(cand.shape[0], feat_rank * max_nc_obs)
-            cmask = shared[cand].to(cvals)
-            cnormsq = cvals.square().sum(dim=1)
-            denom = n_shared[cand].mul(feat_rank).to(cvals)
+            centers = self.centers_in_neighborhood(ni, centroid_ixs[cand])
 
             for bs in range(0, members.numel(), batch_size):
                 bix = members[bs : bs + batch_size]
@@ -5048,35 +5042,67 @@ class TruncatedKmeanspp:
                 wx, _ = _whiten_and_noise_score_batch(
                     x=xb, neighb_ids=neighb_ids[bix], neighb_cov=neighb_cov
                 )
-                # foil, but only on overlap!
-                xsq = wx.view(bix.shape[0], feat_rank, max_nc_obs).square().sum(dim=1)
-                if self.metric == "euc":
-                    d = xsq @ cmask.T
-                    d = d.addmm_(wx, cvals.T, alpha=-2.0)
-                    d = d.add_(cnormsq).div_(denom)
-                elif self.metric == "cosine":
-                    d = cosine_cdist_from_dots(wx @ cvals.T, xsq @ cmask.T, cnormsq)
-                elif self.metric == "normeuc":
-                    d = scaled_normeuc_cdist_from_dots(
-                        wx @ cvals.T, xsq @ cmask.T, cnormsq, scale_var=0.0
-                    )
-                elif self.metric == "scaled_normeuc":
-                    d = scaled_normeuc_cdist_from_dots(
-                        wx @ cvals.T,
-                        xsq @ cmask.T,
-                        cnormsq,
-                        scale_var=scale_std**2,
-                        scale_min=scale_min,
-                        scale_max=scale_max,
-                    )
-                else:
-                    panic(self.metric)
+                xsq = wx.view(bix.shape[0], self.feat_rank, max_nc_obs)
+                xsq = xsq.square().sum(dim=1)
+                d = self.center_dists(wx, xsq, centers)
                 full_labels[bix] = cand[d.argmin(dim=1)]
 
         n_unlabeled = (full_labels < 0).sum().item()
         if n_unlabeled:
             logger.warning(f"kmeans++ left {n_unlabeled} spikes unlabeled.")
         return full_labels
+
+    def centers_in_neighborhood(
+        self, ni: int, center_ixs: Tensor
+    ) -> NeighborhoodCenters:
+        max_nc_obs = self.neighborhoods.shape[1]
+        n_centers = center_ixs.shape[0]
+        rel_inds = self.neighb_rel_inds[self.Xneighbixs[center_ixs]]
+        rel_inds = rel_inds[:, self.neighborhoods[ni]]
+        shared = rel_inds < max_nc_obs
+        cent = self.X[center_ixs].view(n_centers, self.feat_rank, max_nc_obs)
+        cent = F.pad(cent, (0, 1))
+        values = torch.take_along_dim(cent, rel_inds[:, None, :], dim=2)
+        values = values.reshape(n_centers, self.feat_rank * max_nc_obs)
+        return NeighborhoodCenters(
+            values=values,
+            shared=shared.to(values),
+            normsq=values.square().sum(dim=1),
+            n_feats=shared.sum(dim=1).mul(self.feat_rank).to(values),
+        )
+
+    def center_dists(
+        self, wx: Tensor, xsq: Tensor, centers: NeighborhoodCenters
+    ) -> Tensor:
+        """(spikes, centers) distances of whitened spikes with per-channel norms xsq"""
+        scale_std, scale_min, scale_max = self.scale_dist_args
+        # foil, but only on overlap!
+        if self.metric == "euc":
+            d = xsq @ centers.shared.T
+            d = d.addmm_(wx, centers.values.T, alpha=-2.0)
+            return d.add_(centers.normsq).div_(centers.n_feats)
+        elif self.metric == "cosine":
+            return cosine_cdist_from_dots(
+                wx @ centers.values.T, xsq @ centers.shared.T, centers.normsq
+            )
+        elif self.metric == "normeuc":
+            return scaled_normeuc_cdist_from_dots(
+                wx @ centers.values.T,
+                xsq @ centers.shared.T,
+                centers.normsq,
+                scale_var=0.0,
+            )
+        elif self.metric == "scaled_normeuc":
+            return scaled_normeuc_cdist_from_dots(
+                wx @ centers.values.T,
+                xsq @ centers.shared.T,
+                centers.normsq,
+                scale_var=scale_std**2,
+                scale_min=scale_min,
+                scale_max=scale_max,
+            )
+        else:
+            panic(self.metric)
 
 
     def best_of_tries(
