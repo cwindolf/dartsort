@@ -7,7 +7,6 @@ from .util.internal_config import (
     DetectionProposal,
     InterpKernel,
     InterpMethod,
-    KmeansppSampling,
     KmeansppSelection,
     KmeansppStopping,
     MixtureStep,
@@ -384,9 +383,7 @@ class DeveloperConfig(DARTsortUserConfig):
     kmeanspp_neighb_overlap: float | None = None
     kmeanspp_selection: KmeansppSelection = "marginal"
     kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
-    kmeanspp_sampling: KmeansppSampling = "d2"
     kmeanspp_alpha: Annotated[float, Field(gt=0)] = 2.0
-    kmeanspp_z0: float = 3.0
     kmeanspp_min_fraction: Annotated[float, Field(gt=0)] | None = None
 
     # filters

@@ -500,8 +500,7 @@ class TemplateMergeConfig:
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
 ComponentDistanceMetric = Literal["euc", "cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
-KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp", "significance"]
-KmeansppSampling = Literal["d2", "significance"]
+KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
 SpikeStorage = Literal["device", "cpu"]
 
 
@@ -514,9 +513,7 @@ class KmeansppConfig:
     neighb_overlap: float | None = None
     selection: KmeansppSelection = "marginal"
     stopping: KmeansppStopping = "dpmeanspp"
-    sampling: KmeansppSampling = "d2"
     alpha: float = 2.0
-    z0: float = 3.0
     min_fraction: float | None = None
     max_components_per_channel: int = 5
 
@@ -1401,9 +1398,7 @@ def _refinement_cfg(
             neighb_overlap=cfg.kmeanspp_neighb_overlap,
             selection=cfg.kmeanspp_selection,
             stopping=cfg.kmeanspp_stopping,
-            sampling=cfg.kmeanspp_sampling,
             alpha=cfg.kmeanspp_alpha,
-            z0=cfg.kmeanspp_z0,
             min_fraction=cfg.kmeanspp_min_fraction,
         ),
         train_batch_size=cfg.gmm_batch_size,

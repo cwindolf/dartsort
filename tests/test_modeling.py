@@ -715,9 +715,8 @@ def test_truncated_kmeanspp_step():
 
     centroids = (0, n_neighb)
     distsq = X.new_full((n,), torch.inf)
-    dof = X.new_zeros((n,))
     for c in centroids:
-        ix, d, n_feats = mixture._truncated_kmeanspp_propose(
+        ix, d, _ = mixture._truncated_kmeanspp_propose(
             X=X,
             centroid_ix=torch.tensor(c, device=device),
             Xneighbixs=ids,
@@ -732,25 +731,15 @@ def test_truncated_kmeanspp_step():
             scale_dist_args=(0.01, 3.0 / 4.0, 4.0 / 3.0),
         )
         if d is not None:
-            assert n_feats is not None
-            mixture._truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
+            mixture._truncated_kmeanspp_commit_(distsq, ix, d)
 
     assert distsq.isfinite().any()
     assert distsq.isinf().any()
-    assert torch.equal(distsq.isfinite(), dof > 0)
 
 
-@pytest.mark.parametrize(
-    "stopping,sampling",
-    [
-        ("patience", "d2"),
-        ("dpmeanspp", "d2"),
-        ("dpmeanspp", "significance"),
-        ("significance", "significance"),
-    ],
-)
+@pytest.mark.parametrize("stopping", ["patience", "dpmeanspp"])
 @pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
-def test_truncated_kmeanspp(mini_simulations, sim_name, stopping, sampling):
+def test_truncated_kmeanspp(mini_simulations, sim_name, stopping):
     sim = mini_simulations[sim_name]
     sorting = sim["sorting"]
     gt_labels = sorting.labels
@@ -759,7 +748,7 @@ def test_truncated_kmeanspp(mini_simulations, sim_name, stopping, sampling):
 
     refinement_cfg = RefinementConfig(
         distance_metric="euc",
-        kmeanspp_cfg=KmeansppConfig(stop_dist=3.0, stopping=stopping, sampling=sampling),
+        kmeanspp_cfg=KmeansppConfig(stop_dist=3.0, stopping=stopping),
     )
     _, _, train_data, _, _, _, train_ixs, _ = mixture.get_truncated_datasets(
         sorting=unlabeled,
