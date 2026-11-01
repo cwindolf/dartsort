@@ -387,6 +387,7 @@ class DeveloperConfig(DARTsortUserConfig):
     kmeanspp_sampling: KmeansppSampling = "d2"
     kmeanspp_alpha: Annotated[float, Field(gt=0)] = 2.0
     kmeanspp_z0: float = 3.0
+    kmeanspp_min_fraction: Annotated[float, Field(gt=0)] | None = None
 
     # filters
     gmm_isolation_threshold: float | None = None

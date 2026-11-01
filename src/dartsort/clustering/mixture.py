@@ -4854,13 +4854,14 @@ class KmeansppSamplingParams:
     sampling: KmeansppSampling
     alpha: float
     z0: float
-    min_count: int
+    min_count: float
 
 
 @databag
 class TruncatedKmeansppResult:
     full_labels: Tensor
     centroid_ixs: Tensor
+    phase_centroid_counts: tuple[int, int, int]
 
     # data smuggling
     xt: Tensor
@@ -4881,7 +4882,7 @@ def truncated_kmeanspp(
     seed: np.random.Generator | int,
     metric: ComponentDistanceMetric,
     scale_dist_args: tuple[float, float, float],
-    min_count: int,
+    min_count: float,
     cfg: KmeansppConfig,
 ) -> TruncatedKmeansppResult:
     """Neighborhood-sparsity-aware kmeans++"""
@@ -4919,7 +4920,9 @@ def truncated_kmeanspp(
     visible = torch.logical_and(neighb_adj > 0, obs @ obs.T > 0)
     del obs
 
-    centroid_ixs = _kmeanspp_best_of_tries(
+    if cfg.min_fraction is not None:
+        min_count = cfg.min_fraction * train_x.shape[0]
+    centroid_ixs, phase_centroid_counts = _kmeanspp_best_of_tries(
         X=whitenedx,
         Xneighbixs=train_neighbs.b.neighborhood_ids,
         base_rg=base_rg,
@@ -5003,6 +5006,7 @@ def truncated_kmeanspp(
     return TruncatedKmeansppResult(
         full_labels=full_labels,
         centroid_ixs=centroid_ixs,
+        phase_centroid_counts=phase_centroid_counts,
         xt=xt,
         whitenedx=whitenedx,
         CmoCooinvx=CmoCooinvx,
@@ -5023,9 +5027,10 @@ def _kmeanspp_best_of_tries(
     feat_rank: int,
     metric: ComponentDistanceMetric,
     scale_dist_args: tuple[float, float, float],
-    min_count: int,
-) -> Tensor:
+    min_count: float,
+) -> tuple[Tensor, tuple[int, int, int]]:
     centroid_ixs: Tensor | None = None
+    phase_centroid_counts: tuple[int, int, int] | None = None
     best_score = torch.inf
     best_phi = torch.inf
     centroid_cost = min_count * cfg.stop_dist**2 / X.shape[0]
@@ -5034,7 +5039,7 @@ def _kmeanspp_best_of_tries(
     else:
         pbar = None
     for _ in range(cfg.tries) if pbar is None else pbar:
-        try_ixs, phi = _truncated_kmeanspp_inner(
+        try_ixs, phi, try_phase_centroid_counts = _truncated_kmeanspp_inner(
             X=X,
             Xneighbixs=Xneighbixs,
             base_rg=base_rg,
@@ -5055,7 +5060,8 @@ def _kmeanspp_best_of_tries(
         else:
             panic(cfg.selection)
         logger.dartsortdebug(
-            f"kmeans++ try: k={try_ixs.shape[0]} phi={phi:.5f} score={score:.5f}"
+            f"kmeans++ try: k={try_ixs.shape[0]} by phase {try_phase_centroid_counts} "
+            f"phi={phi:.5f} score={score:.5f}"
         )
         if centroid_ixs is None or score < best_score:
             if pbar is not None:
@@ -5063,15 +5069,16 @@ def _kmeanspp_best_of_tries(
                     f"best: k={try_ixs.shape[0]} phi={phi:.4f} {cfg.selection}={score:.4f}"
                 )
             centroid_ixs = try_ixs
+            phase_centroid_counts = try_phase_centroid_counts
             best_score = score
             best_phi = phi
-    assert centroid_ixs is not None
+    assert centroid_ixs is not None and phase_centroid_counts is not None
     logger.dartsortdebug(
-        f"kmeans++: {centroid_ixs.shape[0]} centroids at dist={math.sqrt(best_phi):0.3f}, "
-        f"best of {cfg.tries} by {cfg.selection} (centroid cost {centroid_cost:0.3g} "
-        f"over {X.shape[0]} train spikes)."
+        f"kmeans++: {centroid_ixs.shape[0]} centroids (phases: {phase_centroid_counts}) "
+        f"at dist={math.sqrt(best_phi):0.3f}, best of {cfg.tries} by {cfg.selection} "
+        f"(centroid cost {centroid_cost:0.3g} over {X.shape[0]} train spikes)."
     )
-    return centroid_ixs
+    return centroid_ixs, phase_centroid_counts
 
 
 def _truncated_kmeanspp_inner(
@@ -5087,8 +5094,8 @@ def _truncated_kmeanspp_inner(
     feat_rank: int,
     metric: ComponentDistanceMetric,
     scale_dist_args: tuple[float, float, float],
-    min_count: int,
-) -> tuple[Tensor, float]:
+    min_count: float,
+) -> tuple[Tensor, float, tuple[int, int, int]]:
     """Sparse flavor of kmeans++ which has some strategies for picking k
 
     3 stages:
@@ -5160,6 +5167,7 @@ def _truncated_kmeanspp_inner(
             _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
         covered.logical_or_(visible[Xneighbixs[train_centroid_ixs[k]]])
         k += 1
+    k_after_cover = k
 
     # -- significance: sample by excess over z0, until no neighborhood has enough
     while cfg.stopping == "significance" and k < max_k:
@@ -5219,6 +5227,8 @@ def _truncated_kmeanspp_inner(
             assert n_feats is not None
             _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
         k += 1
+
+    k_after_coverage = k
 
     # -- phase 3: with stopping and other criteria
     floor = min_count * stop_distsq
@@ -5284,7 +5294,12 @@ def _truncated_kmeanspp_inner(
             f"kmeans++ hit {max_k=}, leaving {distsq.isinf().sum().item()} uncovered"
         )
 
-    return train_centroid_ixs[:k], phi
+    phase_centroid_counts = (
+        k_after_cover,
+        k_after_coverage - k_after_cover,
+        k - k_after_coverage,
+    )
+    return train_centroid_ixs[:k], phi, phase_centroid_counts
 
 
 def _truncated_kmeanspp_sampling_weights(

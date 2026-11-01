@@ -517,6 +517,7 @@ class KmeansppConfig:
     sampling: KmeansppSampling = "d2"
     alpha: float = 2.0
     z0: float = 3.0
+    min_fraction: float | None = None
     max_components_per_channel: int = 5
 
 
@@ -1403,6 +1404,7 @@ def _refinement_cfg(
             sampling=cfg.kmeanspp_sampling,
             alpha=cfg.kmeanspp_alpha,
             z0=cfg.kmeanspp_z0,
+            min_fraction=cfg.kmeanspp_min_fraction,
         ),
         train_batch_size=cfg.gmm_batch_size,
         eval_batch_size=cfg.gmm_batch_size,
