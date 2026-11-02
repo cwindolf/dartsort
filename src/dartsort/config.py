@@ -424,10 +424,11 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
     gmm_scaled_normeuc_threshold: float = 1.5
-    robust_strategy: Literal["none", "fixed"] = "none"
+    robust_strategy: Literal["none", "fixed", "huber"] = "none"
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
+    huber_quantile: float = 0.9
     demolish_during_selection: bool = False
     em_after_demolish: bool = True
     tpca_from_templates: bool = True

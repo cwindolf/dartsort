@@ -578,10 +578,11 @@ class RefinementConfig:
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
-    robust_strategy: Literal["none", "fixed"] = "none"
+    robust_strategy: Literal["none", "fixed", "huber"] = "none"
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
+    huber_quantile: float = 0.9
     demolition_min_resp_ratio: float = 0.0
     demolish_during_selection: bool = False
     refit_in_demolition: bool = False
@@ -1405,6 +1406,7 @@ def _refinement_cfg(
         eval_batch_size=cfg.gmm_batch_size,
         spike_storage=cfg.gmm_spike_storage,
         robust_df=cfg.robust_df,
+        huber_quantile=cfg.huber_quantile,
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,
         scale_dist_args=(cfg.amplitude_scaling_stddev, 1.0 / sb, sb / 1.0),

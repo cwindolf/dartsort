@@ -107,7 +107,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         )
 
         ncand = gmm_refinement_cfg.n_candidates
-        assert gmm_refinement_cfg.robust_strategy == "none"  # not implemented atm
+        assert gmm_refinement_cfg.robust_strategy in ("none", "huber")
         self.n_candidates = ncand
         self.feature_rank = self.clustering_features_cfg.feature_rank
         self.save_neighborhood_ids = save_neighborhood_ids

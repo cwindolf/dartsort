@@ -56,6 +56,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.sparse.csgraph import connected_components
+from scipy.special import gammainc, gammaincc, gammaln
+from scipy.stats import chi2
 from sympy.utilities.iterables import multiset_partitions, subsets
 from torch import Tensor
 
@@ -277,7 +279,7 @@ def tmm_demix(
 # -- shared objects holding precomputed neighborhood-related data
 
 
-RobustnessStrategy = Literal["none", "fixed"]
+RobustnessStrategy = Literal["none", "fixed", "huber"]
 
 
 class MixtureModelAndDatasets(NamedTuple):
@@ -306,6 +308,8 @@ class NeighborhoodCovariance(BModule):
         CooinvCom: Tensor,
         Linv: Tensor,
         full_Linv: Tensor,
+        huber_k: Tensor | None,
+        huber_2logzratio: Tensor | None,
     ):
         """Holds precomputed terms which depend only on the neighborhood
 
@@ -339,6 +343,10 @@ class NeighborhoodCovariance(BModule):
         Linv: Tensor
             Coo = LL', and this is Linv. Cinv=Linv'Linv, so this multiplies from the left.
         full_Linv: Tensor
+        huber_k: Tensor | None
+            noise unit's Huber radius by neighborhood
+        huber_2logzratio: Tensor | None
+            2log(Z_huber / Z_gaussian) by neighborhood (incl in lik_const)
         """
         super().__init__()
         self.feat_rank = feat_rank
@@ -355,7 +363,12 @@ class NeighborhoodCovariance(BModule):
         self.register_buffer("CooinvCom", CooinvCom, persistent=False)
         self.register_buffer("Linv", Linv, persistent=False)
         self.register_buffer("full_Linv", full_Linv, persistent=False)
-        self.register_buffer("lik_const", logdet + LOG_2PI * nobs, persistent=False)
+        lik_const = logdet + LOG_2PI * nobs
+        assert (huber_k is None) == (huber_2logzratio is None)
+        if huber_2logzratio is not None:
+            lik_const += huber_2logzratio
+        self.register_buffer("lik_const", lik_const, persistent=False)
+        self.register_buffer_or_none("huber_k", huber_k, persistent=False)
 
     def __post_init__(self):
         """Shape validation / documentation."""
@@ -370,7 +383,9 @@ class NeighborhoodCovariance(BModule):
         assert self.CooinvCom.shape == (nneighb, obsdim, neardim)
 
     def pad_for_noise_score_(self, new_n_neighbs: int):
-        noise_score_keys = ("Linv", "logdet", "nobs", "lik_const")
+        noise_score_keys = ["Linv", "logdet", "nobs", "lik_const"]
+        if self.huber_k is not None:
+            noise_score_keys.append("huber_k")
         for k in noise_score_keys:
             v = getattr(self, k)
             ndim = v.ndim
@@ -387,6 +402,7 @@ class NeighborhoodCovariance(BModule):
         noise: EmbeddedNoise,
         neighborhoods: SpikeNeighborhoods,
         neighb_overlap: float,
+        huber_quantile: float | None,
     ) -> Self:
         dev = noise.device
         neighborhoods = neighborhoods.to(device=dev)
@@ -406,6 +422,13 @@ class NeighborhoodCovariance(BModule):
         assert obs_ix.shape[0] == miss_near_ix.shape[0] == miss_full_mask.shape[0]
         assert obs_ix.shape[0] == logdet.shape[0]
         assert obs_ix.shape[0] == CooinvCom.shape[0] == Linv.shape[0]
+        nobs = noise.rank * nc_obs
+        if huber_quantile is None:
+            huber_k = huber_2logzratio = None
+        else:
+            huber_k, huber_2logzratio = huber_neighborhood_constants(
+                nobs, huber_quantile
+            )
         return cls(
             feat_rank=noise.rank,
             max_nc_obs=obs_ix.shape[1],
@@ -413,7 +436,7 @@ class NeighborhoodCovariance(BModule):
             n_channels=neighborhoods.n_channels,
             prgeom=prgeom,
             neighb_adj=neighborhoods.adjacency(neighb_overlap),
-            nobs=noise.rank * nc_obs,
+            nobs=nobs,
             obs_ix=obs_ix,
             miss_near_ix=miss_near_ix,
             miss_full_mask=miss_full_mask,
@@ -421,6 +444,8 @@ class NeighborhoodCovariance(BModule):
             CooinvCom=CooinvCom,
             Linv=Linv,
             full_Linv=noise.whitener(),
+            huber_k=huber_k,
+            huber_2logzratio=huber_2logzratio,
         )
 
 
@@ -515,6 +540,8 @@ class LUTParams(BModule):
         Tpad: Tensor | None,
         # main factor for using inverse lemma to compute likelihoods
         wburyroot: Tensor | None,
+        huber_k: Tensor | None,
+        huber_2logzratio: Tensor | None,
     ):
         super().__init__()
         self.signal_rank = signal_rank
@@ -528,6 +555,11 @@ class LUTParams(BModule):
         self.register_buffer_or_none("TWoCooinvmuo", TWoCooinvmuo, persistent=False)
         self.register_buffer_or_none("Tpad", Tpad, persistent=False)
         self.register_buffer_or_none("wburyroot", wburyroot, persistent=False)
+        assert (huber_k is None) == (huber_2logzratio is None)
+        self.register_buffer_or_none("huber_k", huber_k, persistent=False)
+        self.register_buffer_or_none(
+            "huber_2logzratio", huber_2logzratio, persistent=False
+        )
 
     @classmethod
     def from_lut(
@@ -537,9 +569,16 @@ class LUTParams(BModule):
         neighb_cov: NeighborhoodCovariance,
         lut: NeighborhoodLUT,
         latent_prior_std: float,
+        huber_quantile: float | None,
         puff=1.0,
     ):
         signal_rank = 0 if bases is None else bases.shape[1]
+        if huber_quantile is None:
+            huber_k = huber_2logzratio = None
+        else:
+            huber_k, huber_2logzratio = huber_neighborhood_constants(
+                neighb_cov.b.nobs, huber_quantile
+            )
         self = cls._new_empty(
             lut.b.unit_ids.shape[0],
             signal_rank,
@@ -547,6 +586,8 @@ class LUTParams(BModule):
             dim_miss_near=neighb_cov.max_nc_miss_near * neighb_cov.feat_rank,
             device=means.device,
             latent_prior_std=latent_prior_std,
+            huber_k=huber_k,
+            huber_2logzratio=huber_2logzratio,
             puff=puff,
         )
         self.update(means, bases, neighb_cov, lut)
@@ -584,6 +625,8 @@ class LUTParams(BModule):
         dim_miss_near: int,
         device: torch.device,
         latent_prior_std: float,
+        huber_k: Tensor | None,
+        huber_2logzratio: Tensor | None,
         puff=1.0,
     ) -> Self:
         n0 = n_lut if puff == 1.0 else int(puff * n_lut)
@@ -609,6 +652,8 @@ class LUTParams(BModule):
             TWoCooinvmuo=r,
             Tpad=rh,
             wburyroot=romt,
+            huber_k=huber_k,
+            huber_2logzratio=huber_2logzratio,
         )
         if n0 != n_lut:
             self._resize_(n_lut)
@@ -711,6 +756,7 @@ class SufficientStatistics:
 
     count: float
     noise_N: Tensor | None
+    resp_N: Tensor
     N: Tensor
     Nlut: Tensor
     R: Tensor
@@ -719,6 +765,7 @@ class SufficientStatistics:
 
     def diagnostic(self) -> str:
         noise_N = self.noise_N.item() if self.noise_N is not None else None
+        resp_Ns = f"{self.resp_N.amin().item()}, {self.resp_N.amax().item()}"
         Ns = f"{self.N.amin().item()}, {self.N.amax().item()}"
         Nluts = f"{self.Nlut.amin().item()}, {self.Nlut.amax().item()}"
         Rna = self.R.isnan().any(dim=(1, 2)).sum().item()
@@ -728,8 +775,9 @@ class SufficientStatistics:
             f" - count: {self.count}\n"
             f" - ELBO: {self.elbo.item()}\n"
             f" - noise count: {noise_N}\n"
-            f" - unit count min/max: {Ns}\n"
-            f" - LUT count min/max: {Nluts}\n"
+            f" - unit responsibility count min/max: {resp_Ns}\n"
+            f" - unit weight count min/max: {Ns}\n"
+            f" - LUT weight count min/max: {Nluts}\n"
             f" - R na/inf count: {Rna}, {Rinf}"
         )
         return msg
@@ -760,6 +808,7 @@ class SufficientStatistics:
         return cls(
             count=0.0,
             noise_N=noise_N,
+            resp_N=torch.zeros((n_units,), device=device, dtype=count_dtype),
             N=torch.zeros((n_units,), device=device, dtype=count_dtype),
             Nlut=torch.zeros((n_lut,), device=device, dtype=count_dtype),
             R=torch.zeros((n_units, n_channels, hat_dim, feature_rank), device=device),
@@ -773,6 +822,7 @@ class SufficientStatistics:
         self.count = 0.0
         if self.noise_N is not None:
             self.noise_N.zero_()
+        self.resp_N.zero_()
         self.N.zero_()
         self.Nlut.zero_()
         self.R.zero_()
@@ -787,6 +837,7 @@ class SufficientStatistics:
         """Welford running means."""
         self.count += other.count
         w_count = other.count / max(1, self.count)
+        self.resp_N += other.resp_N
         self.N += other.N
         w_N = other.N.div_(self.N.clamp(min=eps))
         self.Nlut += other.Nlut
@@ -831,6 +882,7 @@ class TMMParams:
     main_min_iters: int
     elbo_atol: float
     robust_strategy: RobustnessStrategy
+    huber_quantile: float
     demolition_min_resp_ratio: float
     demolish_during_selection: bool
     refit_in_demolition: bool
@@ -876,6 +928,7 @@ class TMMParams:
             demolish_cl_alpha=refinement_cfg.demolish_cl_alpha,
             latent_prior_std=refinement_cfg.latent_prior_std,
             robust_strategy=refinement_cfg.robust_strategy,
+            huber_quantile=refinement_cfg.huber_quantile,
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
             demolish_during_selection=refinement_cfg.demolish_during_selection,
             refit_in_demolition=refinement_cfg.refit_in_demolition,
@@ -2381,6 +2434,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             noise=noise,
             neighborhoods=neighborhoods,
             neighb_overlap=refinement_cfg.neighb_overlap,
+            huber_quantile=huber_quantile_if_huber(
+                refinement_cfg.robust_strategy, refinement_cfg.huber_quantile
+            ),
         )
         lut_dict = {
             k.removeprefix("lut."): v
@@ -2722,7 +2778,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # proportions
         if not skip_proportions:
             assert stats.noise_N is not None
-            lp = torch.concatenate([stats.N, stats.noise_N[None]])
+            lp = torch.concatenate([stats.resp_N, stats.noise_N[None]])
             lp = F.log_softmax(lp.log_(), dim=0).clamp_(min=self.LP_MIN)
             self.b.log_proportions.copy_(lp[:-1])
             self.b.noise_log_prop.fill_(lp[-1])
@@ -2795,11 +2851,21 @@ class TruncatedMixtureModel(BaseMixtureModel):
             batch_sparse_ixs.append(
                 (spike_ixs, candidate_ixs, unit_ixs, neighb_ixs, lut_ixs)
             )
+        if self.p.robust_strategy == "huber":
+            mstep_weights_need_scores = True
+        elif self.p.robust_strategy in ("none", "fixed"):
+            mstep_weights_need_scores = False
+        else:
+            panic(self.p.robust_strategy)
         for j in range(self.p.em_iters):
             for batch, spixs in zip(batches, batch_sparse_ixs, strict=True):
                 spike_ixs, candidate_ixs, unit_ixs, neighb_ixs, lut_ixs = spixs
                 bresp = responsibilities[batch.batch]
-                if not fix_responsibilities or j >= self.p.criterion_em_iters:
+                if (
+                    not fix_responsibilities
+                    or j >= self.p.criterion_em_iters
+                    or mstep_weights_need_scores
+                ):
                     # compute log liks for convergence testing below
                     batch_scores = self.score_batch(
                         batch=batch,
@@ -2824,7 +2890,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
                         log_liks=bresp,  # unused, just to fill the field.
                         responsibilities=bresp,
                         candidates=batch.candidates,
-                        duties=batch.duties,
+                        duties=None
+                        if batch.duties is None
+                        else batch.duties[:, None].expand_as(batch.candidates),
                     )
                 batch_stats = self.estep_stats_batch(
                     batch=batch,
@@ -3004,11 +3072,19 @@ class TruncatedMixtureModel(BaseMixtureModel):
             assert unit_ixs is not None
             assert neighb_ixs is not None
             assert lut_ixs is not None
+        if self.p.robust_strategy == "huber":
+            assert scores.duties is not None
+            mstep_weights = scores.duties
+        elif self.p.robust_strategy in ("none", "fixed"):
+            mstep_weights = None
+        else:
+            panic(self.p.robust_strategy)
         return _stat_pass_batch(
             xt=batch.xt,
             whitenedx=batch.whitenedx,
             CmoCooinvx=batch.CmoCooinvx,
             responsibilities=scores.responsibilities,
+            mstep_weights=mstep_weights,
             log_liks=scores.log_liks,
             spike_ixs=spike_ixs,
             candidate_ixs=candidate_ixs,
@@ -3062,8 +3138,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             dev = data.candidates.device
         if self.p.robust_strategy == "none":
             duties = None
+        elif self.p.robust_strategy in ("fixed", "huber"):
+            duties = torch.full((data.N, data.n_candidates), torch.nan, device=dev)
         else:
-            duties = torch.full((data.N,), torch.nan, device=dev)
+            panic(self.p.robust_strategy)
         scores = Scores(
             log_liks=torch.empty((data.N, data.n_candidates + 1), device=dev),
             responsibilities=torch.empty((data.N, data.n_candidates + 1), device=dev),
@@ -3135,6 +3213,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.neighb_cov,
                 lut,
                 latent_prior_std=self.p.latent_prior_std,
+                huber_quantile=huber_quantile_if_huber(
+                    self.p.robust_strategy, self.p.huber_quantile
+                ),
                 puff=puff,
             )
         else:
@@ -4376,11 +4457,21 @@ class TMMStack(BaseMixtureModel):
             candidates[:, i0:i1].masked_fill_(score.candidates < 0, -1)
             i0 = i1
         log_liks = torch.concatenate([score.log_liks for score in scores], dim=1)
-        log_liks = torch.concatenate([score.log_liks for score in scores], dim=1)
         if pnoid and not allow_blanks:
             assert log_liks.isfinite().any(dim=1).all()
+        if scores[0].duties is None:
+            assert all(score.duties is None for score in scores)
+            duties = None
+        else:
+            duties = torch.concatenate(
+                [cast(Tensor, score.duties) for score in scores], dim=1
+            )
+            assert duties.shape == candidates.shape
         return Scores(
-            log_liks=log_liks, candidates=candidates, responsibilities=None, duties=None
+            log_liks=log_liks,
+            candidates=candidates,
+            responsibilities=None,
+            duties=duties,
         )
 
 
@@ -4424,10 +4515,10 @@ def get_truncated_datasets(
         _abs_log_mean = duties.mean().log().abs().item()
         if _abs_log_mean > 0.3:
             logger.warning(f"Mean duty {duties.mean().item():.4f} is not near 1.")
-    elif refinement_cfg.robust_strategy == "none":
+    elif refinement_cfg.robust_strategy in ("none", "huber"):
         duties = None
     else:
-        panic()
+        panic(refinement_cfg.robust_strategy)
 
     if noise is None:
         noise = EmbeddedNoise.estimate_from_hdf5(
@@ -4454,6 +4545,9 @@ def get_truncated_datasets(
         noise=noise,
         neighborhoods=full_neighbs,
         neighb_overlap=refinement_cfg.neighb_overlap,
+        huber_quantile=huber_quantile_if_huber(
+            refinement_cfg.robust_strategy, refinement_cfg.huber_quantile
+        ),
     )
 
     if refinement_cfg.spike_storage == "device" or not sorting.n_units:
@@ -6480,6 +6574,7 @@ def evaluate_group_demolitions(
                 orig_log_props=mm.b.log_proportions,
                 noise_log_prop=mm.b.noise_log_prop,
                 cl_alpha=alpha,
+                robust_strategy=mm.p.robust_strategy,
                 group=group_,
                 demolish_mask=demo_mask,
                 train_scores=train_scores,
@@ -6499,6 +6594,7 @@ def _evaluate_single_demolition(
     orig_log_props: Tensor,
     noise_log_prop: Tensor,
     cl_alpha: float,
+    robust_strategy: RobustnessStrategy,
     group: Tensor,
     demolish_mask: Tensor,
     train_scores: Scores,
@@ -6529,6 +6625,7 @@ def _evaluate_single_demolition(
         orig_log_props=orig_log_props,
         new_log_props=new_log_props,
         cl_alpha=cl_alpha,
+        robust_strategy=robust_strategy,
         orig_row_criterion=eval_row_crit,
     )
 
@@ -6800,6 +6897,14 @@ def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
     return logdet, CooinvCom, Linv
 
 
+def _huber_twicerho_and_weight(sqdist: Tensor, k: Tensor) -> tuple[Tensor, Tensor]:
+    r = sqdist.clamp_(min=0.0).sqrt_()
+    c = torch.minimum(r, k)
+    weight = k.div(r).clamp_(max=1.0)
+    twicerho = r.mul_(2.0).sub_(c).mul_(c)
+    return twicerho, weight
+
+
 def _whiten_and_noise_score(
     *,
     x: Tensor,
@@ -6824,7 +6929,8 @@ def _whiten_and_noise_score(
             inni = inni.cpu()
 
         right_factor = neighb_cov.b.Linv[ni].T
-        nll_const = neighb_cov.b.logdet[ni] + LOG_2PI * neighb_cov.b.nobs[ni]
+        nll_const = neighb_cov.b.lik_const[ni]
+        huber_k = None if neighb_cov.huber_k is None else neighb_cov.huber_k[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
@@ -6833,6 +6939,8 @@ def _whiten_and_noise_score(
             wx[binni] = wxb.to(wx.device)
 
             nll = wxb.square_().sum(dim=1)
+            if huber_k is not None:
+                nll, _ = _huber_twicerho_and_weight(nll, huber_k)
             nll += nll_const
             nll *= -0.5
             assert nll.isfinite().all()
@@ -6870,7 +6978,8 @@ def _whiten_impute_and_noise_score(
         right_factor = neighb_cov.b.Linv[ni].T
         neighb_CooinvCom = neighb_cov.b.CooinvCom[ni]
 
-        nll_const = neighb_cov.b.logdet[ni] + LOG_2PI * neighb_cov.b.nobs[ni]
+        nll_const = neighb_cov.b.lik_const[ni]
+        huber_k = None if neighb_cov.huber_k is None else neighb_cov.huber_k[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
@@ -6886,6 +6995,8 @@ def _whiten_impute_and_noise_score(
             CmoCooinvx[binni] = CmoCooinvx_batch.mT.to(CmoCooinvx.device)
 
             nll = wxb.square_().sum(dim=1)
+            if huber_k is not None:
+                nll, _ = _huber_twicerho_and_weight(nll, huber_k)
             nll += nll_const
             nll *= -0.5
             assert nll.isfinite().all()
@@ -6910,17 +7021,23 @@ def _whiten_and_noise_score_batch(
     *, x: Tensor, neighb_ids: Tensor, neighb_cov: NeighborhoodCovariance
 ):
     return _whiten_and_noise_score_batch_k(
-        x, neighb_ids, neighb_cov.b.Linv, neighb_cov.b.lik_const
+        x, neighb_ids, neighb_cov.b.Linv, neighb_cov.b.lik_const, neighb_cov.huber_k
     )
 
 
 @torch_compiler(fullgraph=False)
 def _whiten_and_noise_score_batch_k(
-    x: Tensor, neighb_ids: Tensor, Linv: Tensor, lik_const: Tensor
+    x: Tensor,
+    neighb_ids: Tensor,
+    Linv: Tensor,
+    lik_const: Tensor,
+    huber_k: Tensor | None,
 ):
     batch_whitener = Linv[neighb_ids]
     wx = torch.bmm(batch_whitener, x[:, :, None])[:, :, 0]
     nll = torch.linalg.vector_norm(wx, dim=1).square_()
+    if huber_k is not None:
+        nll, _ = _huber_twicerho_and_weight(nll, huber_k[neighb_ids])
     const = lik_const[neighb_ids]
     nll += const
     nll *= -0.5
@@ -7450,9 +7567,10 @@ def concatenate_scores(scoress: list[Scores], dim=0) -> Scores:
             [cast(Tensor, s.responsibilities) for s in scoress], dim=dim
         )
     if scoress[0].duties is None:
+        assert all(s.duties is None for s in scoress)
         duties = None
     else:
-        duties = scoress[0].duties
+        duties = torch.concatenate([cast(Tensor, s.duties) for s in scoress], dim=dim)
     return Scores(
         log_liks=log_liks,
         responsibilities=responsibilities,
@@ -7511,6 +7629,7 @@ def proportion_adjust_scores(
     batch_size: int = 2**16,
 ) -> Scores:
     """What would the scores be if the log props were these, not those?"""
+    assert scores.duties is None
     diff = new_log_props - orig_log_props
     diff.nan_to_num_()
     diff = F.pad(diff, (0, 1))
@@ -7526,8 +7645,6 @@ def proportion_adjust_scores(
         i1 = min(n, i0 + batch_size)
 
         bdiff = diff[scores.candidates[i0:i1]]
-        if scores.duties is not None:
-            bdiff *= scores.duties[i0:i1, None]
         torch.add(
             scores.log_liks[i0:i1, :ncand], bdiff, out=new_log_liks[i0:i1, :ncand]
         )
@@ -7568,12 +7685,16 @@ def ensure_sorted_scores(scores: Scores) -> Scores:
         responsibilities = F.softmax(log_liks, dim=1).nan_to_num_()
     else:
         responsibilities = None
+    if scores.duties is not None:
+        duties = scores.duties.take_along_dim(indices=order, dim=1)
+    else:
+        duties = None
 
     return Scores(
         candidates=candidates,
         log_liks=log_liks,
         responsibilities=responsibilities,
-        duties=scores.duties,
+        duties=duties,
     )
 
 
@@ -7743,6 +7864,7 @@ def proportion_adjust_criterion_change(
     orig_log_props: Tensor,
     new_log_props: Tensor,
     cl_alpha: float,
+    robust_strategy: RobustnessStrategy,
     orig_row_criterion: Tensor | None = None,
     batch_size: int = 2**18,
 ) -> float:
@@ -7754,14 +7876,22 @@ def proportion_adjust_criterion_change(
     n, ncand = cand.shape
     assert orig_row_criterion is None or orig_row_criterion.shape == (n,)
 
+    if robust_strategy == "fixed":
+        assert scores.duties is not None
+        tempering = scores.duties
+    elif robust_strategy in ("none", "huber"):
+        tempering = None
+    else:
+        panic(robust_strategy)
+
     mean = diff.new_zeros(())
     for i0 in range(0, n, batch_size):
         i1 = min(n, i0 + batch_size)
         nbatch = i1 - i0
 
         bdiff = diff[cand[i0:i1]]
-        if scores.duties is not None:
-            bdiff *= scores.duties[i0:i1, None]
+        if tempering is not None:
+            bdiff *= tempering[i0:i1]
 
         bll = log_liks[i0:i1].double()
         if orig_row_criterion is None:
@@ -7791,6 +7921,43 @@ def stack_tmms(tmms: list[TruncatedMixtureModel]) -> BaseMixtureModel:
 LOG_2PI = math.log(math.tau)
 
 
+def huber_quantile_if_huber(
+    robust_strategy: RobustnessStrategy, huber_quantile: float
+) -> float | None:
+    if robust_strategy == "huber":
+        return huber_quantile
+    elif robust_strategy in ("none", "fixed"):
+        return None
+    else:
+        panic(robust_strategy)
+
+
+def huber_neighborhood_constants(
+    nobs: Tensor, quantile: float
+) -> tuple[Tensor, Tensor]:
+    """Huber radius k and 2log(Z_huber / Z_gaussian) for each observed dim d
+
+    k^2 = chi2(d).ppf(quantile), and
+        Z_huber / Z_gaussian = P(d/2, k^2/2)
+            + 2^(1-d/2) Gamma(d) Q(d, k^2) exp(k^2/2) / (Gamma(d/2) k^d),
+    with P and Q the regularized lower and upper incomplete gamma functions.
+    """
+    assert 0.0 < quantile < 1.0
+    d = nobs.numpy(force=True).astype(np.float64)
+    assert np.all(d > 0)
+    ksq = chi2.ppf(quantile, d)
+    log_tail = (1.0 - 0.5 * d) * math.log(2.0)
+    log_tail += gammaln(d) - gammaln(0.5 * d)
+    log_tail += 0.5 * ksq - 0.5 * d * np.log(ksq)
+    log_tail += np.log(gammaincc(d, ksq))
+    log_core = np.log(gammainc(0.5 * d, 0.5 * ksq))
+    log_ratio = np.logaddexp(log_core, log_tail)
+    assert np.all(np.isfinite(log_ratio))
+    k = torch.asarray(np.sqrt(ksq), dtype=torch.float, device=nobs.device)
+    twologzratio = torch.asarray(2.0 * log_ratio, dtype=torch.float, device=nobs.device)
+    return k, twologzratio
+
+
 def _update_lut_mean_batch(
     lut_params: LUTParams,
     i0: int,
@@ -7809,8 +7976,8 @@ def _update_lut_mean_batch(
          obs_dim * log(2pi) + logdet(cov)
        -2x because _calc_loglik multiplies by -0.5 anyway.
        NB that logdet(cov) = logdet(Coo) + logdet(ppca term). Here we just put in
-       the dim 2pi constant and the logdet(Coo). The next fn deals with the second
-       term if needed.
+       the dim 2pi constant and the logdet(Coo), plus 2log(Z_huber / Z_gaussian)
+       when using Huber tails. The next fn deals with the second term if needed.
     """
     n = i1 - i0
     uu = lut.b.unit_ids[i0:i1]
@@ -7846,6 +8013,8 @@ def _update_lut_mean_batch(
     # constplogdet. add in the signal-rank-0-only terms.
     lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)  # type: ignore  # ty: ignore[x]
     lut_params.constplogdet[i0:i1] += neighb_cov.b.logdet[nn]  # ty: ignore[not-subscriptable]
+    if lut_params.huber_2logzratio is not None:
+        lut_params.constplogdet[i0:i1] += lut_params.b.huber_2logzratio[nn]  # ty: ignore[not-subscriptable]
     if pnoid:
         assert lut_params.constplogdet[i0:i1].isfinite().all()  # type: ignore  # ty: ignore[x]
 
@@ -7978,35 +8147,51 @@ def _score_batch(
         lls[:, -1] += noise_log_prop
 
     if lut_params.signal_rank and not force_rank0:
-        lls[spike_ixs, candidate_ixs] = _calc_loglik_ppca(
+        sparse_lls, sparse_weights = _calc_loglik_ppca(
             whitenedx=whitenedx,
             log_proportions=log_proportions,
             spike_ixs=spike_ixs,
             lut_ixs=lut_ixs,
             unit_ixs=unit_ixs,
+            neighb_ixs=neighb_ixs,
             constplogdet=lut_params.constplogdet,
             Linvmuo=lut_params.Linvmuo,
             wburyroot=lut_params.wburyroot,
+            huber_k=lut_params.huber_k,
         )
     else:
-        lls[spike_ixs, candidate_ixs] = _calc_loglik_rank0(
+        sparse_lls, sparse_weights = _calc_loglik_rank0(
             whitenedx=whitenedx,
             log_proportions=log_proportions,
             spike_ixs=spike_ixs,
             lut_ixs=lut_ixs,
             unit_ixs=unit_ixs,
+            neighb_ixs=neighb_ixs,
             constplogdet=lut_params.constplogdet,
             Linvmuo=lut_params.Linvmuo,
+            huber_k=lut_params.huber_k,
         )
+    lls[spike_ixs, candidate_ixs] = sparse_lls
+    del sparse_lls
+    if sparse_weights is None:
+        huber_weights = None
+    else:
+        huber_weights = whitenedx.new_zeros((n, Ctot))
+        huber_weights[spike_ixs, candidate_ixs] = sparse_weights
+    del sparse_weights
 
     if do_resp:
         n_top = min(n_candidates, Ctot)
         toplls, topinds = torch.topk(lls[:, :-1], n_top, dim=1)
         candidates = candidates.take_along_dim(indices=topinds, dim=1)
+        if huber_weights is not None:
+            huber_weights = huber_weights.take_along_dim(indices=topinds, dim=1)
         if n_top < n_candidates:
             n_pad = n_candidates - n_top
             toplls = F.pad(toplls, (0, n_pad), value=-torch.inf)
             candidates = F.pad(candidates, (0, n_pad), value=-1)
+            if huber_weights is not None:
+                huber_weights = F.pad(huber_weights, (0, n_pad), value=0.0)
         toplls = torch.concatenate((toplls, lls[:, -1:]), dim=1)
     else:
         toplls = lls
@@ -8014,11 +8199,21 @@ def _score_batch(
 
     if robust_strategy == "fixed":
         assert duties is not None
+        assert duties.shape == (n,)
+        assert huber_weights is None
         toplls *= duties[:, None]
+        candidate_duties = duties[:, None].expand_as(candidates)
+    elif robust_strategy == "huber":
+        assert duties is None
+        assert huber_weights is not None
+        assert huber_weights.shape == candidates.shape
+        candidate_duties = huber_weights
     elif robust_strategy == "none":
         assert duties is None
+        assert huber_weights is None
+        candidate_duties = None
     else:
-        panic()
+        panic(robust_strategy)
 
     if do_resp:
         responsibilities = torch.softmax(toplls, dim=1)
@@ -8029,7 +8224,7 @@ def _score_batch(
         log_liks=toplls,
         responsibilities=responsibilities,
         candidates=candidates,
-        duties=duties,
+        duties=candidate_duties,
     )
 
 
@@ -8081,16 +8276,22 @@ def _calc_loglik_rank0(
     spike_ixs: Tensor,
     lut_ixs: Tensor,
     unit_ixs: Tensor,
+    neighb_ixs: Tensor,
     constplogdet: Tensor,
     Linvmuo: Tensor,
-):
+    huber_k: Tensor | None,
+) -> tuple[Tensor, Tensor | None]:
     wdxz = whitenedx[spike_ixs]
     wdxz -= Linvmuo[lut_ixs]
     ll = wdxz.square_().sum(dim=1)
+    if huber_k is None:
+        weight = None
+    else:
+        ll, weight = _huber_twicerho_and_weight(ll, huber_k[neighb_ixs])
     ll += constplogdet[lut_ixs]
     ll *= -0.5
     ll += log_proportions[unit_ixs]
-    return ll
+    return ll, weight
 
 
 @torch_compiler(fullgraph=False)
@@ -8101,10 +8302,12 @@ def _calc_loglik_ppca(
     spike_ixs: Tensor,
     lut_ixs: Tensor,
     unit_ixs: Tensor,
+    neighb_ixs: Tensor,
     constplogdet: Tensor,
     Linvmuo: Tensor,
     wburyroot: Tensor,
-):
+    huber_k: Tensor | None,
+) -> tuple[Tensor, Tensor | None]:
     wdxz = whitenedx[spike_ixs]
     wdxz -= Linvmuo[lut_ixs]
 
@@ -8114,11 +8317,15 @@ def _calc_loglik_ppca(
 
     ll = term_a.sub_(term_b)
     ll = ll.nan_to_num_(nan=torch.inf)
+    if huber_k is None:
+        weight = None
+    else:
+        ll, weight = _huber_twicerho_and_weight(ll, huber_k[neighb_ixs])
 
     ll += constplogdet[lut_ixs]
     ll *= -0.5
     ll += log_proportions[unit_ixs]
-    return ll
+    return ll, weight
 
 
 def _stat_pass_batch(
@@ -8127,6 +8334,7 @@ def _stat_pass_batch(
     whitenedx: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
+    mstep_weights: Tensor | None,
     log_liks: Tensor,
     spike_ixs: Tensor,
     candidate_ixs: Tensor,
@@ -8140,15 +8348,18 @@ def _stat_pass_batch(
     eps: Tensor,
 ) -> SufficientStatistics:
     n = responsibilities.shape[0]
+    if mstep_weights is not None:
+        assert mstep_weights.shape == (n, n_candidates)
     if lut_params.signal_rank:
         assert lut_params.TWoCooinvsqrt is not None
         assert lut_params.TWoCooinvmuo is not None
         assert lut_params.Tpad is not None
-        noise_N, N, Nlut, Ulut, R, elb = _stat_pass_batch_ppca(
+        noise_N, resp_N, N, Nlut, Ulut, R, elb = _stat_pass_batch_ppca(
             xt=xt,
             whitenedx=whitenedx,
             CmoCooinvx=CmoCooinvx,
             responsibilities=responsibilities,
+            mstep_weights=mstep_weights,
             log_liks=log_liks,
             spike_ixs=spike_ixs,
             candidate_ixs=candidate_ixs,
@@ -8171,13 +8382,21 @@ def _stat_pass_batch(
             eps=eps,
         )
         stats = SufficientStatistics(
-            count=n, noise_N=noise_N, N=N, Nlut=Nlut, Ulut=Ulut, R=R, elbo=elb
+            count=n,
+            noise_N=noise_N,
+            resp_N=resp_N,
+            N=N,
+            Nlut=Nlut,
+            Ulut=Ulut,
+            R=R,
+            elbo=elb,
         )
     else:
-        noise_N, N, Nlut, R, elb = _stat_pass_batch_rank0(
+        noise_N, resp_N, N, Nlut, R, elb = _stat_pass_batch_rank0(
             xt=xt,
             CmoCooinvx=CmoCooinvx,
             responsibilities=responsibilities,
+            mstep_weights=mstep_weights,
             log_liks=log_liks,
             spike_ixs=spike_ixs,
             candidate_ixs=candidate_ixs,
@@ -8196,7 +8415,14 @@ def _stat_pass_batch(
             eps=eps,
         )
         stats = SufficientStatistics(
-            count=n, noise_N=noise_N, N=N, Nlut=Nlut, Ulut=None, R=R, elbo=elb
+            count=n,
+            noise_N=noise_N,
+            resp_N=resp_N,
+            N=N,
+            Nlut=Nlut,
+            Ulut=None,
+            R=R,
+            elbo=elb,
         )
     return stats
 
@@ -8205,6 +8431,7 @@ def _stat_pass_batch(
 def _count_batch(
     *,
     responsibilities: Tensor,
+    weightsflat: Tensor | None,
     n_candidates: int,
     spike_ixs: Tensor,
     candidate_ixs: Tensor,
@@ -8213,7 +8440,7 @@ def _count_batch(
     n_units: int,
     n_lut: int,
     eps: Tensor,
-) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor]:
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor, Tensor]:
     have_noise = responsibilities.shape[1] == n_candidates + 1
     if have_noise:
         noise_N = responsibilities[:, -1].sum()
@@ -8221,19 +8448,25 @@ def _count_batch(
         noise_N = None
 
     Qflat = responsibilities[spike_ixs, candidate_ixs]
+    resp_N = Qflat.new_zeros(n_units)
+    resp_N.scatter_add_(dim=0, index=unit_ixs, src=Qflat)
+    if weightsflat is None:
+        QWflat = Qflat
+    else:
+        QWflat = Qflat * weightsflat
+
     N = Qflat.new_zeros(n_units)
     Nlut = Qflat.new_zeros(n_lut)
-
-    N.scatter_add_(dim=0, index=unit_ixs, src=Qflat)
-    Nlut.scatter_add_(dim=0, index=lut_ixs, src=Qflat)
+    N.scatter_add_(dim=0, index=unit_ixs, src=QWflat)
+    Nlut.scatter_add_(dim=0, index=lut_ixs, src=QWflat)
 
     Qnflat = N[unit_ixs].clamp_(min=eps)
-    Qnflat = torch.div(Qflat, Qnflat, out=Qnflat)
+    Qnflat = torch.div(QWflat, Qnflat, out=Qnflat)
 
     Qnflatlut = Nlut[lut_ixs].clamp_(min=eps)
     Qnflatlut = torch.div(Qflat, Qnflatlut, out=Qnflatlut)
 
-    return noise_N, N, Nlut, Qnflat, Qnflatlut
+    return noise_N, resp_N, N, Nlut, Qnflat, Qnflatlut
 
 
 @torch_compiler(fullgraph=False)
@@ -8243,6 +8476,7 @@ def _stat_pass_batch_ppca(
     whitenedx: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
+    mstep_weights: Tensor | None,
     log_liks: Tensor,
     spike_ixs: Tensor,
     candidate_ixs: Tensor,
@@ -8263,7 +8497,7 @@ def _stat_pass_batch_ppca(
     hat_dim: int,
     n_lut: int,
     eps: Tensor,
-) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor, Tensor]:
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """
     neighb_ixs, lut_ixs, candidate_ixs, unit_ixs, spike_ixs are all the
     same shape, and are sparse indices of the valid candidates for this batch.
@@ -8289,9 +8523,14 @@ def _stat_pass_batch_ppca(
     miss_near_ix = neighb_cov_miss_near_ix[neighb_ixs]
     TWoCooinvsqrt = lut_params_TWoCooinvsqrt[lut_ixs]
     TWoCooinvmuo = lut_params_TWoCooinvmuo[lut_ixs]
+    if mstep_weights is None:
+        weightsflat = None
+    else:
+        weightsflat = mstep_weights[spike_ixs, candidate_ixs]
 
-    noise_N, N, Nlut, Qnflat, Qnflatlut = _count_batch(
+    noise_N, resp_N, N, Nlut, Qnflat, Qnflatlut = _count_batch(
         responsibilities=responsibilities,
+        weightsflat=weightsflat,
         n_candidates=n_candidates,
         spike_ixs=spike_ixs,
         candidate_ixs=candidate_ixs,
@@ -8311,7 +8550,12 @@ def _stat_pass_batch_ppca(
     hatU = lut_params_Tpad[lut_ixs]
 
     # not saving the bottom row, Tpad should just be 0padded on inner dim
-    hatU.addcmul_(ubar[:, :, None], hatubar[:, None, :])
+    # weights multiply E[u]E[hatu]' but not the posterior covariance T
+    if weightsflat is None:
+        hatU.addcmul_(ubar[:, :, None], hatubar[:, None, :])
+    else:
+        wubar = ubar * weightsflat[:, None]
+        hatU.addcmul_(wubar[:, :, None], hatubar[:, None, :])
 
     # U sufficient stat (LUT binned)
     hatU *= Qnflatlut[:, None, None]
@@ -8352,7 +8596,7 @@ def _stat_pass_batch_ppca(
     # objective
     elb = mean_elbo_dim1(responsibilities, log_liks)
 
-    return noise_N, N, Nlut, Ulut, R, elb
+    return noise_N, resp_N, N, Nlut, Ulut, R, elb
 
 
 @torch_compiler(fullgraph=False)
@@ -8361,6 +8605,7 @@ def _stat_pass_batch_rank0(
     xt: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
+    mstep_weights: Tensor | None,
     log_liks: Tensor,
     spike_ixs: Tensor,
     candidate_ixs: Tensor,
@@ -8377,7 +8622,7 @@ def _stat_pass_batch_rank0(
     n_units: int,
     n_lut: int,
     eps: Tensor,
-) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor]:
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """
     neighb_ixs, lut_ixs, candidate_ixs, unit_ixs, spike_ixs are all the
     same shape, and are sparse indices of the valid candidates for this batch.
@@ -8401,9 +8646,14 @@ def _stat_pass_batch_rank0(
     obs_ix = neighb_cov_obs_ix[neighb_ixs]
     miss_near_ix = neighb_cov_miss_near_ix[neighb_ixs]
     R = xt.new_zeros((n_units * (n_channels + 1), 1, feat_rank))
+    if mstep_weights is None:
+        weightsflat = None
+    else:
+        weightsflat = mstep_weights[spike_ixs, candidate_ixs]
 
-    noise_N, N, Nlut, Qnflat, _Qnflatlut = _count_batch(
+    noise_N, resp_N, N, Nlut, Qnflat, _Qnflatlut = _count_batch(
         responsibilities=responsibilities,
+        weightsflat=weightsflat,
         n_candidates=n_candidates,
         spike_ixs=spike_ixs,
         candidate_ixs=candidate_ixs,
@@ -8439,7 +8689,7 @@ def _stat_pass_batch_rank0(
     # objective
     elb = mean_elbo_dim1(responsibilities, log_liks)
 
-    return noise_N, N, Nlut, R, elb
+    return noise_N, resp_N, N, Nlut, R, elb
 
 
 def _finalize_e_stats(

@@ -85,8 +85,16 @@ def low_k_simulations():
 @pytest.mark.parametrize("corruption", [0.2])
 # @pytest.mark.parametrize("demoinsel", [False, True])
 @pytest.mark.parametrize("demoinsel", [True])
+@pytest.mark.parametrize("robust_strategy", ["none", "huber"])
 def test_truncated_mixture(
-    moppca_simulations, t_mu, t_cov_zrad, t_w, t_missing, corruption, demoinsel
+    moppca_simulations,
+    t_mu,
+    t_cov_zrad,
+    t_w,
+    t_missing,
+    corruption,
+    demoinsel,
+    robust_strategy,
 ):
     mixture.pnoid = True
 
@@ -119,6 +127,7 @@ def test_truncated_mixture(
         em_converged_atol=1e-4,
         demolish_during_selection=demoinsel,
         initialize_at_rank_0=False,
+        robust_strategy=robust_strategy,
     )
     no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
 
