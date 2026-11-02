@@ -19,8 +19,6 @@ from spikeinterface.core.recording_tools import get_chunk_with_margin
 from sympy import divisors
 from typing_extensions import TypedDict
 
-from src.dartsort.util.internal_config import ComputationConfig
-
 from ..transform import WaveformPipeline, check_unique_feature_names_across
 from ..util.data_util import (
     SpikeDataset,
@@ -30,6 +28,7 @@ from ..util.data_util import (
     subsample_waveforms,
 )
 from ..util.internal_config import (
+    ComputationConfig,
     FitSamplingConfig,
     WaveformConfig,
     WaveformKind,
@@ -44,7 +43,7 @@ from ..util.multiprocessing_util import (
     pool_from_cfg,
     set_current_worker_rank,
 )
-from ..util.py_util import databag, delay_keyboard_interrupt, panic
+from ..util.py_util import databag, delay_keyboard_interrupt, ensure_path, panic
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
@@ -163,7 +162,11 @@ class BasePeeler(BModule):
     # are the main API methods for this class
 
     def load_or_fit_and_save_models(
-        self, save_folder, overwrite=False, computation_cfg=None
+        self,
+        save_folder: str | Path,
+        overwrite: bool = False,
+        computation_cfg: ComputationConfig | None = None,
+        save_fit_data: bool = False,
     ):
         """Load fitted models from save_folder if possible, or fit and save
 
@@ -171,7 +174,7 @@ class BasePeeler(BModule):
         that the models are fitted and that their fitted parameters are saved
         to `save_folder`
         """
-        save_folder = Path(save_folder)
+        save_folder = ensure_path(save_folder)
         if overwrite and save_folder.exists():
             for pt_file in save_folder.glob("*pipeline.pt"):
                 pt_file.unlink()
@@ -186,7 +189,10 @@ class BasePeeler(BModule):
                 )
             if self.needs_fit():
                 self.fit_models(
-                    save_folder, overwrite=overwrite, computation_cfg=computation_cfg
+                    save_folder,
+                    overwrite=overwrite,
+                    computation_cfg=computation_cfg,
+                    save_fit_data=save_fit_data,
                 )
             self.save_models(save_folder)
 
@@ -741,7 +747,12 @@ class BasePeeler(BModule):
         )
 
     def fit_models(
-        self, save_folder, tmp_dir=None, overwrite=False, computation_cfg=None
+        self,
+        save_folder: str | Path,
+        tmp_dir: Path | None = None,
+        overwrite: bool = False,
+        computation_cfg: ComputationConfig | None = None,
+        save_fit_data: bool = False,
     ):
         with torch.no_grad():
             if self.peeling_needs_fit():
@@ -758,6 +769,7 @@ class BasePeeler(BModule):
             self.fit_featurization_pipeline(
                 tmp_dir=tmp_dir,
                 computation_cfg=computation_cfg,
+                save_dir=ensure_path(save_folder, strict=True) if save_fit_data else None,
             )
         assert not self.needs_fit()
 
@@ -775,6 +787,7 @@ class BasePeeler(BModule):
         self,
         tmp_dir: Path | None = None,
         computation_cfg: ComputationConfig | None = None,
+        save_dir: Path | None = None,
     ):
         pipelines = {k: self.get_pipeline(k) for k in self.waveform_kinds}
         if not any(p.needs_fit() for p in pipelines.values()):
@@ -802,11 +815,16 @@ class BasePeeler(BModule):
             ),
         )
 
-        if tmp_dir is None:
-            tmp_dir = computation_cfg.maybe_tmpdir_parent()
+        if save_dir is None:
+            if tmp_dir is None:
+                tmp_dir = computation_cfg.maybe_tmpdir_parent()
+            fit_dir_context = tempfile.TemporaryDirectory(dir=tmp_dir)
+        else:
+            fit_dir_context = nullcontext(save_dir)
 
-        with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
-            temp_hdf5_filename = Path(temp_dir) / "peeler_fit.h5"
+        with fit_dir_context as fit_dir:
+            fit_hdf5_filename = ensure_path(fit_dir, strict=True) / "peeler_fit.h5"
+            assert not fit_hdf5_filename.exists(), fit_hdf5_filename
             waveforms = fixed_properties = None
             try:
                 if any(p.needs_residual() for p in pipelines.values()):
@@ -815,7 +833,7 @@ class BasePeeler(BModule):
                     n_resid_snips = None
                 more = any(p.needs_more_features() for p in pipelines.values())
                 self.run_subsampled_peeling(
-                    temp_hdf5_filename,
+                    fit_hdf5_filename,
                     computation_cfg=computation_cfg,
                     task_name="Load examples for feature fitting",
                     total_residual_snips=n_resid_snips,
@@ -830,7 +848,7 @@ class BasePeeler(BModule):
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
                 waveforms, fixed_properties = subsample_waveforms(
-                    temp_hdf5_filename,
+                    fit_hdf5_filename,
                     fit_sampling=self.fit_sampling_cfg.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
                     n_waveforms_fit=self.fit_sampling_cfg.n_waveforms_fit,
@@ -854,8 +872,9 @@ class BasePeeler(BModule):
                         recording=self.recording,
                         waveforms=kind_waveforms,
                         computation_cfg=computation_cfg,
-                        hdf5_filename=temp_hdf5_filename,
+                        hdf5_filename=fit_hdf5_filename,
                         waveforms_dataset_name=wf_dsets[kind],
+                        save_fit_data=save_dir is not None,
                         **fixed_properties,
                     )
                     pipeline.to("cpu")
@@ -865,8 +884,8 @@ class BasePeeler(BModule):
                 )
             finally:
                 self.to(device="cpu")
-                if temp_hdf5_filename.exists():
-                    temp_hdf5_filename.unlink()
+                if save_dir is None and fit_hdf5_filename.exists():
+                    fit_hdf5_filename.unlink()
                 del fixed_properties
                 gc.collect()
                 for name in list(waveforms or ()):

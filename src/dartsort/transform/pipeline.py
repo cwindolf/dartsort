@@ -297,6 +297,7 @@ class WaveformPipeline(torch.nn.Module):
         *,
         hdf5_filename: str | Path | None = None,
         waveforms_dataset_name: str = "waveforms",
+        save_fit_data: bool = False,
         **fixed_properties: torch.Tensor,
     ):
         """Fit my transformers in sequence, giving each the outputs of its predecessors."""
@@ -340,6 +341,7 @@ class WaveformPipeline(torch.nn.Module):
                         computation_cfg=computation_cfg,
                         hdf5_filename=hdf5_filename,
                         pipeline=self,
+                        save_fit_data=save_fit_data,
                         **features,
                     )
                 except Exception as e:

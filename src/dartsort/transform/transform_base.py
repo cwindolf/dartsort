@@ -99,9 +99,10 @@ class BaseWaveformModule(BModule):
         computation_cfg: ComputationConfig,
         channels: torch.Tensor,
         pipeline: "WaveformPipeline | None" = None,
+        save_fit_data: bool = False,
         **spike_data: torch.Tensor,
     ) -> Any:
-        del recording, spike_data
+        del recording, spike_data, save_fit_data
         self.spike_length_samples = waveforms.shape[1]
         self.initialize_spike_length_dependent_params()
 
@@ -290,6 +291,7 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
         computation_cfg: ComputationConfig,
         channels: torch.Tensor,
         pipeline: "WaveformPipeline | None" = None,
+        save_fit_data: bool = False,
         **spike_data: torch.Tensor,
     ):
         del pipeline
@@ -301,6 +303,7 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
             hdf5_filename=hdf5_filename,
             computation_cfg=computation_cfg,
             channels=channels,
+            save_fit_data=save_fit_data,
             **spike_data,
         )
 

@@ -34,6 +34,7 @@ def run_peeler(
     ensure_coverage: float | None = None,
     shuffle: bool = False,
     localization_dataset_name="point_source_localizations",
+    save_fit_data: bool = False,
 ) -> Path | None:
     output_directory = ensure_path(output_directory)
     output_directory.mkdir(exist_ok=True)
@@ -82,7 +83,10 @@ def run_peeler(
     # fit models if needed
     with timer(f"model fits ({peel_name})"):
         peeler.load_or_fit_and_save_models(
-            model_dir, overwrite=overwrite, computation_cfg=computation_cfg
+            model_dir,
+            overwrite=overwrite,
+            computation_cfg=computation_cfg,
+            save_fit_data=save_fit_data,
         )
         if fit_only:
             return None

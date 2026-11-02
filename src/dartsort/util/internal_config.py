@@ -1079,6 +1079,7 @@ class DARTsortInternalConfig:
     save_full_final_residual: bool = False
     always_save_detailed_features: bool = False
     save_everything_on_error: bool = False
+    save_fit_data: bool = False
 
     def maybe_tmpdir_parent(self) -> Path | None:
         if self.tmpdir_parent is not None:
@@ -1232,6 +1233,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_final_features=cfg.save_final_features,
         save_full_final_residual=cfg.save_full_final_residual,
         save_everything_on_error=cfg.save_everything_on_error,
+        save_fit_data=cfg.save_fit_data,
         link_from=cfg.link_from,
         link_step=cfg.link_step,
         subsampling_spikes_per_channel=cfg.subsampling_spikes_per_channel,

@@ -146,7 +146,9 @@ def tmm_demix(
     """
     prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
 
-    saving = save_cfg is not None and save_cfg.save_intermediate_labels
+    saving = save_step_labels_dir is not None and (
+        save_cfg is None or save_cfg.save_intermediate_labels
+    )
     _init_save_kw = dict(output_dir=save_step_labels_dir, cfg=save_cfg)
 
     mix_data = instantiate_and_bootstrap_tmm(
@@ -244,7 +246,7 @@ def tmm_demix(
             last_outer = outer_it == refinement_cfg.n_total_iters - 1
             last_inner = inner_it == len(refinement_cfg.mixture_steps) - 1
             is_final = last_outer and last_inner
-            if saving and not is_final:
+            if saving and (not is_final or skip_final_assign_and_return_mix_data):
                 save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
 
     if skip_final_assign_and_return_mix_data:

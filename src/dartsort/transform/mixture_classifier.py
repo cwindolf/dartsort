@@ -15,6 +15,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from math import fabs
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -184,9 +185,10 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         recording,
         waveforms,
         *,
-        hdf5_filename=None,
+        hdf5_filename: Path | None = None,
         pipeline=None,
         computation_cfg,
+        save_fit_data: bool = False,
         **spike_data,
     ):
         from ..clustering import (
@@ -221,6 +223,9 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             clustering_cfg=self.clustering_cfg,
             refinement_cfgs=ref_cfgs,
             computation_cfg=computation_cfg,
+            save_labels_dir=hdf5_filename.parent if save_fit_data else None,
+            initial_name="classifier_initial",
+            refine_labels_fmt="classifier{stepname}",
         )
         assert isinstance(clus, TMMRefinement)
 

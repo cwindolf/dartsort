@@ -453,6 +453,7 @@ class DeveloperConfig(DARTsortUserConfig):
     always_save_detailed_features: bool = False
     precomputed_templates_npz: str | None = None
     save_everything_on_error: bool = False
+    save_fit_data: bool = False
     link_from: str | None = None
     link_step: Literal[
         "denoising", "detection", "refined0", "matching1_models", "matching1"
