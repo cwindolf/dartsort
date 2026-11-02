@@ -15,6 +15,7 @@ except ImportError:
     HAVE_CUPY = False
 
 
+from ..util.internal_config import SplitKmeansppMetric
 from ..util.logging_util import DARTSORTDEBUG, get_logger, progrange
 from ..util.sparse_util import (
     coo_to_cupy,
@@ -23,7 +24,11 @@ from ..util.sparse_util import (
     logsumexp_coo,
     sparse_centroid_distsq,
 )
-from ..util.spiketorch import spawn_torch_rg, sqeuc_cdist_known_norm
+from ..util.spiketorch import (
+    scaled_normeuc_cdist_from_dots_,
+    spawn_torch_rg,
+    sqeuc_cdist_known_norm,
+)
 
 logger = get_logger(__name__)
 
@@ -631,6 +636,8 @@ def batched_kmeans(
     with_labels=True,
     with_proportions=True,
     beta: float = 1.0,
+    kmeanspp_metric: SplitKmeansppMetric = "euc",
+    scale_dist_args: tuple[float, float, float] | None = None,
 ) -> KMeansResult:
     """
     Compared to above:
@@ -639,6 +646,7 @@ def batched_kmeans(
      - no weights allowed for now
      - kmeanspp always random initial
      - n_iter > 0
+     - kmeanspp_metric for seeding only
     """
     k = n_components
     del n_components
@@ -660,9 +668,17 @@ def batched_kmeans(
     centroid_ixs = torch.full((k, n_kmeanspps), n, dtype=torch.long, device=dev)
     centroid_ixs[0] = torch.randint(n, size=(n_kmeanspps,), device=dev, generator=gen)
     dists = X.new_empty((n_kmeanspps, n))
+    if kmeanspp_metric == "euc":
+        seed_bufs = None
+    elif kmeanspp_metric == "scaled_normeuc":
+        seed_bufs = X.new_empty((4, n_kmeanspps, n))
+    else:
+        panic(kmeanspp_metric)
     Y = X[centroid_ixs[0]]
     Ynormsq = Xnormsq[centroid_ixs[0]]
-    dists = sqeuc_cdist_known_norm(Y, Ynormsq, X, Xnormsq, dists)
+    dists = _kmeanspp_distsq(
+        Y, Ynormsq, X, Xnormsq, dists, seed_bufs, kmeanspp_metric, scale_dist_args
+    )
 
     # -- kmeanspp stage: loop
     # buf for random sampling with Gumbel trick and new distance storage
@@ -680,8 +696,11 @@ def batched_kmeans(
         torch.index_select(Xnormsq, dim=0, index=cix_j, out=Ynormsq)
 
         # update distances
-        newdists = sqeuc_cdist_known_norm(Y, Ynormsq, X, Xnormsq, _buf)
+        newdists = _kmeanspp_distsq(
+            Y, Ynormsq, X, Xnormsq, _buf, seed_bufs, kmeanspp_metric, scale_dist_args
+        )
         torch.minimum(dists, newdists, out=dists)
+    del seed_bufs
 
     # -- kmeanspp finish: pick best by phi
     if kmeanspp_seeds_per_try > 1:
@@ -752,6 +771,40 @@ def batched_kmeans(
         labels = None
 
     return KMeansResult(centroids=Y, responsibilities=e, labels=labels, dists=dists)
+
+
+def _kmeanspp_distsq(
+    Y: Tensor,
+    Ynormsq: Tensor,
+    X: Tensor,
+    Xnormsq: Tensor,
+    out: Tensor,
+    bufs: Tensor | None,
+    metric: SplitKmeansppMetric,
+    scale_dist_args: tuple[float, float, float] | None,
+) -> Tensor:
+    if metric == "euc":
+        assert bufs is None
+        return sqeuc_cdist_known_norm(Y, Ynormsq, X, Xnormsq, out)
+    elif metric == "scaled_normeuc":
+        assert bufs is not None
+        assert scale_dist_args is not None
+        scale_std, scale_min, scale_max = scale_dist_args
+        dots = torch.mm(Y, X.T, out=bufs[0])
+        out = scaled_normeuc_cdist_from_dots_(
+            dots,
+            Ynormsq,
+            Xnormsq,
+            out=out,
+            bufs=bufs[1:],
+            scale_var=scale_std**2,
+            scale_min=scale_min,
+            scale_max=scale_max,
+        )
+        assert out.isfinite().all()
+        return out.square_()
+    else:
+        panic(metric)
 
 
 def truncated_kmeans_from_labels(

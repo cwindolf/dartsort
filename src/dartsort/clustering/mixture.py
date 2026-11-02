@@ -70,6 +70,7 @@ from ..util.internal_config import (
     DARTsortInternalConfig,
     KmeansppConfig,
     RefinementConfig,
+    SplitKmeansppMetric,
 )
 from ..util.interpolation_util import (
     NeighborhoodFiller,
@@ -911,6 +912,7 @@ class TMMParams:
     kmeans_beta: float
     kmeanspp_tries: int
     whiten_split: bool
+    split_kmeanspp_metric: SplitKmeansppMetric
     fix_responsibilities: bool
     scale_dist_args: tuple[float, float, float]
     whiten_dist: bool
@@ -954,6 +956,7 @@ class TMMParams:
             demolish_during_selection=refinement_cfg.demolish_during_selection,
             refit_in_demolition=refinement_cfg.refit_in_demolition,
             whiten_split=refinement_cfg.whiten_split,
+            split_kmeanspp_metric=refinement_cfg.split_kmeanspp_metric,
             fix_responsibilities=refinement_cfg.fix_responsibilities_in_split,
             scale_dist_args=refinement_cfg.scale_dist_args,
             whiten_dist=refinement_cfg.whiten_dist,
@@ -1112,7 +1115,9 @@ class PartitionCriterionStatistics:
             best_ix=best_ix,
             keep_ix=keep_ix,
             keep_margin_standard_errors=keep_margin_standard_errors,
-            paired_differences=paired_differences.cpu() if keep_paired_differences else None,
+            paired_differences=paired_differences.cpu()
+            if keep_paired_differences
+            else None,
         )
 
 
@@ -3376,6 +3381,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             debug=debug,
             whiten=self.p.whiten_split,
             force_labels=split_data_labels,
+            kmeanspp_metric=self.p.split_kmeanspp_metric,
+            scale_dist_args=self.p.scale_dist_args,
         )
         if debug or logger.isEnabledFor(DARTSORTVERBOSE):
             group_str = ",".join(map(str, group.tolist()))
@@ -4782,7 +4789,9 @@ def get_truncated_datasets(
     )
     del train_x, _t_xt, _t_whitenedx, _t_CmoCooinvx, _t_noise_logliks
     on_device = train_data.storage_device == train_data.device
-    assert on_device == (refinement_cfg.spike_storage == "device" or device.type == "cpu")
+    assert on_device == (
+        refinement_cfg.spike_storage == "device" or device.type == "cpu"
+    )
     assert torch.equal(full_neighbs.b.neighborhoods, train_neighbs.b.neighborhoods)
     val_n_candidates = min(
         sorting.n_units, max(refinement_cfg.merge_group_size, n_candidates)
@@ -5335,7 +5344,6 @@ class TruncatedKmeanspp:
         else:
             panic(self.metric)
 
-
     def best_of_tries(
         self, base_rg: np.random.Generator
     ) -> tuple[Tensor, tuple[int, int, int]]:
@@ -5379,7 +5387,6 @@ class TruncatedKmeanspp:
             f"(centroid cost {centroid_cost:0.3g} over {n} train spikes)."
         )
         return centroid_ixs, phase_centroid_counts
-
 
     def one_try(
         self, gen: torch.Generator
@@ -6435,7 +6442,13 @@ def _score_subset_models(
         crit_full_scores = train_full_scores
 
     crit_data = train_data if eval_data is None else eval_data
-    return train_subset_scores, cur_scores, crit_full_scores, crit_subset_scores, crit_data
+    return (
+        train_subset_scores,
+        cur_scores,
+        crit_full_scores,
+        crit_subset_scores,
+        crit_data,
+    )
 
 
 def _select_partition(
@@ -6677,6 +6690,8 @@ def try_kmeans(
     whiten: bool = False,
     bail_at: int = 1,
     force_labels: Tensor | None = None,
+    kmeanspp_metric: SplitKmeansppMetric = "euc",
+    scale_dist_args: tuple[float, float, float] | None = None,
 ) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
     # interpolate whitened data
     channels = data.covered_channels(min_channel_count)
@@ -6717,9 +6732,12 @@ def try_kmeans(
                 kmeanspp_seeds_per_try=n_kmeanspp_tries,
                 n_tries=n_kmeans_tries,
                 beta=kmeans_beta,
+                kmeanspp_metric=kmeanspp_metric,
+                scale_dist_args=scale_dist_args,
             )
         else:
             assert kmeans_beta == 1.0
+            assert kmeanspp_metric == "euc"
             kres = kmeans(
                 x,
                 n_components=k,

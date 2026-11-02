@@ -86,6 +86,7 @@ def low_k_simulations():
 # @pytest.mark.parametrize("demoinsel", [False, True])
 @pytest.mark.parametrize("demoinsel", [True])
 @pytest.mark.parametrize("robust_strategy", ["none", "huber"])
+@pytest.mark.parametrize("split_kmeanspp_metric", ["euc", "scaled_normeuc"])
 def test_truncated_mixture(
     moppca_simulations,
     t_mu,
@@ -95,6 +96,7 @@ def test_truncated_mixture(
     corruption,
     demoinsel,
     robust_strategy,
+    split_kmeanspp_metric,
 ):
     mixture.pnoid = True
 
@@ -128,6 +130,7 @@ def test_truncated_mixture(
         demolish_during_selection=demoinsel,
         initialize_at_rank_0=False,
         robust_strategy=robust_strategy,
+        split_kmeanspp_metric=split_kmeanspp_metric,
     )
     no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
 

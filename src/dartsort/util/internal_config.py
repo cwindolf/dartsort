@@ -414,7 +414,11 @@ class TemplateConfig:
     def actual_algorithm(self) -> str:
         if self.reduction == "huber":
             svd_align = self.svd_alignment_iterations and self.svd_alignment_ms
-            if self.denoising_method != "svd" or self.svd_method == "peeler" or svd_align:
+            if (
+                self.denoising_method != "svd"
+                or self.svd_method == "peeler"
+                or svd_align
+            ):
                 raise ValueError(
                     "Huber template reduction needs denoising_method='svd', a "
                     "pre-fit svd_method, and no SVD alignment."
@@ -501,6 +505,7 @@ MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
 ComponentDistanceMetric = Literal["euc", "cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
 KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
+SplitKmeansppMetric = Literal["euc", "scaled_normeuc"]
 SpikeStorage = Literal["device", "cpu"]
 
 
@@ -588,6 +593,7 @@ class RefinementConfig:
     refit_in_demolition: bool = False
     em_after_demolish: bool = True
     whiten_split: bool = True
+    split_kmeanspp_metric: SplitKmeansppMetric = "euc"
     fix_responsibilities_in_split: bool = True
     scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
     whiten_dist: bool = True
@@ -1412,6 +1418,7 @@ def _refinement_cfg(
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,
         scale_dist_args=(cfg.amplitude_scaling_stddev, 1.0 / sb, sb / 1.0),
+        split_kmeanspp_metric=cfg.split_kmeanspp_metric,
         censor_ms=cfg.deduplication_ms,
         glom_violation_ms=cfg.agg_violation_ms,
         glom_jitter_ms=cfg.agg_jitter_ms,

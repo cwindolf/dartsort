@@ -14,6 +14,7 @@ from .util.internal_config import (
     PreprocessingStrategy,
     RealignStrategy,
     SpikeStorage,
+    SplitKmeansppMetric,
     TemplateSVDMethod,
     TPCADenoiserFitStage,
     WhiteningEstimator,
@@ -402,6 +403,7 @@ class DeveloperConfig(DARTsortUserConfig):
     signal_rank: Annotated[int, Field(ge=0)] = 3
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_048_000
     kmeansk: int = 4
+    split_kmeanspp_metric: SplitKmeansppMetric = "euc"
     min_cluster_size: int = 5
 
     # gausian mixture low level
