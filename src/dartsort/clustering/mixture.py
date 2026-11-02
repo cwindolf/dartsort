@@ -52,6 +52,7 @@ from typing import (
     get_args,
 )
 
+import h5py
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -138,17 +139,22 @@ def tmm_demix(
     save_cfg: DARTsortInternalConfig | None = None,
     seed: int | np.random.Generator = 0,
     skip_final_assign_and_return_mix_data: bool = False,
+    debug_stats: bool = False,
 ):
     """GMM-based spike clustering using truncated expectation maximization
 
     Infers #units using a cross-validation criterion evaluated over proposed
     splits and merges.
+
+    With `debug_stats` (requires saving step labels), each mixture step's split / merge
+    decision statistics are saved next to its labels (`save_group_crit_records`).
     """
     prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
 
     saving = save_step_labels_dir is not None and (
         save_cfg is None or save_cfg.save_intermediate_labels
     )
+    assert saving or not debug_stats
     _init_save_kw = dict(output_dir=save_step_labels_dir, cfg=save_cfg)
 
     mix_data = instantiate_and_bootstrap_tmm(
@@ -174,6 +180,8 @@ def tmm_demix(
     )
     if saving:
         assert save_step_labels_format is not None
+    if debug_stats:
+        tmm.group_crit_records = []
 
     # start with one round of em. below flow is like split-em-merge-em-repeat.
     tmm.em(train_data, min_iters=tmm.p.main_min_iters)
@@ -248,7 +256,18 @@ def tmm_demix(
             is_final = last_outer and last_inner
             if saving and (not is_final or skip_final_assign_and_return_mix_data):
                 save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
+            if debug_stats:
+                assert tmm.group_crit_records is not None
+                assert save_step_labels_dir is not None
+                assert save_step_labels_format is not None
+                step_name = save_step_labels_format.format(stepname=stepname)
+                save_group_crit_records(
+                    tmm.group_crit_records,
+                    save_step_labels_dir / f"{step_name}_group_crit_records.h5",
+                )
+                tmm.group_crit_records = []
 
+    tmm.group_crit_records = None
     if skip_final_assign_and_return_mix_data:
         return mix_data
 
@@ -1034,10 +1053,81 @@ class SuccessfulGroupMergeResult:
     means: Tensor
     sub_proportions: Tensor
     bases: Tensor | None
+    part_crit_stats: "PartitionCriterionStatistics | None" = None
 
 
 # none means "accept the full model"
 GroupMergeResult = SuccessfulGroupMergeResult | None
+
+
+@databag
+class PartitionCriterionStatistics:
+    """Held-out criterion of each candidate partition in one group decision, as paired
+    per-spike differences from the current model: their mean (the improvement), its
+    standard error, and the standard error of each partition's margin over the partition
+    keeping every unit separate (`keep_ix`, None if that partition isn't a candidate).
+    `best_ix` is the partition this criterion selects."""
+
+    n_eval: int
+    improvements: Tensor
+    standard_errors: Tensor
+    best_ix: int
+    keep_ix: int | None
+    keep_margin_standard_errors: Tensor | None
+    # per held-out spike (debug only): partitions x spikes, and the spikes' held-out set
+    # indices and neighborhood ids
+    paired_differences: Tensor | None = None
+    eval_indices: Tensor | None = None
+    eval_neighborhood_ids: Tensor | None = None
+
+    @classmethod
+    def from_paired_differences(
+        cls,
+        paired_differences: Tensor,
+        partitions: list[GroupPartition],
+        best_ix: int,
+        keep_paired_differences: bool = False,
+    ) -> "PartitionCriterionStatistics":
+        n_partitions, n_eval = paired_differences.shape
+        assert n_partitions == len(partitions)
+        sqrt_n = math.sqrt(n_eval)
+        keep_ixs = [
+            j
+            for j, part in enumerate(partitions)
+            if len(part.single_ixs) == part.unit_ids.numel()
+            and not part.single_demolish_ixs
+        ]
+        assert len(keep_ixs) <= 1
+        if keep_ixs:
+            keep_ix = keep_ixs[0]
+            margins = paired_differences - paired_differences[keep_ix]
+            keep_margin_standard_errors = margins.std(dim=1).div_(sqrt_n).cpu()
+        else:
+            keep_ix = None
+            keep_margin_standard_errors = None
+        return cls(
+            n_eval=n_eval,
+            improvements=paired_differences.mean(dim=1).cpu(),
+            standard_errors=paired_differences.std(dim=1).div_(sqrt_n).cpu(),
+            best_ix=best_ix,
+            keep_ix=keep_ix,
+            keep_margin_standard_errors=keep_margin_standard_errors,
+            paired_differences=paired_differences.cpu() if keep_paired_differences else None,
+        )
+
+
+@databag
+class GroupCriterionRecord:
+    """One split-group or merge-group decision of a mixture step: the group's unit ids at
+    decision time, its train spike count, whether its selected partition was applied, and
+    its criterion statistics on the deciding held-out slice (None for splits applied
+    without a criterion, when no pair of split sub-units may merge)."""
+
+    step_kind: Literal["split", "merge"]
+    unit_ids: Tensor
+    n_train: int
+    accepted: bool
+    part_crit_stats: PartitionCriterionStatistics | None
 
 
 @databag
@@ -2295,6 +2385,7 @@ class BaseMixtureModel(BModule):
         skip_single: bool = False,
         use_cl_alpha: bool = True,
         debug: bool = False,
+        debug_stats: bool = False,
     ) -> GroupMergeResult:
         """Find an optimal partition of this model's units as a whole."""
         return brute_merge(
@@ -2309,6 +2400,7 @@ class BaseMixtureModel(BModule):
             skip_single=skip_single,
             use_cl_alpha=use_cl_alpha,
             debug=debug,
+            debug_stats=debug_stats,
         )
 
     def unit_distance_matrix(
@@ -2404,6 +2496,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         else:
             self.signal_rank = 0
         self.rg = spawn_torch_rg(seed, device=means.device)
+        # collects split / merge decision statistics when not None (see tmm_demix)
+        self.group_crit_records: list[GroupCriterionRecord] | None = None
 
     @classmethod
     def from_state_dict(
@@ -3352,6 +3446,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             assert eval_scores.log_liks.shape[0] == eval_data.N
             cur_scores_batch = eval_scores.slice(split_eval_data.indices)
 
+        debug_stats = self.group_crit_records is not None and eval_data is not None
         pair_mask = split_model.unit_distance_matrix() <= self.p.split_max_distance
         merge_res = split_model.merge_as_group_on_data_subset(
             train_data=split_data,
@@ -3361,7 +3456,22 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cur_unit_ids=torch.as_tensor(group, device=train_data.device),
             responsibilities=kmeans_responsibilities,
             debug=debug,
+            debug_stats=debug_stats,
         )
+        if self.group_crit_records is not None and merge_res is not None:
+            assert merge_res.part_crit_stats is not None
+            rejected = merge_res.improvement <= 0.0 or (
+                single and merge_res.grouping.n_groups <= 1
+            )
+            self.group_crit_records.append(
+                GroupCriterionRecord(
+                    step_kind="split",
+                    unit_ids=group.cpu(),
+                    n_train=merge_res.train_indices.numel(),
+                    accepted=not rejected,
+                    part_crit_stats=merge_res.part_crit_stats,
+                )
+            )
 
         # same as above policy in "single" case
         if single and merge_res is not None and merge_res.grouping.n_groups <= 1:
@@ -3417,6 +3527,16 @@ class TruncatedMixtureModel(BaseMixtureModel):
             means = split_model.b.means
             bases = split_model.b.bases
             sub_proportions = split_model.b.log_proportions.softmax(dim=0)
+            if self.group_crit_records is not None:
+                self.group_crit_records.append(
+                    GroupCriterionRecord(
+                        step_kind="split",
+                        unit_ids=group.cpu(),
+                        n_train=split_data.N,
+                        accepted=True,
+                        part_crit_stats=None,
+                    )
+                )
         elif merge_res is None:
             if debug:
                 logger.dartsortdebug(
@@ -3618,6 +3738,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             assert group_eval_data is not None
             assert eval_scores.log_liks.shape[0] == eval_data.N
             group_scores = eval_scores.slice(group_eval_data.indices)
+        debug_stats = self.group_crit_records is not None and eval_data is not None
         group_res = view.merge_as_group_on_data_subset(
             train_data=group_train_data,
             eval_data=group_eval_data,
@@ -3627,6 +3748,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cur_unit_ids=torch.as_tensor(group, device=train_data.device),
             use_cl_alpha=not self.p.cl_split_only,
             debug=debug,
+            debug_stats=debug_stats,
         )
         return group_res
 
@@ -3675,9 +3797,22 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # no-merge cases
             if group_res is None:
                 continue
-            if group_res.improvement <= 0:
-                continue
-            if group_res.grouping.n_groups == group.numel():
+            accepted = not (
+                group_res.improvement <= 0
+                or group_res.grouping.n_groups == group.numel()
+            )
+            if self.group_crit_records is not None:
+                assert group_res.part_crit_stats is not None
+                self.group_crit_records.append(
+                    GroupCriterionRecord(
+                        step_kind="merge",
+                        unit_ids=group.cpu(),
+                        n_train=group_res.train_indices.numel(),
+                        accepted=accepted,
+                        part_crit_stats=group_res.part_crit_stats,
+                    )
+                )
+            if not accepted:
                 continue
             if logger.isEnabledFor(DARTSORTVERBOSE):
                 logger.dartsortverbose(
@@ -5633,6 +5768,65 @@ def save_tmm_labels(
     )
 
 
+def save_group_crit_records(records: list[GroupCriterionRecord], path: Path) -> None:
+    """One row per decision. `unit_ids` is padded with -1. On the deciding held-out
+    slice: held-out count, partition count, the selected partition and the
+    keep-every-unit partition (-1 if none), the improvement / standard error of both, and
+    the standard error of the selected-minus-keep margin. NaN / -1 where a decision has no
+    criterion. Written as one h5 dataset per column."""
+    n = len(records)
+    max_size = max((r.unit_ids.numel() for r in records), default=1)
+    unit_ids = np.full((n, max_size), -1, dtype=np.int64)
+    for i, r in enumerate(records):
+        unit_ids[i, : r.unit_ids.numel()] = r.unit_ids.numpy()
+    n_eval = np.zeros(n, dtype=np.int64)
+    n_partitions = np.zeros(n, dtype=np.int64)
+    best_ix = np.full(n, -1, dtype=np.int64)
+    keep_ix = np.full(n, -1, dtype=np.int64)
+    best_improvement = np.full(n, np.nan)
+    best_se = np.full(n, np.nan)
+    keep_improvement = np.full(n, np.nan)
+    keep_se = np.full(n, np.nan)
+    best_keep_margin_se = np.full(n, np.nan)
+    for i, r in enumerate(records):
+        part_crit_stats = r.part_crit_stats
+        if part_crit_stats is None:
+            continue
+        best = part_crit_stats.best_ix
+        n_eval[i] = part_crit_stats.n_eval
+        n_partitions[i] = part_crit_stats.improvements.numel()
+        best_ix[i] = best
+        best_improvement[i] = part_crit_stats.improvements[best]
+        best_se[i] = part_crit_stats.standard_errors[best]
+        if part_crit_stats.keep_ix is not None:
+            assert part_crit_stats.keep_margin_standard_errors is not None
+            keep_ix[i] = part_crit_stats.keep_ix
+            keep_improvement[i] = part_crit_stats.improvements[part_crit_stats.keep_ix]
+            keep_se[i] = part_crit_stats.standard_errors[part_crit_stats.keep_ix]
+            best_keep_margin_se[i] = part_crit_stats.keep_margin_standard_errors[best]
+    columns: dict[str, np.ndarray] = {
+        "step_kind": np.array([r.step_kind for r in records], dtype="S5"),
+        "unit_ids": unit_ids,
+        "n_train": np.array([r.n_train for r in records], dtype=np.int64),
+        "accepted": np.array([r.accepted for r in records], dtype=bool),
+        "has_criterion": np.array(
+            [r.part_crit_stats is not None for r in records], dtype=bool
+        ),
+        "n_eval": n_eval,
+        "n_partitions": n_partitions,
+        "best_ix": best_ix,
+        "keep_ix": keep_ix,
+        "best_improvement": best_improvement,
+        "best_se": best_se,
+        "keep_improvement": keep_improvement,
+        "keep_se": keep_se,
+        "best_keep_margin_se": best_keep_margin_se,
+    }
+    with h5py.File(path, "w") as h5:
+        for name, column in columns.items():
+            h5.create_dataset(name, data=column)
+
+
 def initialize_parameters_by_unit(
     *,
     data: TruncatedSpikeData,
@@ -5889,13 +6083,18 @@ def brute_merge(
     use_cl_alpha: bool = True,
     max_fit_at_once: int = 16,
     debug: bool = False,
+    debug_stats: bool = False,
 ) -> GroupMergeResult:
     """Brute-force model selection
 
     Considering all partitions of cur_unit_ids into subgroups (obeying pair_mask),
     fit candidate models and check their heldout validation criterion using eval_data.
     Return the best one.
+
+    With `debug_stats`, the result's `part_crit_stats` holds every partition's criterion
+    statistics on eval_data. The selection is the same either way.
     """
+    assert not debug_stats or eval_data is not None
     if pair_mask is not None and pair_mask.sum() == pair_mask.shape[0]:
         return None
 
@@ -5960,7 +6159,9 @@ def brute_merge(
     )
     if score_res is None:
         return None
-    train_subset_scores, cur_scores, crit_full_scores, crit_subset_scores = score_res
+    train_subset_scores, cur_scores, crit_full_scores, crit_subset_scores, crit_data = (
+        score_res
+    )
 
     # if demolition is happening, see where
     if mm.p.demolish_during_selection:
@@ -5988,7 +6189,7 @@ def brute_merge(
     assert crit_subset_scores.log_liks.shape[1] == subset_models.n_units
     assert cur_scores.log_liks.shape[0] == crit_full_scores.log_liks.shape[0]
     alpha = mm.p.cl_alpha if use_cl_alpha else 0.0
-    best_part, best_imp = _select_partition(
+    best_part, best_imp, part_crit_stats = _select_partition(
         cur_unit_ids=cur_unit_ids,
         partitions=partitions,
         cur_scores=cur_scores,
@@ -5999,7 +6200,17 @@ def brute_merge(
         cl_alpha=alpha,
         can_demolish_mask=can_demolish_mask,
         debug=debug,
+        debug_stats=debug_stats,
     )
+    assert debug_stats == (part_crit_stats is not None)
+    if debug and part_crit_stats is not None:
+        assert part_crit_stats.paired_differences is not None
+        assert part_crit_stats.paired_differences.shape[1] == crit_data.N
+        part_crit_stats = replace(
+            part_crit_stats,
+            eval_indices=crit_data.indices.cpu(),
+            eval_neighborhood_ids=crit_data.neighborhood_ids.cpu(),
+        )
     train_assignments, means, bases, sub_props = _extract_partition(
         part=best_part,
         responsibilities=responsibilities,
@@ -6018,6 +6229,7 @@ def brute_merge(
         means=means,
         bases=bases,
         sub_proportions=sub_props,
+        part_crit_stats=part_crit_stats,
     )
 
 
@@ -6181,7 +6393,9 @@ def _score_subset_models(
     cur_scores: Scores,
     train_data: DenseSpikeData,
     eval_data: DenseSpikeData | None,
-) -> tuple[Scores, Scores, Scores, Scores] | None:
+) -> tuple[Scores, Scores, Scores, Scores, DenseSpikeData] | None:
+    """Scores for the criterion, and the spikes it is computed on (eval_data restricted to
+    the spikes both models cover, or train_data without eval_data)."""
     train_subset_scores = subset_models.score(train_data, skip_noise=True)
     assert train_subset_scores.log_liks.shape[1] == subset_models.n_units
     if eval_data is not None and isinstance(mm, TMMView):
@@ -6220,7 +6434,8 @@ def _score_subset_models(
         crit_subset_scores = train_subset_scores
         crit_full_scores = train_full_scores
 
-    return train_subset_scores, cur_scores, crit_full_scores, crit_subset_scores
+    crit_data = train_data if eval_data is None else eval_data
+    return train_subset_scores, cur_scores, crit_full_scores, crit_subset_scores, crit_data
 
 
 def _select_partition(
@@ -6235,7 +6450,8 @@ def _select_partition(
     train_full_responsibilities: Tensor,
     train_subset_responsibilities: Tensor,
     debug: bool,
-):
+    debug_stats: bool = False,
+) -> tuple[GroupPartition, Tensor, "PartitionCriterionStatistics | None"]:
     # get scores for unaffected units
     cur_mask = torch.isin(cur_scores.candidates, cur_unit_ids)
     cur_log_liks = cur_scores.log_liks
@@ -6258,28 +6474,53 @@ def _select_partition(
         logger.dartsortdebug(
             f"brute_merge cur score {cur_crit.item():.4f} entropy {h:.4f}"
         )
+    if debug_stats:
+        cur_crit_per_spike = ecl(
+            cur_resp, cur_log_liks, cl_alpha=cl_alpha, reduce_mean=False
+        )
+    else:
+        cur_crit_per_spike = None
     del cur_resp
 
     # if destruction is allowed, consider partitions with single-unit destruction
     sel_partitions = all_demolished_partitions(partitions, can_demolish_mask)
     improvements = rest_logliks.new_full((len(sel_partitions),), -torch.inf)
+    paired_differences = []
     for j, part in enumerate(sel_partitions):
+        single_ixs = torch.tensor(part.single_ixs, dtype=torch.long)
+        subset_ids = torch.tensor(part.subset_ids, dtype=torch.long)
+        single_demolish_ixs = torch.tensor(part.single_demolish_ixs, dtype=torch.long)
         part_score, part_h = _determine_part_score(
             rest_logliks=rest_logliks,
             crit_full_log_liks=crit_full_scores.log_liks,
             crit_subset_log_liks=crit_subset_scores.log_liks,
             train_full_responsibilities=train_full_responsibilities,
             train_subset_responsibilities=train_subset_responsibilities,
-            single_ixs=torch.tensor(part.single_ixs, dtype=torch.long),
-            subset_ids=torch.tensor(part.subset_ids, dtype=torch.long),
-            single_demolish_ixs=torch.tensor(
-                part.single_demolish_ixs, dtype=torch.long
-            ),
+            single_ixs=single_ixs,
+            subset_ids=subset_ids,
+            single_demolish_ixs=single_demolish_ixs,
             cl_alpha=cl_alpha,
             lp_min=TruncatedMixtureModel.LP_MIN,
             return_entropy=debug,
         )
         improvements[j] = part_score - cur_crit
+        if debug_stats:
+            assert cur_crit_per_spike is not None
+            part_per_spike, _ = _determine_part_score(
+                rest_logliks=rest_logliks,
+                crit_full_log_liks=crit_full_scores.log_liks,
+                crit_subset_log_liks=crit_subset_scores.log_liks,
+                train_full_responsibilities=train_full_responsibilities,
+                train_subset_responsibilities=train_subset_responsibilities,
+                single_ixs=single_ixs,
+                subset_ids=subset_ids,
+                single_demolish_ixs=single_demolish_ixs,
+                cl_alpha=cl_alpha,
+                lp_min=TruncatedMixtureModel.LP_MIN,
+                return_entropy=False,
+                reduce_mean=False,
+            )
+            paired_differences.append(part_per_spike - cur_crit_per_spike)
         if debug:
             assert part_h is not None
             h = part_h.item()
@@ -6297,7 +6538,17 @@ def _select_partition(
         assert math.isfinite(cur_crit)
         assert math.isfinite(best_imp)
 
-    return best_part, best_imp
+    if debug_stats:
+        part_crit_stats = PartitionCriterionStatistics.from_paired_differences(
+            torch.stack(paired_differences),
+            sel_partitions,
+            int(best_ix.item()),
+            keep_paired_differences=debug,
+        )
+    else:
+        part_crit_stats = None
+
+    return best_part, best_imp, part_crit_stats
 
 
 def _determine_part_score(
@@ -6313,6 +6564,7 @@ def _determine_part_score(
     cl_alpha: float,
     lp_min: float,
     return_entropy: bool,
+    reduce_mean: bool = True,
 ):
     single_ll = crit_full_log_liks[:, single_ixs]
     subset_ll = crit_subset_log_liks[:, subset_ids]
@@ -6336,7 +6588,7 @@ def _determine_part_score(
         h = entropy(part_resps)
     else:
         h = None
-    return ecl(part_resps, part_logliks, cl_alpha=cl_alpha), h
+    return ecl(part_resps, part_logliks, cl_alpha=cl_alpha, reduce_mean=reduce_mean), h
 
 
 def _extract_partition(

@@ -48,6 +48,7 @@ def get_clusterer(
     save_labels_dir=None,
     initial_name=None,
     refine_labels_fmt=None,
+    debug_stats: bool = False,
 ):
     if clustering_cfg is not None:
         if clustering_cfg.cluster_strategy not in clustering_strategies:
@@ -64,6 +65,7 @@ def get_clusterer(
     )
     if not saving_labels:
         save_labels_dir = save_cfg = None
+    assert saving_labels or not debug_stats
 
     C = clustering_strategies[clus_strategy]
     init_fmt = initial_name if (saving_labels and clustering_cfg is not None) else None
@@ -104,6 +106,7 @@ def get_clusterer(
             waveform_cfg=waveform_cfg,
             save_labels_dir=save_labels_dir,
             save_cfg=save_cfg,
+            debug_stats=debug_stats,
         )
 
     return clusterer
@@ -121,6 +124,7 @@ class Clusterer:
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
+        debug_stats: bool = False,
     ):
         self.computation_cfg = computation_cfg
         self.sampling_cfg = sampling_cfg
@@ -129,6 +133,7 @@ class Clusterer:
         self.save_cfg = save_cfg
         self.save_labels_dir = save_labels_dir
         self.labels_fmt = labels_fmt
+        self.debug_stats = debug_stats
 
     def needs_simple_features(self):
         return self._needs_simple_features
@@ -842,6 +847,7 @@ class TMMRefinement(Refinement):
             save_cfg=self.save_cfg,
             seed=self.refinement_cfg.sampling_cfg.seed,
             skip_final_assign_and_return_mix_data=skip_final_assign_and_return_mix_data,
+            debug_stats=self.debug_stats,
         )
         gc.collect()
         torch.cuda.empty_cache()
