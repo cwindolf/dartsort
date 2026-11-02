@@ -19,6 +19,8 @@ from spikeinterface.core.recording_tools import get_chunk_with_margin
 from sympy import divisors
 from typing_extensions import TypedDict
 
+from src.dartsort.util.internal_config import ComputationConfig
+
 from ..transform import WaveformPipeline, check_unique_feature_names_across
 from ..util.data_util import (
     SpikeDataset,
@@ -769,7 +771,11 @@ class BasePeeler(BModule):
         for pipeline in self.featurization_pipelines.values():
             pipeline.precompute()  # ty: ignore[call-non-callable]
 
-    def fit_featurization_pipeline(self, tmp_dir=None, computation_cfg=None):
+    def fit_featurization_pipeline(
+        self,
+        tmp_dir: Path | None = None,
+        computation_cfg: ComputationConfig | None = None,
+    ):
         pipelines = {k: self.get_pipeline(k) for k in self.waveform_kinds}
         if not any(p.needs_fit() for p in pipelines.values()):
             return
