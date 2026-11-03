@@ -90,6 +90,9 @@ class DARTsortUserConfig:
     dredge_only: bool = False
     """Whether to stop after initial localization and motion tracking."""
 
+    seed: int = 0
+    """Seeds any subsampled peeling steps and some other places too"""
+
     # -- computer options
     n_jobs_cpu: int = 0
     """Number of parallel workers to use when running on CPU. 0 means
@@ -296,7 +299,7 @@ class DeveloperConfig(DARTsortUserConfig):
     detection_proposal: DetectionProposal = "tpca"
     proposal_filters: int = 1
     propose_with_score_net: bool = False
-    proposal_threshold: float = 5.0
+    proposal_threshold: float = 7.0
     score_net_threshold: float = 5.0
     do_tpca_denoise: bool = True
     tpca_denoise_fit: TPCADenoiserFitStage = "peeling"

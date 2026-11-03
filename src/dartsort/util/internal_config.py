@@ -768,7 +768,7 @@ class SubtractionConfig:
     propose_with_score_net: bool = False
 
     voltage_threshold: float = 3.0
-    proposal_threshold: float = 5.0
+    proposal_threshold: float = 7.0
     score_net_threshold: float = 5.0
     subtraction_threshold: float = 9.0
     threshold_before_whitening: float = 10.0
@@ -1331,7 +1331,16 @@ def _clustering_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
         fit_sampling=cfg.fit_sampling,
         bucket_sampling_power=cfg.gmm_bucket_sampling_power,
         bucket_sampling_max_reweighting=cfg.gmm_bucket_sampling_max_reweighting,
+        seed=cfg.seed,
     )
+
+
+def _default_refinement_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
+    return replace(default_clustering_fit_sampling_cfg, seed=cfg.seed)
+
+
+def _template_fit_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
+    return replace(no_resid_peeling_fit_sampling_cfg, seed=cfg.seed)
 
 
 def _template_cfg(
@@ -1352,6 +1361,7 @@ def _template_cfg(
         superres_interp_params=_interp_params(cfg.matching_interp_kind),
         svd_alignment_iterations=cfg.svd_alignment_iterations,
         svd_alignment_ms=cfg.alignment_ms / 2,
+        denoising_fit_sampling_cfg=_template_fit_sampling_cfg(cfg),
     )
 
 
@@ -1376,6 +1386,7 @@ def _clustering_cfg(
         hellinger_weak=cfg.hellinger_weak,
         mop=cfg.dpc_mop,
         sampling_cfg=sampling_cfg,
+        random_seed=cfg.seed,
     )
 
 
@@ -1473,6 +1484,9 @@ def _matching_cfg(
         chunk_length_samples=cfg.chunk_length_samples,
         template_merge_cfg=TemplateMergeConfig(
             merge_distance_threshold=cfg.postprocessing_merge_threshold,
+            template_cfg=TemplateConfig(
+                denoising_fit_sampling_cfg=_template_fit_sampling_cfg(cfg)
+            ),
         ),
         cd_iter=cfg.matching_cd_iter,
         coarse_cd=cfg.matching_coarse_cd,
@@ -1493,6 +1507,7 @@ def _matching_cfg(
                 spikes_per_unit=cfg.template_spikes_per_unit,
                 reduction="mean",
                 template_interp_params=clampna_interp_params,
+                denoising_fit_sampling_cfg=_template_fit_sampling_cfg(cfg),
             ),
         ),
         template_svd_compression_rank=cfg.matching_svd_rank,
@@ -1586,6 +1601,7 @@ def _agglomerate_cfg(
     agg_whiten_cfg = replace(whiten_cfg, strategy=cfg.agg_template_whiten_strategy)
     return RefinementConfig(
         refinement_strategy="agglomerate",
+        sampling_cfg=_default_refinement_sampling_cfg(cfg),
         template_merge_cfg=TemplateMergeConfig(
             linkage=cfg.agg_template_linkage,
             merge_distance_threshold=cfg.agg_max_template_distance,
@@ -1634,6 +1650,7 @@ def _post_refinement_cfgs(
     ):
         filter_cfg = RefinementConfig(
             refinement_strategy="filter",
+            sampling_cfg=_default_refinement_sampling_cfg(cfg),
             gmm_isolation_threshold=cfg.gmm_isolation_threshold,
             collision_cleaning_error_threshold=cfg.collision_cleaning_error_threshold,
         )
@@ -1695,6 +1712,7 @@ def _peeler_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
         more_waveforms_fit=pool_spikes,
         fit_sampling=cfg.fit_sampling,
         n_residual_snips=n_residual_snips,
+        seed=cfg.seed,
     )
 
 
@@ -1767,6 +1785,7 @@ def _pre_refinement_cfg(cfg: "DeveloperConfig") -> RefinementConfig | None:
         return None
     return RefinementConfig(
         refinement_strategy="pcmerge",
+        sampling_cfg=_default_refinement_sampling_cfg(cfg),
         pc_merge_metric=cfg.pre_refinement_merge_metric,
         pc_merge_threshold=cfg.pre_refinement_merge_threshold,
         pc_merge_rank=cfg.initial_pc_feats,
@@ -1776,6 +1795,7 @@ def _pre_refinement_cfg(cfg: "DeveloperConfig") -> RefinementConfig | None:
 def _clean_cfg(cfg: "DeveloperConfig") -> RefinementConfig:
     return RefinementConfig(
         refinement_strategy="clean",
+        sampling_cfg=_default_refinement_sampling_cfg(cfg),
         template_merge_cfg=None,
         dedup_ms=cfg.deduplication_ms,
     )

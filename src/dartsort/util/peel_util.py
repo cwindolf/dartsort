@@ -76,6 +76,7 @@ def run_peeler(
         n_residual_snips=n_resid_snips,
     ):
         return output_hdf5_filename
+    assert not output_hdf5_filename.is_symlink(), "You probably didn't want to write there..."
 
     # ensure torch linalg inits before launching threads...
     _ensure_torch_linalg(computation_cfg)
