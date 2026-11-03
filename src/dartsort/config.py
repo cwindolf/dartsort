@@ -75,9 +75,13 @@ class DARTsortUserConfig:
 
     subsampling_presence: Annotated[float, Field(gt=0.0, le=1.0)] = 0.025
     """Early detection steps which have already found `subsampling_spikes`
-    spikes are only allowed to end early if they additionally cover this
-    fraction of the recording, to make sure there's some coverage of
-    conditions for template estimation."""
+    spikes are only allowed to end early if they additionally either cover
+    `subsampling_presence` fraction of the recording or if they cover
+    `subsampling_max_seconds`, whichever is smaller, in order to make sure
+    that there's some coverage of conditions for template estimation."""
+
+    subsampling_max_seconds: Annotated[float, Field(gt=0.0)] = float("inf")
+    """See subsampling_presence's documentation."""
 
     matching_iterations: int = 1
     """By default, 1 template matching step is carried out using templates

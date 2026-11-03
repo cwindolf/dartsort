@@ -11,6 +11,8 @@ from .cli_util import argfield, dataclass_from_toml
 from .py_util import cfg_dataclass, ensure_path, panic
 
 if TYPE_CHECKING:
+    from spikeinterface.core import BaseRecording
+
     from ..config import DARTsortUserConfig, DeveloperConfig
 
 try:
@@ -1066,8 +1068,9 @@ class DARTsortInternalConfig:
     # subsampling: intermediate peels will continue until both criteria satisfied
     # need at least this many spikes
     subsampling_spikes_per_channel: int | None = 5000
-    # need to cover at least this fraction of chunks
+    # need to cover at least this fraction of chunks or this many seconds, whichever is smaller
     subsampling_presence: float = 0.025
+    subsampling_max_seconds: float = math.inf
 
     # development / debugging flags
     work_in_tmpdir: bool = False
@@ -1098,9 +1101,17 @@ class DARTsortInternalConfig:
 
     @property
     def is_subsampling(self) -> bool:
-        return (
-            self.subsampling_spikes_per_channel is not None
-            and self.subsampling_presence != 1.0
+        return self.subsampling_spikes_per_channel is not None and (
+            self.subsampling_presence != 1.0
+            or math.isfinite(self.subsampling_max_seconds)
+        )
+
+    def subsampling_fraction(self, recording: "BaseRecording") -> float:
+        assert self.subsampling_presence > 0.0
+        assert self.subsampling_max_seconds > 0.0
+        duration_s = recording.get_num_samples() / recording.sampling_frequency
+        return min(
+            1.0, self.subsampling_presence, self.subsampling_max_seconds / duration_s
         )
 
     def use_gmm_classifier(self, is_final: bool) -> bool:
@@ -1246,6 +1257,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         link_step=cfg.link_step,
         subsampling_spikes_per_channel=cfg.subsampling_spikes_per_channel,
         subsampling_presence=cfg.subsampling_presence,
+        subsampling_max_seconds=cfg.subsampling_max_seconds,
         always_save_detailed_features=cfg.always_save_detailed_features,
     )
 

@@ -348,7 +348,7 @@ def _dartsort_impl(
             _nspk = None
         else:
             _nspk = cfg.subsampling_spikes_per_channel * motion.geom.shape[0]
-        _pres = 1.0 if is_final else cfg.subsampling_presence
+        _pres = 1.0 if is_final else cfg.subsampling_fraction(recording)
         (
             step_clus_cfg,
             step_clfeat_cfg,
@@ -491,7 +491,7 @@ def initial_detection(
             sampling_cfg=cfg.peeler_sampling_cfg,
             computation_cfg=cfg.computation_cfg,
             stop_after_n_spikes=_nspk,
-            ensure_coverage=cfg.subsampling_presence,
+            ensure_coverage=cfg.subsampling_fraction(recording),
             overwrite=overwrite,
             show_progress=show_progress,
             load_simple_features=load_simple_features,
@@ -510,7 +510,7 @@ def initial_detection(
             sampling_cfg=cfg.peeler_sampling_cfg,
             featurization_cfg=cfg.featurization_cfg,
             stop_after_n_spikes=_nspk,
-            ensure_coverage=cfg.subsampling_presence,
+            ensure_coverage=cfg.subsampling_fraction(recording),
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
@@ -529,7 +529,7 @@ def initial_detection(
             sampling_cfg=cfg.peeler_sampling_cfg,
             motion=motion,
             stop_after_n_spikes=_nspk,
-            ensure_coverage=cfg.subsampling_presence,
+            ensure_coverage=cfg.subsampling_fraction(recording),
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,

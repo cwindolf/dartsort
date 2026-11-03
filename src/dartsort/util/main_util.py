@@ -118,7 +118,9 @@ def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
     logger.info(f"Recorded config to {json_path}.")
 
 
-def ds_will_copy_recording(internal_cfg: DARTsortInternalConfig, recording: BaseRecording):
+def ds_will_copy_recording(
+    internal_cfg: DARTsortInternalConfig, recording: BaseRecording
+):
     if internal_cfg.copy_recording_to_tmpdir == "if_preprocessing":
         if internal_cfg.already_preprocessed == "yes":
             return False
@@ -219,7 +221,7 @@ def ds_check_motion(rec: BaseRecording, motion: "MotionInfo"):
 def motion_needs_peaks(
     cfg: DARTsortInternalConfig, recording: BaseRecording, sorting: DARTsortSorting
 ):
-    if cfg.subsampling_presence == 1.0:
+    if cfg.subsampling_fraction(recording) >= 1.0:
         return False
     if cfg.subsampling_spikes_per_channel is None:
         return False
