@@ -592,7 +592,6 @@ class SubtractionPeeler(BasePeeler):
                         waveforms=waveforms,
                         computation_cfg=computation_cfg,
                         hdf5_filename=temp_hdf5_filename,
-                        waveforms_dataset_name="subtract_fit_waveforms",
                         save_fit_data=False,
                         **fixed_properties,
                     )
@@ -604,7 +603,6 @@ class SubtractionPeeler(BasePeeler):
                         waveforms=waveforms,
                         computation_cfg=computation_cfg,
                         hdf5_filename=temp_hdf5_filename,
-                        waveforms_dataset_name="subtract_fit_waveforms",
                         save_fit_data=False,
                         **fixed_properties,
                     )

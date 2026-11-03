@@ -21,11 +21,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 import torch.nn.functional as F
+from spikeinterface.core import BaseRecording
 
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ClusteringConfig,
     ClusteringFeaturesConfig,
+    ComputationConfig,
     RefinementConfig,
     WaveformConfig,
 )
@@ -38,6 +40,7 @@ from .transform_base import BaseWaveformFeaturizer
 
 if TYPE_CHECKING:
     from ..clustering.mixture import MixtureModelAndDatasets, TruncatedMixtureModel
+    from .pipeline import WaveformPipeline
 
 
 class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
@@ -64,7 +67,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         sampling_frequency: float = 30_000.0,
         save_neighborhood_ids: bool = False,
     ):
-        self.motion = motion
+        self.motion: MotionInfo | None = motion
         self.clustering_cfg = clustering_cfg
         self.clustering_features_cfg = clustering_features_cfg
         self.pre_gmm_refinement_cfgs = pre_gmm_refinement_cfgs
@@ -117,8 +120,6 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         if save_neighborhood_ids:
             self.shape += [()]
             self.dtype += [torch.int32]
-        self.save_neighborhood_ids = save_neighborhood_ids
-        self.motion: MotionInfo | None = None
         self.channel_index_np = self.b.channel_index.numpy(force=True)
         self.workers = 1
 
@@ -180,17 +181,15 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             nid_map[_chans] = _chan_nids
         self.register_buffer_or_none("neighborhood_ids_map", nid_map)
 
-    def fit(
+    def fit_from_disk(
         self,
-        recording,
-        waveforms,
         *,
-        hdf5_filename: Path | None = None,
-        pipeline=None,
-        computation_cfg,
+        recording: BaseRecording,
+        hdf5_filename: Path,
+        pipeline: "WaveformPipeline",
+        computation_cfg: ComputationConfig,
         save_fit_data: bool = False,
-        **spike_data,
-    ):
+    ) -> None:
         from ..clustering import (
             SimpleMatrixFeatures,
             StableWaveformFeatures,
@@ -198,11 +197,8 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             get_clusterer,
         )
 
-        del waveforms  # I load everything from h5
+        del recording
         assert self.motion is not None
-        assert hdf5_filename is not None
-
-        assert pipeline is not None
         tpca = pipeline.get_transformer(self.pca_ds)
 
         # build sorting object

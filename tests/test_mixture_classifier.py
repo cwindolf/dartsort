@@ -1,5 +1,6 @@
 from tempfile import TemporaryDirectory
 
+import h5py
 import numpy as np
 import pytest
 import torch
@@ -44,7 +45,30 @@ def test_mixture_classifier(tmp_path, simulations, drift):
                 gmm_clustering_features_cfg=ClusteringFeaturesConfig(),
                 gmm_refinement_cfg=RefinementConfig(mixture_steps=()),
             ),
+            save_fit_data=True,
         )
+
+        # test classifier fit data has the input features and no waveforms
+        clfeat_cfg = ClusteringFeaturesConfig()
+        with h5py.File(f"{tdir}/matching0_models/peeler_fit.h5", "r") as h5:
+            for name in (
+                clfeat_cfg.pca_dataset_name,
+                clfeat_cfg.amplitudes_dataset_name,
+                clfeat_cfg.voltages_dataset_name,
+                "labels",
+                "template_inds",
+                "times_seconds",
+                "channels",
+                "chunk_starts_samples",
+                "residual",
+            ):
+                assert name in h5
+            assert not any(name.endswith("_waveforms_fit") for name in h5)
+            n_features_fit = len(h5["times_seconds"])
+        with h5py.File(f"{tdir}/matching0_models/peeler_fit_waveforms.h5", "r") as h5:
+            assert "peeled_collisioncleaned_waveforms_fit" in h5
+            assert len(h5["times_seconds"]) <= n_features_fit
+
         assert st is not None
         assert len(st) > 0
         assert hasattr(st, "labels")

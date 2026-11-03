@@ -6,7 +6,6 @@ from collections.abc import Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from itertools import repeat
 from pathlib import Path
-from sys import getrefcount
 from threading import Lock, local
 from typing import Any, cast, get_args
 from warnings import catch_warnings, filterwarnings
@@ -769,7 +768,9 @@ class BasePeeler(BModule):
             self.fit_featurization_pipeline(
                 tmp_dir=tmp_dir,
                 computation_cfg=computation_cfg,
-                save_dir=ensure_path(save_folder, strict=True) if save_fit_data else None,
+                save_dir=ensure_path(save_folder, strict=True)
+                if save_fit_data
+                else None,
             )
         assert not self.needs_fit()
 
@@ -790,30 +791,23 @@ class BasePeeler(BModule):
         save_dir: Path | None = None,
     ):
         pipelines = {k: self.get_pipeline(k) for k in self.waveform_kinds}
-        if not any(p.needs_fit() for p in pipelines.values()):
+        disk_fit_inds: dict[WaveformKind, int] = {
+            k: ix
+            for k, p in pipelines.items()
+            if (ix := p.fit_from_disk_index()) is not None
+            and p.needs_fit(start_index=ix)
+        }
+        needs_ordinary_fit = any(
+            p.needs_fit(up_to_index=disk_fit_inds.get(k)) for k, p in pipelines.items()
+        )
+        if not (needs_ordinary_fit or disk_fit_inds):
             return
 
         computation_cfg = ensure_computation_config(computation_cfg)
         device = computation_cfg.actual_device()
-
-        # disable self's featurization pipelines, replacing each with a waveform
-        # saving node. then, we'll use those waveforms to fit the originals
-        wf_dsets = {k: f"peeled_{k}_waveforms_fit" for k in pipelines}
-        self.featurization_pipelines = cast(
-            Mapping[WaveformKind, WaveformPipeline],
-            torch.nn.ModuleDict(
-                {
-                    kind: WaveformPipeline.from_class_names_and_kwargs(
-                        self.recording.get_channel_locations(),
-                        self.channel_index,
-                        self._fit_pipeline_nodes(kind, wf_dsets[kind]),
-                        waveform_cfg=self.waveform_cfg,
-                        sampling_frequency=self.recording.sampling_frequency,
-                    )
-                    for kind in pipelines
-                }
-            ),
-        )
+        save_fit_data = save_dir is not None
+        workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
+        _, workers = handle_negative_jobs(workers)
 
         if save_dir is None:
             if tmp_dir is None:
@@ -823,80 +817,133 @@ class BasePeeler(BModule):
             fit_dir_context = nullcontext(save_dir)
 
         with fit_dir_context as fit_dir:
-            fit_hdf5_filename = ensure_path(fit_dir, strict=True) / "peeler_fit.h5"
-            assert not fit_hdf5_filename.exists(), fit_hdf5_filename
-            waveforms = fixed_properties = None
+            fit_dir = ensure_path(fit_dir, strict=True)
             try:
-                if any(p.needs_residual() for p in pipelines.values()):
-                    n_resid_snips = self.fit_sampling_cfg.n_residual_snips
-                else:
-                    n_resid_snips = None
-                more = any(p.needs_more_features() for p in pipelines.values())
-                self.run_subsampled_peeling(
-                    fit_hdf5_filename,
-                    computation_cfg=computation_cfg,
-                    task_name="Load examples for feature fitting",
-                    total_residual_snips=n_resid_snips,
-                    more=more,
-                )
-
-                # park myself on cpu while models fit in case they need
-                # to take up space
-                self.to(device="cpu")
-
-                # fit featurization pipelines and reassign
-                # work in a try finally so we can delete the temp file
-                # in case of an issue or a keyboard interrupt
-                waveforms, fixed_properties = subsample_waveforms(
-                    fit_hdf5_filename,
-                    fit_sampling=self.fit_sampling_cfg.fit_sampling,
-                    random_state=self.fit_subsampling_random_state,
-                    n_waveforms_fit=self.fit_sampling_cfg.n_waveforms_fit,
-                    fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
-                    voltages_dataset_name="peeled_voltages_fit",
-                    waveforms_dataset_name=list(wf_dsets.values()),
-                    fixed_property_keys=self.fixed_property_keys,
-                    device=device,
-                )
-
-                workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
-                _, workers = handle_negative_jobs(workers)
-                for kind, pipeline in pipelines.items():
-                    kind_waveforms = waveforms[wf_dsets[kind]]
-                    if not len(kind_waveforms):
-                        raise ValueError(
-                            f"Found no spikes when trying to fit {kind} featurizers."
-                        )
-                    pipeline.register_cpu_workers(workers)
-                    pipeline.to(device).fit(
-                        recording=self.recording,
-                        waveforms=kind_waveforms,
-                        computation_cfg=computation_cfg,
-                        hdf5_filename=fit_hdf5_filename,
-                        waveforms_dataset_name=wf_dsets[kind],
-                        save_fit_data=save_dir is not None,
-                        **fixed_properties,
+                if needs_ordinary_fit:
+                    # fit ordinary pipelines before disk fitters so that their
+                    # feats can be saved
+                    wf_dsets = {k: f"peeled_{k}_waveforms_fit" for k in pipelines}
+                    self.featurization_pipelines = cast(
+                        Mapping[WaveformKind, WaveformPipeline],
+                        torch.nn.ModuleDict(
+                            {
+                                kind: WaveformPipeline.from_class_names_and_kwargs(
+                                    self.recording.get_channel_locations(),
+                                    self.channel_index,
+                                    self._fit_pipeline_nodes(kind, wf_dsets[kind]),
+                                    waveform_cfg=self.waveform_cfg,
+                                    sampling_frequency=self.recording.sampling_frequency,
+                                )
+                                for kind in pipelines
+                            }
+                        ),
                     )
-                    pipeline.to("cpu")
+                    needs_residual = any(
+                        p.needs_residual(up_to_index=disk_fit_inds.get(k))
+                        for k, p in pipelines.items()
+                    )
+                    more = any(
+                        p.needs_more_features(up_to_index=disk_fit_inds.get(k))
+                        for k, p in pipelines.items()
+                    )
+                    waveforms_h5 = fit_dir / "peeler_fit_waveforms.h5"
+                    assert not waveforms_h5.exists(), waveforms_h5
+                    self.run_subsampled_peeling(
+                        waveforms_h5,
+                        computation_cfg=computation_cfg,
+                        task_name="Load examples for feature fitting",
+                        total_residual_snips=(
+                            self.fit_sampling_cfg.n_residual_snips
+                            if needs_residual
+                            else None
+                        ),
+                        more=more,
+                    )
+                    # self->cpu so that models can use any extra space
+                    self.to(device="cpu")
+
+                    waveforms, fixed_properties = subsample_waveforms(
+                        waveforms_h5,
+                        fit_sampling=self.fit_sampling_cfg.fit_sampling,
+                        random_state=self.fit_subsampling_random_state,
+                        n_waveforms_fit=self.fit_sampling_cfg.n_waveforms_fit,
+                        fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
+                        voltages_dataset_name="peeled_voltages_fit",
+                        waveforms_dataset_name=list(wf_dsets.values()),
+                        fixed_property_keys=self.fixed_property_keys,
+                        device=device,
+                    )
+                    for kind, pipeline in pipelines.items():
+                        kind_waveforms = waveforms.pop(wf_dsets[kind])
+                        if not len(kind_waveforms):
+                            raise ValueError(
+                                f"Found no spikes when trying to fit {kind} featurizers."
+                            )
+                        pipeline.register_cpu_workers(workers)
+                        pipeline.to(device).fit(
+                            recording=self.recording,
+                            waveforms=kind_waveforms,
+                            computation_cfg=computation_cfg,
+                            hdf5_filename=waveforms_h5,
+                            save_fit_data=save_fit_data,
+                            **fixed_properties,
+                        )
+                        pipeline.to("cpu")
+                        del kind_waveforms
+                    del waveforms, fixed_properties
+                    gc.collect()
+                    if not save_fit_data:
+                        waveforms_h5.unlink()
+
+                if disk_fit_inds:
+                    self.featurization_pipelines = cast(
+                        Mapping[WaveformKind, WaveformPipeline],
+                        torch.nn.ModuleDict(
+                            {
+                                kind: pipelines[kind].fit_from_disk_input_pipeline()
+                                for kind in disk_fit_inds
+                            }
+                        ),
+                    )
+                    needs_residual = any(
+                        pipelines[k].needs_residual(start_index=ix)
+                        for k, ix in disk_fit_inds.items()
+                    )
+                    more = any(
+                        pipelines[k].needs_more_features(start_index=ix)
+                        for k, ix in disk_fit_inds.items()
+                    )
+                    features_h5 = fit_dir / "peeler_fit.h5"
+                    assert not features_h5.exists(), features_h5
+                    self.run_subsampled_peeling(
+                        features_h5,
+                        computation_cfg=computation_cfg,
+                        task_name="Load features for fitting from disk",
+                        total_residual_snips=(
+                            self.fit_sampling_cfg.n_residual_snips
+                            if needs_residual
+                            else None
+                        ),
+                        more=more,
+                    )
+                    self.to(device="cpu")
+
+                    for kind in disk_fit_inds:
+                        pipeline = pipelines[kind]
+                        pipeline.register_cpu_workers(workers)
+                        pipeline.to(device).fit_from_disk(
+                            self.recording,
+                            hdf5_filename=features_h5,
+                            computation_cfg=computation_cfg,
+                            save_fit_data=save_fit_data,
+                        )
+                        pipeline.to("cpu")
+            finally:
                 self.featurization_pipelines = cast(
                     Mapping[WaveformKind, WaveformPipeline],
                     torch.nn.ModuleDict(pipelines),  # ty: ignore[invalid-argument-type]
                 )
-            finally:
                 self.to(device="cpu")
-                if save_dir is None and fit_hdf5_filename.exists():
-                    fit_hdf5_filename.unlink()
-                del fixed_properties
-                gc.collect()
-                for name in list(waveforms or ()):
-                    wfs = waveforms.pop(name)
-                    if getrefcount(wfs) > 2:
-                        logger.warning(f"Fit waveforms {name} had {getrefcount(wfs)=}")
-                        for obj in gc.get_referrers(wfs):
-                            logger.warning(f"{obj!r}: {obj!s}")
-                    del wfs
-                del waveforms
-                gc.collect()
 
     def _fit_pipeline_nodes(self, waveform_kind: WaveformKind, waveforms_name: str):
         waveform_node = ("Waveform", {"name": waveforms_name})
