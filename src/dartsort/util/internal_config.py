@@ -588,6 +588,8 @@ class RefinementConfig:
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
     huber_quantile: float = 0.9
+    huber_noise: bool = True
+    criterion_clip_level: float | None = None
     demolition_min_resp_ratio: float = 0.0
     demolish_during_selection: bool = False
     refit_in_demolition: bool = False
@@ -1415,6 +1417,8 @@ def _refinement_cfg(
         spike_storage=cfg.gmm_spike_storage,
         robust_df=cfg.robust_df,
         huber_quantile=cfg.huber_quantile,
+        huber_noise=cfg.huber_noise,
+        criterion_clip_level=cfg.gmm_criterion_clip_level,
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,
         scale_dist_args=(cfg.amplitude_scaling_stddev, 1.0 / sb, sb / 1.0),

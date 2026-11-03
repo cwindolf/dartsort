@@ -905,6 +905,7 @@ class TMMParams:
     elbo_atol: float
     robust_strategy: RobustnessStrategy
     huber_quantile: float
+    criterion_clip_level: float | None
     demolition_min_resp_ratio: float
     demolish_during_selection: bool
     refit_in_demolition: bool
@@ -952,6 +953,7 @@ class TMMParams:
             latent_prior_std=refinement_cfg.latent_prior_std,
             robust_strategy=refinement_cfg.robust_strategy,
             huber_quantile=refinement_cfg.huber_quantile,
+            criterion_clip_level=refinement_cfg.criterion_clip_level,
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
             demolish_during_selection=refinement_cfg.demolish_during_selection,
             refit_in_demolition=refinement_cfg.refit_in_demolition,
@@ -1063,13 +1065,12 @@ class SuccessfulGroupMergeResult:
 GroupMergeResult = SuccessfulGroupMergeResult | None
 
 
+CRITERION_CLIP_LEVELS = (1.0, 2.0)
+
+
 @databag
 class PartitionCriterionStatistics:
-    """Held-out criterion of each candidate partition in one group decision, as paired
-    per-spike differences from the current model: their mean (the improvement), its
-    standard error, and the standard error of each partition's margin over the partition
-    keeping every unit separate (`keep_ix`, None if that partition isn't a candidate).
-    `best_ix` is the partition this criterion selects."""
+
 
     n_eval: int
     improvements: Tensor
@@ -1077,8 +1078,9 @@ class PartitionCriterionStatistics:
     best_ix: int
     keep_ix: int | None
     keep_margin_standard_errors: Tensor | None
-    # per held-out spike (debug only): partitions x spikes, and the spikes' held-out set
-    # indices and neighborhood ids
+    median_improvements: Tensor
+    clipped_improvements: Tensor
+    partition_n_groups: Tensor
     paired_differences: Tensor | None = None
     eval_indices: Tensor | None = None
     eval_neighborhood_ids: Tensor | None = None
@@ -1108,6 +1110,9 @@ class PartitionCriterionStatistics:
         else:
             keep_ix = None
             keep_margin_standard_errors = None
+        clipped_improvements = torch.stack(
+            [paired_differences.clamp(-c, c).mean(dim=1) for c in CRITERION_CLIP_LEVELS]
+        )
         return cls(
             n_eval=n_eval,
             improvements=paired_differences.mean(dim=1).cpu(),
@@ -1115,10 +1120,19 @@ class PartitionCriterionStatistics:
             best_ix=best_ix,
             keep_ix=keep_ix,
             keep_margin_standard_errors=keep_margin_standard_errors,
+            median_improvements=paired_differences.quantile(0.5, dim=1).cpu(),
+            clipped_improvements=clipped_improvements.cpu(),
+            partition_n_groups=torch.tensor([part.n_groups for part in partitions]),
             paired_differences=paired_differences.cpu()
             if keep_paired_differences
             else None,
         )
+
+    def robust_improvements(self) -> list[tuple[str, Tensor]]:
+        named = [("median", self.median_improvements)]
+        for c, values in zip(CRITERION_CLIP_LEVELS, self.clipped_improvements, strict=True):
+            named.append((f"clip{c:g}", values))
+        return named
 
 
 @databag
@@ -2535,9 +2549,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             noise=noise,
             neighborhoods=neighborhoods,
             neighb_overlap=refinement_cfg.neighb_overlap,
-            huber_quantile=huber_quantile_if_huber(
-                refinement_cfg.robust_strategy, refinement_cfg.huber_quantile
-            ),
+            huber_quantile=noise_huber_quantile(refinement_cfg),
         )
         lut_dict = {
             k.removeprefix("lut."): v
@@ -4689,9 +4701,7 @@ def get_truncated_datasets(
         noise=noise,
         neighborhoods=full_neighbs,
         neighb_overlap=refinement_cfg.neighb_overlap,
-        huber_quantile=huber_quantile_if_huber(
-            refinement_cfg.robust_strategy, refinement_cfg.huber_quantile
-        ),
+        huber_quantile=noise_huber_quantile(refinement_cfg),
     )
 
     if refinement_cfg.spike_storage == "device" or not sorting.n_units:
@@ -5776,11 +5786,7 @@ def save_tmm_labels(
 
 
 def save_group_crit_records(records: list[GroupCriterionRecord], path: Path) -> None:
-    """One row per decision. `unit_ids` is padded with -1. On the deciding held-out
-    slice: held-out count, partition count, the selected partition and the
-    keep-every-unit partition (-1 if none), the improvement / standard error of both, and
-    the standard error of the selected-minus-keep margin. NaN / -1 where a decision has no
-    criterion. Written as one h5 dataset per column."""
+
     n = len(records)
     max_size = max((r.unit_ids.numel() for r in records), default=1)
     unit_ids = np.full((n, max_size), -1, dtype=np.int64)
@@ -5789,12 +5795,14 @@ def save_group_crit_records(records: list[GroupCriterionRecord], path: Path) -> 
     n_eval = np.zeros(n, dtype=np.int64)
     n_partitions = np.zeros(n, dtype=np.int64)
     best_ix = np.full(n, -1, dtype=np.int64)
+    best_n_groups = np.full(n, -1, dtype=np.int64)
     keep_ix = np.full(n, -1, dtype=np.int64)
     best_improvement = np.full(n, np.nan)
     best_se = np.full(n, np.nan)
     keep_improvement = np.full(n, np.nan)
     keep_se = np.full(n, np.nan)
     best_keep_margin_se = np.full(n, np.nan)
+    robust_columns: dict[str, np.ndarray] = {}
     for i, r in enumerate(records):
         part_crit_stats = r.part_crit_stats
         if part_crit_stats is None:
@@ -5803,6 +5811,7 @@ def save_group_crit_records(records: list[GroupCriterionRecord], path: Path) -> 
         n_eval[i] = part_crit_stats.n_eval
         n_partitions[i] = part_crit_stats.improvements.numel()
         best_ix[i] = best
+        best_n_groups[i] = part_crit_stats.partition_n_groups[best]
         best_improvement[i] = part_crit_stats.improvements[best]
         best_se[i] = part_crit_stats.standard_errors[best]
         if part_crit_stats.keep_ix is not None:
@@ -5811,6 +5820,25 @@ def save_group_crit_records(records: list[GroupCriterionRecord], path: Path) -> 
             keep_improvement[i] = part_crit_stats.improvements[part_crit_stats.keep_ix]
             keep_se[i] = part_crit_stats.standard_errors[part_crit_stats.keep_ix]
             best_keep_margin_se[i] = part_crit_stats.keep_margin_standard_errors[best]
+        for name, values in part_crit_stats.robust_improvements():
+            rule_best = int(values.argmax())
+            for column, value in (
+                (f"{name}_best_ix", rule_best),
+                (f"{name}_best_n_groups", int(part_crit_stats.partition_n_groups[rule_best])),
+                (f"{name}_best_improvement", float(values[rule_best])),
+                (f"{name}_selected_improvement", float(values[best])),
+                (
+                    f"{name}_keep_improvement",
+                    np.nan if part_crit_stats.keep_ix is None
+                    else float(values[part_crit_stats.keep_ix]),
+                ),
+            ):
+                if column not in robust_columns:
+                    is_index = column.endswith(("_ix", "_n_groups"))
+                    robust_columns[column] = (
+                        np.full(n, -1, dtype=np.int64) if is_index else np.full(n, np.nan)
+                    )
+                robust_columns[column][i] = value
     columns: dict[str, np.ndarray] = {
         "step_kind": np.array([r.step_kind for r in records], dtype="S5"),
         "unit_ids": unit_ids,
@@ -5822,12 +5850,14 @@ def save_group_crit_records(records: list[GroupCriterionRecord], path: Path) -> 
         "n_eval": n_eval,
         "n_partitions": n_partitions,
         "best_ix": best_ix,
+        "best_n_groups": best_n_groups,
         "keep_ix": keep_ix,
         "best_improvement": best_improvement,
         "best_se": best_se,
         "keep_improvement": keep_improvement,
         "keep_se": keep_se,
         "best_keep_margin_se": best_keep_margin_se,
+        **robust_columns,
     }
     with h5py.File(path, "w") as h5:
         for name, column in columns.items():
@@ -6208,6 +6238,7 @@ def brute_merge(
         can_demolish_mask=can_demolish_mask,
         debug=debug,
         debug_stats=debug_stats,
+        clip_level=mm.p.criterion_clip_level,
     )
     assert debug_stats == (part_crit_stats is not None)
     if debug and part_crit_stats is not None:
@@ -6464,8 +6495,9 @@ def _select_partition(
     train_subset_responsibilities: Tensor,
     debug: bool,
     debug_stats: bool = False,
+    clip_level: float | None = None,
 ) -> tuple[GroupPartition, Tensor, "PartitionCriterionStatistics | None"]:
-    # get scores for unaffected units
+    per_spike = debug_stats or clip_level is not None
     cur_mask = torch.isin(cur_scores.candidates, cur_unit_ids)
     cur_log_liks = cur_scores.log_liks
     if pnoid:
@@ -6487,7 +6519,7 @@ def _select_partition(
         logger.dartsortdebug(
             f"brute_merge cur score {cur_crit.item():.4f} entropy {h:.4f}"
         )
-    if debug_stats:
+    if per_spike:
         cur_crit_per_spike = ecl(
             cur_resp, cur_log_liks, cl_alpha=cl_alpha, reduce_mean=False
         )
@@ -6516,8 +6548,7 @@ def _select_partition(
             lp_min=TruncatedMixtureModel.LP_MIN,
             return_entropy=debug,
         )
-        improvements[j] = part_score - cur_crit
-        if debug_stats:
+        if per_spike:
             assert cur_crit_per_spike is not None
             part_per_spike, _ = _determine_part_score(
                 rest_logliks=rest_logliks,
@@ -6533,7 +6564,18 @@ def _select_partition(
                 return_entropy=False,
                 reduce_mean=False,
             )
-            paired_differences.append(part_per_spike - cur_crit_per_spike)
+            part_differences = part_per_spike - cur_crit_per_spike
+        else:
+            part_differences = None
+        if clip_level is None:
+            improvements[j] = part_score - cur_crit
+        else:
+            assert part_differences is not None
+            clipped = part_differences.clamp(-clip_level, clip_level)
+            improvements[j] = clipped.mean()
+        if debug_stats:
+            assert part_differences is not None
+            paired_differences.append(part_differences)
         if debug:
             assert part_h is not None
             h = part_h.item()
@@ -8202,6 +8244,14 @@ def huber_quantile_if_huber(
         return None
     else:
         panic(robust_strategy)
+
+
+def noise_huber_quantile(refinement_cfg: RefinementConfig) -> float | None:
+    if not refinement_cfg.huber_noise:
+        return None
+    return huber_quantile_if_huber(
+        refinement_cfg.robust_strategy, refinement_cfg.huber_quantile
+    )
 
 
 def huber_neighborhood_constants(

@@ -431,6 +431,8 @@ class DeveloperConfig(DARTsortUserConfig):
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
     huber_quantile: float = 0.9
+    huber_noise: bool = True
+    gmm_criterion_clip_level: Annotated[float, Field(gt=0)] | None = None
     demolish_during_selection: bool = False
     em_after_demolish: bool = True
     tpca_from_templates: bool = True
