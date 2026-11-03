@@ -123,7 +123,7 @@ def test_cli_help():
 def test_seed_changes_subsampled_detection(tmp_path, simulations):
     sim = simulations["driftn_szmini"]
     times = {}
-    for run, seed in (("a", 0), ("b", 0), ("c", 1)):
+    for run, seed in (("a", 0), ("b", 0), ("c", 2)):
         cfg = dartsort.DeveloperConfig(
             dredge_only=True,
             detection_type="threshold",
@@ -132,6 +132,7 @@ def test_seed_changes_subsampled_detection(tmp_path, simulations):
             whiten_strategy="none",
             whiten_temporal_length=None,
             subsampling_spikes_per_channel=1,
+            do_motion_estimation=False,
             preprocessing="none",
             seed=seed,
         )
