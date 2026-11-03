@@ -571,7 +571,8 @@ def scaled_normeuc_cdist_from_dots_(
     torch.minimum(out, dist_t, out=out)
 
     # handle blanks
-    out.masked_fill_(dots == 0.0, torch.inf)
+    blank = torch.logical_or(row_normsq == 0.0, col_normsq == 0.0)
+    out.masked_fill_(blank, torch.inf)
 
     return out
 
