@@ -97,6 +97,7 @@ from ..util.spiketorch import (
     cosine_distance,
     csr_members_ordered,
     ecl,
+    elbo,
     entropy,
     mean_elbo_dim1,
     normeuc_distance,
@@ -1068,6 +1069,21 @@ GroupMergeResult = SuccessfulGroupMergeResult | None
 CRITERION_CLIP_LEVELS = (1.0, 2.0)
 
 
+def paired_mean(x: Tensor, weights: Tensor | None) -> Tensor:
+    if weights is None:
+        return x.mean(dim=1)
+    return x @ (weights.to(x) / weights.sum())
+
+
+def paired_standard_error(x: Tensor, weights: Tensor | None) -> Tensor:
+    if weights is None:
+        return x.std(dim=1).div_(math.sqrt(x.shape[1]))
+    w = weights.to(x) / weights.sum()
+    n_eff = 1.0 / w.square().sum()
+    variance = (x - (x @ w)[:, None]).square() @ w
+    return variance.div_(n_eff - 1).sqrt_()
+
+
 @databag
 class PartitionCriterionStatistics:
 
@@ -1092,10 +1108,11 @@ class PartitionCriterionStatistics:
         partitions: list[GroupPartition],
         best_ix: int,
         keep_paired_differences: bool = False,
+        weights: Tensor | None = None,
     ) -> "PartitionCriterionStatistics":
         n_partitions, n_eval = paired_differences.shape
         assert n_partitions == len(partitions)
-        sqrt_n = math.sqrt(n_eval)
+        assert weights is None or weights.shape == (n_eval,)
         keep_ixs = [
             j
             for j, part in enumerate(partitions)
@@ -1106,17 +1123,20 @@ class PartitionCriterionStatistics:
         if keep_ixs:
             keep_ix = keep_ixs[0]
             margins = paired_differences - paired_differences[keep_ix]
-            keep_margin_standard_errors = margins.std(dim=1).div_(sqrt_n).cpu()
+            keep_margin_standard_errors = paired_standard_error(margins, weights).cpu()
         else:
             keep_ix = None
             keep_margin_standard_errors = None
         clipped_improvements = torch.stack(
-            [paired_differences.clamp(-c, c).mean(dim=1) for c in CRITERION_CLIP_LEVELS]
+            [
+                paired_mean(paired_differences.clamp(-c, c), weights)
+                for c in CRITERION_CLIP_LEVELS
+            ]
         )
         return cls(
             n_eval=n_eval,
-            improvements=paired_differences.mean(dim=1).cpu(),
-            standard_errors=paired_differences.std(dim=1).div_(sqrt_n).cpu(),
+            improvements=paired_mean(paired_differences, weights).cpu(),
+            standard_errors=paired_standard_error(paired_differences, weights).cpu(),
             best_ix=best_ix,
             keep_ix=keep_ix,
             keep_margin_standard_errors=keep_margin_standard_errors,
@@ -1215,6 +1235,7 @@ class SpikeDataBatch:
     CmoCooinvx: Tensor | None
     candidate_count: int | None
     duties: Tensor | None
+    sample_weights: Tensor | None
 
 
 @databag
@@ -1228,6 +1249,7 @@ class DenseSpikeData:
     CmoCooinvx: Tensor | None
     noise_logliks: Tensor
     duties: Tensor | None
+    sample_weights: Tensor | None
     batch_size: int
 
     def __post_init__(self):
@@ -1273,6 +1295,9 @@ class DenseSpikeData:
                 CmoCooinvx=None if self.CmoCooinvx is None else self.CmoCooinvx[sl],
                 candidates=candidates[sl],
                 duties=None if self.duties is None else self.duties[sl],
+                sample_weights=None
+                if self.sample_weights is None
+                else self.sample_weights[sl],
                 candidate_count=int(candidate_counts[sl].sum()),
             )
             batches.append(b)
@@ -1297,6 +1322,10 @@ class DenseSpikeData:
             duties = None
         else:
             duties = self.duties[indices]
+        if self.sample_weights is None:
+            sample_weights = None
+        else:
+            sample_weights = self.sample_weights[indices]
         if self.score_only:
             xt = CmoCooinvx = None
         else:
@@ -1314,6 +1343,7 @@ class DenseSpikeData:
             CmoCooinvx=CmoCooinvx,
             noise_logliks=self.noise_logliks[indices],
             duties=duties,
+            sample_weights=sample_weights,
             batch_size=self.batch_size,
         )
 
@@ -1369,6 +1399,7 @@ class BatchedSpikeData:
         neighborhoods: SpikeNeighborhoods,
         device: torch.device,
         duties: Tensor | None,
+        sample_weights: Tensor | None,
         candidates: Tensor | None = None,
         neighb_adj: Tensor | None = None,
         neighb_supset: Tensor | None = None,
@@ -1396,6 +1427,9 @@ class BatchedSpikeData:
         # per-sample approximate posterior data
         self.candidates = candidates
         self.duties = duties
+        if sample_weights is not None:
+            assert sample_weights.shape == (N,)
+        self.sample_weights = sample_weights
 
         self.n_candidates = n_candidates
         self.n_search = n_search
@@ -1670,6 +1704,7 @@ class StreamingSpikeData(BatchedSpikeData):
         super().__init__(
             N=x.shape[0],
             duties=duties,
+            sample_weights=None,
             n_candidates=n_candidates,
             n_search=0,
             n_explore=0,
@@ -1755,6 +1790,7 @@ class StreamingSpikeData(BatchedSpikeData):
         # my x is not channels-major as the TruncatedSpikeData's is, and that's
         # what's assumed in the statistics pass.
         del x
+        assert self.sample_weights is None
         return SpikeDataBatch(
             batch=spike_indices,
             xt=None,
@@ -1763,6 +1799,7 @@ class StreamingSpikeData(BatchedSpikeData):
             whitenedx=wx,
             noise_logliks=noise_loglik,
             duties=duties,
+            sample_weights=None,
             CmoCooinvx=None,
             candidate_count=None,
         )
@@ -1789,6 +1826,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         noise_logliks: Tensor,
         neighborhoods: SpikeNeighborhoods,
         duties: Tensor | None,
+        sample_weights: Tensor | None,
         search_adj: Literal["top", "explore"] = "top",
         seed: int | np.random.Generator = 0,
         batch_size: int = 128,
@@ -1822,6 +1860,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             seed=seed,
             device=device,
             duties=duties,
+            sample_weights=sample_weights,
         )
         assert self.max_n_explore is not None
         assert self.max_n_total is not None
@@ -1879,6 +1918,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         labels: Tensor,
         x: Tensor,
         duties: Tensor | None,
+        sample_weights: Tensor | None,
         neighborhoods: SpikeNeighborhoods,
         neighb_cov: NeighborhoodCovariance,
         search_adj: Literal["top", "explore"] = "top",
@@ -1924,6 +1964,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             noise_logliks=noise_logliks,
             neighborhoods=neighborhoods,
             duties=duties,
+            sample_weights=sample_weights,
             seed=seed,
             batch_size=batch_size,
             explore_neighb_steps=explore_neighb_steps,
@@ -2037,6 +2078,10 @@ class TruncatedSpikeData(BatchedSpikeData):
             duties = None
         else:
             duties = self.duties[spike_indices]
+        if self.sample_weights is None:
+            sample_weights = None
+        else:
+            sample_weights = self.sample_weights[spike_indices]
         xt, whitenedx, CmoCooinvx, noise_logliks = self.features(spike_indices)
         return SpikeDataBatch(
             batch=spike_indices,
@@ -2047,6 +2092,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             whitenedx=whitenedx,
             noise_logliks=noise_logliks,
             duties=duties,
+            sample_weights=sample_weights,
             candidate_count=int(self.batch_candidate_counts[batch_index]),
         )
 
@@ -2084,6 +2130,10 @@ class TruncatedSpikeData(BatchedSpikeData):
             duties = None
         else:
             duties = self.duties[spike_indices]
+        if self.sample_weights is None:
+            sample_weights = None
+        else:
+            sample_weights = self.sample_weights[spike_indices]
         xt, whitenedx, CmoCooinvx, noise_logliks = self.features(spike_indices)
         return DenseSpikeData(
             indices=spike_indices,
@@ -2095,6 +2145,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             CmoCooinvx=CmoCooinvx,
             noise_logliks=noise_logliks,
             duties=duties,
+            sample_weights=sample_weights,
             batch_size=self.batch_size,
         )
 
@@ -2281,6 +2332,7 @@ class FullProposalDataView(BatchedSpikeData):
             neighb_overlap=0.0,
             proposal_is_complete=True,
             duties=data.duties,
+            sample_weights=data.sample_weights,
         )
         self.proposals = proposals.to(self.device)
         self.data = data
@@ -2323,6 +2375,10 @@ class FullProposalDataView(BatchedSpikeData):
             duties = None
         else:
             duties = self.duties[spike_indices]
+        if self.sample_weights is None:
+            sample_weights = None
+        else:
+            sample_weights = self.sample_weights[spike_indices]
         xt, whitenedx, CmoCooinvx, noise_logliks = self.data.features(spike_indices)
         return SpikeDataBatch(
             batch=spike_indices,
@@ -2333,6 +2389,7 @@ class FullProposalDataView(BatchedSpikeData):
             whitenedx=whitenedx,
             noise_logliks=noise_logliks,
             duties=duties,
+            sample_weights=sample_weights,
             candidate_count=None,
         )
 
@@ -2737,7 +2794,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # deliberately not normalizing the proportions here
         # these were historically always fixed from the get
         # normalizing would be bad when we have overlapping subsets here.
-        log_proportions = responsibilities.mean(0).log_()
+        log_proportions = spike_mean(responsibilities, data.sample_weights).log_()
         log_proportions += total_log_proportion
 
         self = cls(
@@ -3104,6 +3161,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             whitenedx=wx,
             noise_logliks=noise_logliks,
             duties=duties,
+            sample_weights=None,
             CmoCooinvx=None,
             candidate_count=candidate_count,
         )
@@ -3198,6 +3256,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             CmoCooinvx=batch.CmoCooinvx,
             responsibilities=scores.responsibilities,
             mstep_weights=mstep_weights,
+            sample_weights=batch.sample_weights,
             log_liks=scores.log_liks,
             spike_ixs=spike_ixs,
             candidate_ixs=candidate_ixs,
@@ -3939,16 +3998,18 @@ class TruncatedMixtureModel(BaseMixtureModel):
             data=val_data, needs_bootstrap=False, full_proposal_view=True
         )
         mean_train_resp = mean_responsibilities(
-            scores=train_scores, n_units=self.n_units
+            scores=train_scores, n_units=self.n_units, weights=train_data.sample_weights
         )
-        mean_val_resp = mean_responsibilities(scores=val_scores, n_units=self.n_units)
+        mean_val_resp = mean_responsibilities(
+            scores=val_scores, n_units=self.n_units, weights=val_data.sample_weights
+        )
         val_row_crit = ecl(
             resps=None,
             log_liks=val_scores.log_liks.double(),
             cl_alpha=self.p.demolish_cl_alpha,
             reduce_mean=False,
         )
-        cur_crit = val_row_crit.mean().item()
+        cur_crit = spike_mean(val_row_crit, val_data.sample_weights).item()
 
         # checking this invariant at the top
         assert self.b.log_proportions.isfinite().all()
@@ -4049,9 +4110,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
         responsibilities to the original means.
         """
         # determine mean responsibilities before and after removing units
-        orig_prop = mean_responsibilities(train_scores, n_units=self.n_units)
+        orig_prop = mean_responsibilities(
+            train_scores, n_units=self.n_units, weights=train_data.sample_weights
+        )
         destroy_scores = remove_units_from_scores(train_scores, unit_ids)
-        new_prop = mean_responsibilities(destroy_scores, n_units=self.n_units)
+        new_prop = mean_responsibilities(
+            destroy_scores, n_units=self.n_units, weights=train_data.sample_weights
+        )
         assert orig_prop.shape == new_prop.shape == (self.n_units + 1,)
 
         # this op won't change noise log prop, so remove that factor
@@ -4659,7 +4724,7 @@ def get_truncated_datasets(
         stable_features=stable_features,
         device=device,
     )
-    feature_rank, full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom = data  # fmt: skip
+    feature_rank, full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom, train_weights, val_weights = data  # fmt: skip
     del stable_features
 
     if refinement_cfg.robust_strategy == "fixed":
@@ -4786,6 +4851,7 @@ def get_truncated_datasets(
         labels=labels[train_ixs].to(device=device),
         x=train_x,
         duties=train_duties,
+        sample_weights=None if train_weights is None else train_weights.to(device=device),
         neighborhoods=train_neighbs,
         neighb_cov=neighb_cov,
         neighb_overlap=refinement_cfg.neighb_overlap,
@@ -4834,6 +4900,7 @@ def get_truncated_datasets(
             x=val_x,
             neighborhoods=val_neighbs,
             duties=val_duties,
+            sample_weights=None if val_weights is None else val_weights.to(device=device),
             neighb_cov=neighb_cov,
             seed=rg,
             batch_size=refinement_cfg.eval_batch_size,
@@ -4890,6 +4957,8 @@ def get_full_neighborhood_data(
     Tensor | slice | None,
     SpikeNeighborhoods | None,
     Tensor,
+    Tensor | None,
+    Tensor | None,
 ]:
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -4927,16 +4996,37 @@ def get_full_neighborhood_data(
     full_neighborhoods = full_neighborhoods.to(device=device)
 
     # data splits: -1 full, 0 train, 1 val. stratify by unit, or by neighborhood if no labels (for kmeanspp)
-    if sorting.labels is not None and sorting.labels.max() >= 0:
+    labeled = sorting.labels is not None and sorting.labels.max() >= 0
+    if labeled:
         groups = sorting.labels
     else:
         groups = full_neighborhoods.b.neighborhood_ids.numpy(force=True)
+    sampling_cfg = refinement_cfg.sampling_cfg
+    bucket_sampling = (
+        labeled and n_fit < len(sorting) and sampling_cfg.bucket_sampling_power > 0
+    )
+    if bucket_sampling:
+        _, counts, _ = pos_int_unique_and_counts(groups)
+        fit_prop = bucket_sampling_rates(
+            counts,
+            n_fit=max(1, round(fit_prop_of_total * counts.sum())),
+            power=sampling_cfg.bucket_sampling_power,
+            max_reweighting=sampling_cfg.bucket_sampling_max_reweighting,
+        )
+    else:
+        fit_prop = fit_prop_of_total
     split_mask = _ensure_split_covers_all(
-        groups, rg=rg, fit_prop=fit_prop_of_total, train_prop=train_prop
+        groups, rg=rg, fit_prop=fit_prop, train_prop=train_prop
     )
 
     train_indices = torch.asarray(np.flatnonzero(split_mask == 0))
     val_indices = torch.asarray(np.flatnonzero(split_mask == 1))
+    if bucket_sampling:
+        train_weights, val_weights = _bucket_sample_weights(
+            groups, split_mask, train_indices.numpy(), val_indices.numpy()
+        )
+    else:
+        train_weights = val_weights = None
 
     train_neighborhoods = full_neighborhoods.slice(train_indices)
     if val_indices is None:
@@ -4953,18 +5043,71 @@ def get_full_neighborhood_data(
         val_indices,
         val_neighborhoods,
         prgeom,
+        train_weights,
+        val_weights,
     )
+
+
+def _bucket_sample_weights(
+    groups: np.ndarray,
+    split_mask: np.ndarray,
+    train_indices: np.ndarray,
+    val_indices: np.ndarray,
+) -> tuple[Tensor, Tensor]:
+    grouped = groups >= 0
+    ids, counts = np.unique(groups[grouped], return_counts=True)
+    fit = split_mask >= 0
+    assert grouped[fit].all()
+    fit_counts = np.bincount(np.searchsorted(ids, groups[fit]), minlength=ids.size)
+    assert (fit_counts > 0).all()
+    group_weights = (fit_counts.sum() / counts.sum()) / (fit_counts / counts)
+    train_weights = group_weights[np.searchsorted(ids, groups[train_indices])]
+    val_weights = group_weights[np.searchsorted(ids, groups[val_indices])]
+    return (
+        torch.asarray(train_weights, dtype=torch.float),
+        torch.asarray(val_weights, dtype=torch.float),
+    )
+
+
+def bucket_sampling_rates(
+    counts: np.ndarray, *, n_fit: int, power: float, max_reweighting: float
+) -> np.ndarray:
+    assert counts.ndim == 1 and (counts > 0).all()
+    assert power >= 0 and max_reweighting >= 1
+    total = counts.sum()
+    assert 0 < n_fit <= total
+    uniform = n_fit / total
+    if power == 0:
+        return np.full(counts.shape, uniform)
+    lo_rate = uniform / max_reweighting
+    hi_rate = min(1.0, uniform * max_reweighting)
+    shape = counts.astype(np.float64) ** -power
+
+    def rates_at(log_scale: float) -> np.ndarray:
+        return np.clip(np.exp(log_scale) * shape, lo_rate, hi_rate)
+
+    lo = np.log(lo_rate) - np.log(shape.max())
+    hi = np.log(hi_rate) - np.log(shape.min())
+    for _ in range(100):
+        mid = 0.5 * (lo + hi)
+        if (counts * rates_at(mid)).sum() > n_fit:
+            hi = mid
+        else:
+            lo = mid
+    return rates_at(lo)
 
 
 def _ensure_split_covers_all(
     groups: np.ndarray,
     *,
     rg: np.random.Generator,
-    fit_prop: float,
+    fit_prop: float | np.ndarray,
     train_prop: float,
 ) -> np.ndarray:
     """stratified sampling for train set, -1 full, 0 train, 1 val"""
     _, counts, n_ungrouped = pos_int_unique_and_counts(groups)
+    if isinstance(fit_prop, np.ndarray):
+        assert fit_prop.shape == counts.shape
     fit_counts = np.minimum(counts, np.ceil(counts * fit_prop).astype(np.int64))
     assert fit_counts.dtype.kind == "i"
     train_counts = np.maximum(train_prop * fit_counts, 1).astype(np.int64)
@@ -6239,6 +6382,7 @@ def brute_merge(
         debug=debug,
         debug_stats=debug_stats,
         clip_level=mm.p.criterion_clip_level,
+        eval_weights=crit_data.sample_weights,
     )
     assert debug_stats == (part_crit_stats is not None)
     if debug and part_crit_stats is not None:
@@ -6257,6 +6401,7 @@ def brute_merge(
         train_subset_scores=train_subset_scores,
         mm=mm,
         subset_models=subset_models,
+        train_weights=train_data.sample_weights,
     )
 
     return SuccessfulGroupMergeResult(
@@ -6496,8 +6641,12 @@ def _select_partition(
     debug: bool,
     debug_stats: bool = False,
     clip_level: float | None = None,
+    eval_weights: Tensor | None = None,
 ) -> tuple[GroupPartition, Tensor, "PartitionCriterionStatistics | None"]:
-    per_spike = debug_stats or clip_level is not None
+    if eval_weights is not None:
+        assert can_demolish_mask is None, "demolish during selection is unweighted"
+        assert eval_weights.shape == (cur_scores.log_liks.shape[0],)
+    per_spike = debug_stats or clip_level is not None or eval_weights is not None
     cur_mask = torch.isin(cur_scores.candidates, cur_unit_ids)
     cur_log_liks = cur_scores.log_liks
     if pnoid:
@@ -6567,12 +6716,20 @@ def _select_partition(
             part_differences = part_per_spike - cur_crit_per_spike
         else:
             part_differences = None
-        if clip_level is None:
+        if clip_level is None and eval_weights is None:
             improvements[j] = part_score - cur_crit
         else:
             assert part_differences is not None
-            clipped = part_differences.clamp(-clip_level, clip_level)
-            improvements[j] = clipped.mean()
+            if clip_level is None:
+                selected_differences = part_differences
+            else:
+                selected_differences = part_differences.clamp(-clip_level, clip_level)
+            if eval_weights is None:
+                improvements[j] = selected_differences.mean()
+            else:
+                improvements[j] = (
+                    selected_differences * eval_weights
+                ).sum() / eval_weights.sum()
         if debug_stats:
             assert part_differences is not None
             paired_differences.append(part_differences)
@@ -6599,6 +6756,7 @@ def _select_partition(
             sel_partitions,
             int(best_ix.item()),
             keep_paired_differences=debug,
+            weights=eval_weights,
         )
     else:
         part_crit_stats = None
@@ -6646,6 +6804,14 @@ def _determine_part_score(
     return ecl(part_resps, part_logliks, cl_alpha=cl_alpha, reduce_mean=reduce_mean), h
 
 
+def spike_mean(x: Tensor, weights: Tensor | None) -> Tensor:
+    if weights is None:
+        return x.mean(0)
+    assert weights.shape == x.shape[:1]
+    w = weights.view(-1, *([1] * (x.ndim - 1)))
+    return (x * w).sum(0) / weights.sum()
+
+
 def _extract_partition(
     *,
     part: GroupPartition,
@@ -6655,6 +6821,7 @@ def _extract_partition(
     train_subset_scores: Scores,
     mm: BaseMixtureModel,
     subset_models: BaseMixtureModel,
+    train_weights: Tensor | None,
 ):
     # spike assignments
     invalid, train_assignments = get_part_assignments(
@@ -6679,11 +6846,13 @@ def _extract_partition(
         bases = None
 
     # fraction
-    prop = responsibilities.mean(0)
+    prop = spike_mean(responsibilities, train_weights)
     single_prop = prop[part.single_ixs]
     if part.single_demolish_ixs:
         single_prop[part.single_demolish_ixs] = 0.0
-    sub_props = [subset_resps[:, sid].mean(0)[None] for sid in part.subset_ids]
+    sub_props = [
+        spike_mean(subset_resps[:, sid], train_weights)[None] for sid in part.subset_ids
+    ]
     sub_props = torch.concatenate([single_prop, *sub_props], dim=0)
     sub_props = sub_props[reorder]
     assert sub_props.shape == (len(part.single_ixs) + len(part.subset_ids),)
@@ -6819,12 +6988,18 @@ def evaluate_group_demolitions(
     eval_row_crit: Tensor | None = None,
 ) -> GroupDemolition:
     group_ = group.to(train_scores.candidates)
+    train_weights = train_data.sample_weights
+    eval_weights = eval_data.sample_weights
 
     # select which units in the group are candidates for demolition
     if mean_train_resp is None:
-        mean_train_resp = mean_responsibilities(scores=train_scores, n_units=mm.n_units)
+        mean_train_resp = mean_responsibilities(
+            scores=train_scores, n_units=mm.n_units, weights=train_weights
+        )
     if mean_eval_resp is None:
-        mean_eval_resp = mean_responsibilities(scores=eval_scores, n_units=mm.n_units)
+        mean_eval_resp = mean_responsibilities(
+            scores=eval_scores, n_units=mm.n_units, weights=eval_weights
+        )
     ratio = mean_train_resp[group] / mean_eval_resp[group]
     can_demolish = ratio > mm.p.demolition_min_resp_ratio
 
@@ -6835,11 +7010,14 @@ def evaluate_group_demolitions(
     # loop over possible demolitions, evaluate their improvements, track best
     alpha = mm.p.demolish_cl_alpha
     if cur_crit is None:
-        cur_crit = ecl(
+        eval_rows = ecl(
             resps=eval_scores.responsibilities,
             log_liks=eval_scores.log_liks,
             cl_alpha=alpha,
-        ).item()
+            reduce_mean=False,
+        )
+        cur_crit = spike_mean(eval_rows, eval_weights).item()
+        del eval_rows
     assert isinstance(cur_crit, float)
     best_demo = GroupDemolition(
         unit_ids=group, improvement=0.0, demolished=torch.zeros_like(can_demolish)
@@ -6847,6 +7025,7 @@ def evaluate_group_demolitions(
     best_imp = 0.0
 
     if mm.p.refit_in_demolition:
+        assert train_weights is None and eval_weights is None, "refit demolition is unweighted"
         group = group.to(device=train_scores.candidates.device)
         (train_ixs,) = (
             torch.isin(train_scores.candidates, group).any(dim=1).nonzero(as_tuple=True)
@@ -6894,6 +7073,8 @@ def evaluate_group_demolitions(
                 train_scores=train_scores,
                 eval_scores=eval_scores,
                 eval_row_crit=eval_row_crit,
+                train_weights=train_weights,
+                eval_weights=eval_weights,
             )
         if imp > best_imp:
             best_demo = GroupDemolition(
@@ -6914,6 +7095,8 @@ def _evaluate_single_demolition(
     train_scores: Scores,
     eval_scores: Scores,
     eval_row_crit: Tensor | None = None,
+    train_weights: Tensor | None = None,
+    eval_weights: Tensor | None = None,
 ) -> float:
     n_units = orig_log_props.numel()
     assert demolish_mask.shape == group.shape
@@ -6923,7 +7106,10 @@ def _evaluate_single_demolition(
     if not chopping_block.numel():
         return 0.0
     adj_train_resp = mean_responsibilities_after_removal(
-        scores=train_scores, remove_units=chopping_block, n_units=n_units
+        scores=train_scores,
+        remove_units=chopping_block,
+        n_units=n_units,
+        weights=train_weights,
     )
     assert adj_train_resp.shape == (n_units + 1,)
 
@@ -6941,6 +7127,7 @@ def _evaluate_single_demolition(
         cl_alpha=cl_alpha,
         robust_strategy=robust_strategy,
         orig_row_criterion=eval_row_crit,
+        weights=eval_weights,
     )
 
 
@@ -8058,6 +8245,7 @@ def mean_responsibilities(
     responsibilities: torch.Tensor | None = None,
     candidates: torch.Tensor | None = None,
     batch_size: int = 2**16,
+    weights: Tensor | None = None,
 ) -> torch.Tensor:
     """Average per-spike responsibility by unit for scores a Scores object."""
     if responsibilities is not None:
@@ -8091,22 +8279,37 @@ def mean_responsibilities(
     knoise = n_units + includes_noise
     resp_mean = resp.new_zeros(knoise + 1, dtype=torch.double)
     rsum_batch = resp_mean.clone()
-    for i0 in range(0, n, batch_size):
-        i1 = min(n, i0 + batch_size)
-        nbatch = i1 - i0
-        rsum_batch.zero_()
+    if weights is None:
+        for i0 in range(0, n, batch_size):
+            i1 = min(n, i0 + batch_size)
+            nbatch = i1 - i0
+            rsum_batch.zero_()
 
-        cix = F.threshold(cand[i0:i1], threshold=-1, value=knoise)
-        rsum_batch.scatter_add_(
-            dim=0,
-            index=cix.view(-1),
-            src=resp[i0:i1, :ncand].double().reshape(-1),
-        )
-        if includes_noise:
-            rsum_batch[n_units] += resp[i0:i1, -1].double().sum()
+            cix = F.threshold(cand[i0:i1], threshold=-1, value=knoise)
+            rsum_batch.scatter_add_(
+                dim=0,
+                index=cix.view(-1),
+                src=resp[i0:i1, :ncand].double().reshape(-1),
+            )
+            if includes_noise:
+                rsum_batch[n_units] += resp[i0:i1, -1].double().sum()
 
-        rmean_batch = rsum_batch.mul_(1.0 / nbatch)
-        resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+            rmean_batch = rsum_batch.mul_(1.0 / nbatch)
+            resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+    else:
+        assert weights.shape == (n,)
+        for i0 in range(0, n, batch_size):
+            i1 = min(n, i0 + batch_size)
+            bweights = weights[i0:i1].double()
+            cix = F.threshold(cand[i0:i1], threshold=-1, value=knoise)
+            resp_mean.scatter_add_(
+                dim=0,
+                index=cix.view(-1),
+                src=resp[i0:i1, :ncand].double().mul_(bweights[:, None]).reshape(-1),
+            )
+            if includes_noise:
+                resp_mean[n_units] += resp[i0:i1, -1].double().mul_(bweights).sum()
+        resp_mean /= weights.double().sum()
     resp_mean = resp_mean[:knoise]
 
     # check that things didn't explode
@@ -8131,9 +8334,11 @@ def mean_responsibilities_after_removal(
     remove_units: Tensor,
     n_units: int,
     batch_size: int = 2**18,
+    weights: Tensor | None = None,
 ) -> Tensor:
     n, ncand = scores.candidates.shape
     assert scores.log_liks.shape == (n, ncand + 1)
+    assert weights is None or weights.shape == (n,)
     remove_units = remove_units.sort().values
     remove_units = remove_units.to(scores.candidates)
     nremove = remove_units.shape[0]
@@ -8157,16 +8362,25 @@ def mean_responsibilities_after_removal(
         bresp = bll.softmax(dim=1).nan_to_num_()
 
         cix = F.threshold(bcand, threshold=-1, value=knoise)
-        rsum_batch.scatter_add_(
-            dim=0,
-            index=cix.reshape(-1),
-            src=bresp[:, :ncand].double().reshape(-1),
-        )
-        rsum_batch[n_units] += bresp[:, -1].double().sum()
+        if weights is None:
+            rsum_batch.scatter_add_(
+                dim=0,
+                index=cix.reshape(-1),
+                src=bresp[:, :ncand].double().reshape(-1),
+            )
+            rsum_batch[n_units] += bresp[:, -1].double().sum()
 
-        rmean_batch = rsum_batch.mul_(1.0 / nbatch)
-        resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+            rmean_batch = rsum_batch.mul_(1.0 / nbatch)
+            resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+        else:
+            bresp = bresp.double().mul_(weights[i0:i1].double()[:, None])
+            resp_mean.scatter_add_(
+                dim=0, index=cix.reshape(-1), src=bresp[:, :ncand].reshape(-1)
+            )
+            resp_mean[n_units] += bresp[:, -1].sum()
 
+    if weights is not None:
+        resp_mean /= weights.double().sum()
     resp_mean = resp_mean[:knoise]
     _assert_propclose(resp_mean.sum(), resp_mean.new_ones(()))
     return resp_mean
@@ -8181,6 +8395,7 @@ def proportion_adjust_criterion_change(
     robust_strategy: RobustnessStrategy,
     orig_row_criterion: Tensor | None = None,
     batch_size: int = 2**18,
+    weights: Tensor | None = None,
 ) -> float:
     """How much would ecl change if the log props were these, not those?"""
     diff = (new_log_props.double() - orig_log_props.double()).nan_to_num_()
@@ -8189,6 +8404,7 @@ def proportion_adjust_criterion_change(
     cand, log_liks = scores.candidates, scores.log_liks
     n, ncand = cand.shape
     assert orig_row_criterion is None or orig_row_criterion.shape == (n,)
+    assert weights is None or weights.shape == (n,)
 
     if robust_strategy == "fixed":
         assert scores.duties is not None
@@ -8216,9 +8432,14 @@ def proportion_adjust_criterion_change(
         bll[:, :ncand] += bdiff
         badj = ecl(resps=None, log_liks=bll, cl_alpha=cl_alpha, reduce_mean=False)
 
-        bmean = badj.sub_(borig).mean()
-        mean += bmean.sub_(mean).mul_(nbatch / i1)
+        if weights is None:
+            bmean = badj.sub_(borig).mean()
+            mean += bmean.sub_(mean).mul_(nbatch / i1)
+        else:
+            mean += badj.sub_(borig).mul_(weights[i0:i1].double()).sum()
 
+    if weights is not None:
+        mean /= weights.double().sum()
     return mean.item()
 
 
@@ -8657,6 +8878,7 @@ def _stat_pass_batch(
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
     mstep_weights: Tensor | None,
+    sample_weights: Tensor | None,
     log_liks: Tensor,
     spike_ixs: Tensor,
     candidate_ixs: Tensor,
@@ -8672,6 +8894,10 @@ def _stat_pass_batch(
     n = responsibilities.shape[0]
     if mstep_weights is not None:
         assert mstep_weights.shape == (n, n_candidates)
+    unweighted_responsibilities = responsibilities
+    if sample_weights is not None:
+        assert sample_weights.shape == (n,)
+        responsibilities = responsibilities * sample_weights[:, None]
     if lut_params.signal_rank:
         assert lut_params.TWoCooinvsqrt is not None
         assert lut_params.TWoCooinvmuo is not None
@@ -8746,6 +8972,9 @@ def _stat_pass_batch(
             R=R,
             elbo=elb,
         )
+    if sample_weights is not None:
+        spike_elbos = elbo(unweighted_responsibilities, log_liks, reduce_mean=False)
+        stats.elbo = (spike_elbos * sample_weights).sum() / sample_weights.sum()
     return stats
 
 

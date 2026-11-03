@@ -234,6 +234,8 @@ class FitSamplingConfig:
     fit_sampling: FitSamplingMethod = "amp_reweighted"
     fit_max_reweighting: float = default_fit_max_reweighting
     n_seconds_fit: int = 100
+    bucket_sampling_power: float = 0.0
+    bucket_sampling_max_reweighting: float = 10.0
 
 
 default_peeling_fit_sampling_cfg = FitSamplingConfig()
@@ -1327,6 +1329,8 @@ def _clustering_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
         max_waveforms_fit=cfg.clustering_max_spikes,
         more_waveforms_fit=cfg.gmm_max_spikes,
         fit_sampling=cfg.fit_sampling,
+        bucket_sampling_power=cfg.gmm_bucket_sampling_power,
+        bucket_sampling_max_reweighting=cfg.gmm_bucket_sampling_max_reweighting,
     )
 
 
@@ -1680,10 +1684,15 @@ def _peeler_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
         n_residual_snips = 0
     else:
         n_residual_snips = cfg.n_residual_snips
+    if cfg.gmm_pool_spikes is None:
+        pool_spikes = cfg.gmm_max_spikes
+    else:
+        assert cfg.gmm_pool_spikes >= cfg.gmm_max_spikes
+        pool_spikes = cfg.gmm_pool_spikes
     return FitSamplingConfig(
         n_waveforms_fit=cfg.n_waveforms_fit,
         max_waveforms_fit=cfg.max_waveforms_fit,
-        more_waveforms_fit=cfg.gmm_max_spikes,
+        more_waveforms_fit=pool_spikes,
         fit_sampling=cfg.fit_sampling,
         n_residual_snips=n_residual_snips,
     )

@@ -406,6 +406,9 @@ class DeveloperConfig(DARTsortUserConfig):
     initialize_at_rank_0: bool = True
     signal_rank: Annotated[int, Field(ge=0)] = 3
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_048_000
+    gmm_pool_spikes: Annotated[int, Field(gt=0)] | None = None
+    gmm_bucket_sampling_power: Annotated[float, Field(ge=0)] = 0.0
+    gmm_bucket_sampling_max_reweighting: Annotated[float, Field(ge=1)] = 10.0
     kmeansk: int = 4
     split_kmeanspp_metric: SplitKmeansppMetric = "euc"
     min_cluster_size: int = 5
