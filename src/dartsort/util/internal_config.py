@@ -566,7 +566,7 @@ class RefinementConfig:
     n_explore: int | None = None
     train_batch_size: int = 4096
     eval_batch_size: int = 4096
-    spike_storage: SpikeStorage = "device"
+    spike_storage: SpikeStorage = "cpu"
     split_friend_distance: float = 0.8
     split_distance_threshold: float = 1.5
     merge_distance_threshold: float = 1.5

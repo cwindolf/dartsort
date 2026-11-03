@@ -422,7 +422,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_n_search: int | None = 3
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5
     gmm_batch_size: int = 4096
-    gmm_spike_storage: SpikeStorage = "device"
+    gmm_spike_storage: SpikeStorage = "cpu"
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     cov_kind: str = "factorizednoise"
