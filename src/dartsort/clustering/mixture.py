@@ -90,7 +90,7 @@ from ..util.logging_util import (
 from ..util.main_util import ds_save_intermediate_labels, ds_save_intermediate_sorting
 from ..util.motion import MotionInfo
 from ..util.noise_util import EmbeddedNoise
-from ..util.py_util import cfg_dataclass, databag, panic
+from ..util.py_util import databag, panic
 from ..util.spiketorch import (
     _nonzero_static,
     cosine_cdist_from_dots,
@@ -1844,7 +1844,7 @@ class TruncatedSpikeData(BatchedSpikeData):
          - explore = candidates[:, n_candidates + n_search*n_candidates:]
                    = candidates[:, -n_explore:]
         """
-        device = neighborhoods.neighborhood_ids.device
+        device = cast(torch.device, neighborhoods.neighborhood_ids.device)
         super().__init__(
             N=whitenedx.shape[0],
             n_candidates=n_candidates,
@@ -7431,7 +7431,7 @@ def _whiten_and_noise_score(
 
         right_factor = neighb_cov.b.Linv[ni].T
         nll_const = neighb_cov.b.lik_const[ni]
-        huber_k = None if neighb_cov.huber_k is None else neighb_cov.huber_k[ni]
+        huber_k = None if neighb_cov.huber_k is None else neighb_cov.b.huber_k[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
@@ -7457,7 +7457,7 @@ def _whiten_impute_and_noise_score(
     neighb_cov: NeighborhoodCovariance,
     batch_size=1024,
 ):
-    dev = neighborhoods.neighborhood_ids.device
+    dev = cast(torch.device, neighborhoods.neighborhood_ids.device)
     on_device = x.device == dev
     cmo_shape = (len(x), neighb_cov.max_nc_miss_near, neighb_cov.feat_rank)
     if on_device:
@@ -7480,7 +7480,7 @@ def _whiten_impute_and_noise_score(
         neighb_CooinvCom = neighb_cov.b.CooinvCom[ni]
 
         nll_const = neighb_cov.b.lik_const[ni]
-        huber_k = None if neighb_cov.huber_k is None else neighb_cov.huber_k[ni]
+        huber_k = None if neighb_cov.huber_k is None else neighb_cov.b.huber_k[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]

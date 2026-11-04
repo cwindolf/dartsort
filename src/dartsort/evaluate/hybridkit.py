@@ -82,6 +82,7 @@ def load_hybrid_recording(folder: str | Path) -> HybridDataset | None:
         return None
 
     recording = sc.load(recording_dir)
+    assert isinstance(recording, BaseRecording)
     templates = TemplateData.from_npz(templates_npz)
     sorting = DARTsortSorting.from_peeling_hdf5(sorting_h5)
     motion = MotionInfo.try_load(folder)

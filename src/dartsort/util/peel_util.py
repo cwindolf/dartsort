@@ -96,7 +96,7 @@ def run_peeler(
     workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
     _, workers = handle_negative_jobs(workers)
     for pipeline in peeler.featurization_pipelines.values():
-        pipeline.register_cpu_workers(workers)  # ty: ignore[call-non-callable]
+        pipeline.register_cpu_workers(workers)
 
     feature_pipelines = {
         kind: str(pipeline)

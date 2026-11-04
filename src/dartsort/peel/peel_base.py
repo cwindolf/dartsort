@@ -519,7 +519,7 @@ class BasePeeler(BModule):
         ]
         check_unique_feature_names_across(self.featurization_pipelines)  # ty: ignore[invalid-argument-type]
         for pipeline in self.featurization_pipelines.values():
-            datasets.extend(pipeline.spike_datasets())  # ty: ignore[call-non-callable]
+            datasets.extend(pipeline.spike_datasets())
         return datasets
 
     # -- utility methods which users likely won't touch
@@ -733,7 +733,7 @@ class BasePeeler(BModule):
         if self.peeling_needs_fit():
             return True
         return any(
-            p.needs_fit()  # ty: ignore[call-non-callable]
+            p.needs_fit()
             for p in self.featurization_pipelines.values()
         )
 
@@ -741,7 +741,7 @@ class BasePeeler(BModule):
         if self.peeling_needs_precompute():
             return True
         return any(
-            p.needs_precompute()  # ty: ignore[call-non-callable]
+            p.needs_precompute()
             for p in self.featurization_pipelines.values()
         )
 
@@ -782,7 +782,7 @@ class BasePeeler(BModule):
                 computation_cfg=computation_cfg,
             )
         for pipeline in self.featurization_pipelines.values():
-            pipeline.precompute()  # ty: ignore[call-non-callable]
+            pipeline.precompute()
 
     def fit_featurization_pipeline(
         self,
