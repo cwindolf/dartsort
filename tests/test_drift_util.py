@@ -138,6 +138,42 @@ def test_registered_geometry(example_geoms, geom_ix, drift_speed):
     assert np.array_equal(registered_geom0, registered_geom1)
 
 
+@pytest.mark.parametrize("up_down", [(0.0, 0.0), (40.0, 0.0), (80.0, 600.0)])
+def test_superres_registered_geometry(up_down):
+    drift = dict(upward_drift=up_down[0], downward_drift=up_down[1])
+
+    # NP1: filling the registered geometry === registering the filled probe
+    np1 = simlib.generate_geom(num_contact_per_column=48)
+    rgeom = drift_util.registered_geometry(np1, **drift)
+    srgeom = drift_util.superres_registered_geometry(np1, rgeom)
+    assert srgeom is not None
+    assert drift_util.get_pitch(srgeom) == 20.0
+    srgeom_via_probe = drift_util.registered_geometry(
+        drift_util.to_grid_layout(np1, 20.0), **drift
+    )
+    a = np.unique(srgeom, axis=0)
+    b = np.unique(srgeom_via_probe, axis=0)
+    assert a.shape == b.shape
+    assert np.allclose(a, b)
+    assert cdist(rgeom, srgeom).min(axis=1).max() < 1e-6
+
+    # NP2: already dense grid
+    np2 = simlib.generate_geom(
+        num_columns=2,
+        num_contact_per_column=48,
+        xpitch=32,
+        ypitch=15,
+        y_shift_per_column="flat",
+    )
+    rgeom2 = drift_util.registered_geometry(np2, **drift)
+    assert drift_util.superres_registered_geometry(np2, rgeom2) is None
+
+    # random layout
+    rg = np.random.default_rng(0)
+    random_geom = rg.uniform(0, [70, 1000], size=(50, 2))
+    assert drift_util.superres_registered_geometry(random_geom, random_geom) is None
+
+
 def _check_chans_neighbs_nids_consistent(chans, neighbs, nids):
     assert nids.max() == len(neighbs) - 1
     nids_unique, nids_first_ix = np.unique(nids, return_index=True)

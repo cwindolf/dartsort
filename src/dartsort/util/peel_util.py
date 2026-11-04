@@ -34,6 +34,7 @@ def run_peeler(
     ensure_coverage: float | None = None,
     shuffle: bool = False,
     localization_dataset_name="point_source_localizations",
+    save_fit_data: bool = False,
 ) -> Path | None:
     output_directory = ensure_path(output_directory)
     output_directory.mkdir(exist_ok=True)
@@ -75,6 +76,7 @@ def run_peeler(
         n_residual_snips=n_resid_snips,
     ):
         return output_hdf5_filename
+    assert not output_hdf5_filename.is_symlink(), "You probably didn't want to write there..."
 
     # ensure torch linalg inits before launching threads...
     _ensure_torch_linalg(computation_cfg)
@@ -82,7 +84,10 @@ def run_peeler(
     # fit models if needed
     with timer(f"model fits ({peel_name})"):
         peeler.load_or_fit_and_save_models(
-            model_dir, overwrite=overwrite, computation_cfg=computation_cfg
+            model_dir,
+            overwrite=overwrite,
+            computation_cfg=computation_cfg,
+            save_fit_data=save_fit_data,
         )
         if fit_only:
             return None
@@ -91,7 +96,7 @@ def run_peeler(
     workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
     _, workers = handle_negative_jobs(workers)
     for pipeline in peeler.featurization_pipelines.values():
-        pipeline.register_cpu_workers(workers)  # ty: ignore[call-non-callable]
+        pipeline.register_cpu_workers(workers)
 
     feature_pipelines = {
         kind: str(pipeline)

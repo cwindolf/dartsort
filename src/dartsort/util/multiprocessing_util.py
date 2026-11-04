@@ -3,6 +3,7 @@ import multiprocessing
 import os
 import queue
 import sys
+import threading
 from concurrent.futures import CancelledError, ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from concurrent.futures._base import (
@@ -110,6 +111,17 @@ class MockQueue:
         self.q = []
         self.put = self.q.append
         self.get = lambda: self.q.pop(0)
+
+
+_worker_rank = threading.local()
+
+
+def set_current_worker_rank(rank: int):
+    _worker_rank.rank = rank
+
+
+def current_worker_rank() -> int:
+    return getattr(_worker_rank, "rank", 0)
 
 
 def cloudpickle_run(fn, args):

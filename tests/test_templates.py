@@ -1,4 +1,5 @@
 import tempfile
+from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from typing import cast
@@ -11,7 +12,13 @@ from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
 from test_util import no_overlap_recording_sorting
 
 import dartsort
-from dartsort.evaluate import config_grid, simkit
+from dartsort import ensure_path
+from dartsort.evaluate import config_grid, simkit, simlib
+from dartsort.evaluate.sim_template_tools import (
+    PointSource3ExpSimulator,
+    get_template_simulator,
+    singlechan_to_probe,
+)
 from dartsort.peel.matching_util import pairwise, pairwise_util
 from dartsort.templates import (
     estimate_template_library,
@@ -20,6 +27,7 @@ from dartsort.templates import (
     template_util,
     templates,
 )
+from dartsort.util import drift_util
 from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.internal_config import (
     InterpolationParams,
@@ -28,7 +36,9 @@ from dartsort.util.internal_config import (
     WaveformConfig,
     raw_template_cfg,
 )
+from dartsort.util.interpolation_util import FromFullProbeInterpolator
 from dartsort.util.motion import MotionInfo
+from dartsort.util.py_util import panic
 
 nearest_erp = InterpolationParams(method="nearest", extrap_method="clampna").normalize()
 thin_erp_20 = InterpolationParams(
@@ -400,6 +410,189 @@ def test_drifting_templates(tmp_path):
             assert temps8[1, 0, 6] == 2
 
 
+@dataclass(frozen=True, kw_only=True)
+class DriftingSimulation:
+    geom: np.ndarray
+    template_simulator: PointSource3ExpSimulator
+    sim: dict
+
+
+@pytest.fixture(scope="module")
+def drifting_simulations(pytestconfig, tmp_path_factory) -> dict[str, DriftingSimulation]:
+    coarse_geom = simlib.generate_geom(num_contact_per_column=12)
+    fine_geom = simlib.generate_geom(num_contact_per_column=24, ypitch=20, stagger=10)
+    settings = {
+        "zero": (coarse_geom, "zero"),
+        "white": (coarse_geom, "white"),
+        "fine": (fine_geom, "zero"),
+    }
+
+    simulations = {}
+    for name, (geom, noise_kind) in settings.items():
+        template_simulator = get_template_simulator(
+            n_units=8, geom=geom, common_reference=False, temporal_jitter=1, force_no_offset=True
+        )
+        assert isinstance(template_simulator, PointSource3ExpSimulator)
+        cache_key = f"dartsort/drifting_{name}"
+        p = pytestconfig.cache.get(cache_key, None)
+        if p is None or not ensure_path(p).exists():
+            p = tmp_path_factory.mktemp(f"drifting_{name}")
+            pytestconfig.cache.set(cache_key, str(p))
+        p = ensure_path(p)
+        sim = simkit.generate_simulation(
+            p / "sim",
+            p / "noise",
+            geom=geom,
+            template_simulator=template_simulator,
+            n_units=8,
+            duration_seconds=60.0,
+            noise_kind=noise_kind,
+            drift_speed=1.5,
+            drift_period=60.0,
+            temporal_jitter=1,
+            amplitude_jitter=0,
+            common_reference=False,
+            min_fr_hz=10.0,
+            max_fr_hz=15.0,
+            globally_refractory=True,
+            refractory_ms=4.5,
+        )
+        simulations[name] = DriftingSimulation(
+            geom=geom, template_simulator=template_simulator, sim=sim
+        )
+    return simulations
+
+
+@pytest.mark.parametrize("grid", ["subdivided", "rgeom", "fine_pitch"])
+@pytest.mark.parametrize("reduction", ["mean", "median"])
+def test_superres_templates(drifting_simulations, reduction, grid):
+    ds = drifting_simulations["fine" if grid == "fine_pitch" else "zero"]
+    sim = ds.sim
+    template_simulator = ds.template_simulator
+    motion = sim["motion"]
+    srgeom = drift_util.superres_registered_geometry(ds.geom, motion.rgeom)
+    if grid == "subdivided":
+        assert srgeom is not None
+        registered_geom = srgeom
+    elif grid == "rgeom":
+        assert srgeom is not None
+        registered_geom = motion.rgeom
+    elif grid == "fine_pitch":
+        assert srgeom is None
+        registered_geom = motion.rgeom
+    else:
+        panic(grid)
+
+    def estimate(template_cfg, n_jobs):
+        return templates.TemplateData.from_config(
+            recording=sim["recording"],
+            sorting=sim["sorting"],
+            template_cfg=template_cfg,
+            motion=motion,
+            save_folder=None,
+            save_npz_name=None,
+            computation_cfg=dartsort.ComputationConfig.from_n_jobs(n_jobs),
+        )
+
+    superres_cfg = TemplateConfig(
+        reduction=reduction, superres=True, superres_subdivide=grid != "rgeom"
+    )
+    td_sr = estimate(superres_cfg, 1)
+    td_mean = estimate(TemplateConfig(reduction="mean"), 1)
+    np.testing.assert_array_equal(td_sr.registered_geom, registered_geom)
+    np.testing.assert_array_equal(td_mean.registered_geom, motion.rgeom)
+    assert np.isfinite(td_sr.templates).all()
+    if grid == "subdivided":
+        td_sr_parallel = estimate(superres_cfg, 3)
+        np.testing.assert_array_equal(td_sr_parallel.registered_geom, srgeom)
+        scale = np.abs(td_sr.templates).max()
+        np.testing.assert_allclose(
+            td_sr_parallel.templates, td_sr.templates, atol=1e-4 * scale
+        )
+
+    # truth on the template grid, vs superres and vs the mean templates on that grid
+    geom3 = np.zeros((len(registered_geom), 3))
+    geom3[:, [0, 2]] = registered_geom
+    truth = singlechan_to_probe(
+        template_simulator.template_pos,
+        template_simulator.template_alpha,
+        template_simulator.singlechan_templates,
+        geom3,
+        decay_model=template_simulator.decay_model,
+    )
+    if grid == "subdivided":
+        rgeom_erp = FromFullProbeInterpolator(
+            motion=motion,
+            params=TemplateConfig().superres_interp_params,
+            device=torch.device("cpu"),
+        )
+        mean_on_grid = rgeom_erp.interp_to(
+            torch.asarray(srgeom, dtype=torch.float), torch.asarray(td_mean.templates)
+        ).numpy()
+    else:
+        mean_on_grid = td_mean.templates
+    norm = np.linalg.norm(truth, axis=(1, 2))
+    err_sr = np.linalg.norm(td_sr.templates - truth, axis=(1, 2)) / norm
+    err_mean = np.linalg.norm(mean_on_grid - truth, axis=(1, 2)) / norm
+    diff_mean = np.linalg.norm(td_sr.templates - mean_on_grid, axis=(1, 2))
+    diff_mean /= np.linalg.norm(mean_on_grid, axis=(1, 2))
+    if grid == "subdivided":
+        assert np.median(err_sr) < 0.75 * np.median(err_mean)
+    else:
+        assert np.median(err_sr) < np.median(err_mean)
+        assert np.median(diff_mean) < 0.15
+
+
+@pytest.mark.parametrize("superres", [False, True])
+def test_huber_templates(drifting_simulations, superres):
+    ds = drifting_simulations["white"]
+    sim = ds.sim
+    template_simulator = ds.template_simulator
+    motion = sim["motion"]
+    if superres:
+        registered_geom = drift_util.superres_registered_geometry(ds.geom, motion.rgeom)
+        assert registered_geom is not None
+    else:
+        registered_geom = motion.rgeom
+
+    # unit 0 gets extra spikes, 25% of its count, from the unit farthest away
+    depths = template_simulator.template_pos[:, 2]  # ty: ignore[unresolved-attribute]
+    target = 0
+    source = int(np.argmax(np.abs(depths - depths[target])))
+    labels = sim["sorting"].labels.copy()
+    n_target = int((labels == target).sum())
+    moved = np.random.default_rng(0).choice(
+        np.flatnonzero(labels == source), size=n_target // 4, replace=False
+    )
+    labels[moved] = target
+    sorting = sim["sorting"].ephemeral_replace(labels=labels)
+
+    def estimate(reduction):
+        td = templates.TemplateData.from_config(
+            recording=sim["recording"],
+            sorting=sorting,
+            template_cfg=TemplateConfig(reduction=reduction, superres=superres),
+            motion=motion,
+            save_folder=None,
+            save_npz_name=None,
+        )
+        np.testing.assert_array_equal(td.registered_geom, registered_geom)
+        assert target in td.unit_ids
+        return td.templates[np.flatnonzero(td.unit_ids == target)[0]]
+
+    geom3 = np.zeros((len(registered_geom), 3))
+    geom3[:, [0, 2]] = registered_geom
+    truth = singlechan_to_probe(
+        template_simulator.template_pos[target : target + 1],  # ty: ignore[unresolved-attribute]
+        template_simulator.template_alpha[target : target + 1],  # ty: ignore[unresolved-attribute]
+        template_simulator.singlechan_templates[target : target + 1],  # ty: ignore[unresolved-attribute]
+        geom3,
+        decay_model=template_simulator.decay_model,  # ty: ignore[unresolved-attribute]
+    )[0]
+    err = {r: np.linalg.norm(estimate(r) - truth) / np.linalg.norm(truth) for r in ("mean", "huber")}
+    assert err["huber"] < err["mean"], err
+
+
 def test_main_object():
     probe = np.c_[np.zeros(7), np.arange(7).astype(float)]
     rec = np.zeros((11, 7))
@@ -434,6 +627,16 @@ def test_main_object():
         waveform_cfg=dartsort.WaveformConfig(ms_before=0, ms_after=2000),
     )
     del tdata
+
+
+def test_shared_basis_truncates_precomputed_basis():
+    rg = np.random.default_rng(0)
+    n, t, c, basis_rank, rank = 6, 21, 4, 8, 5
+    basis = np.linalg.qr(rg.normal(size=(t, basis_rank)))[0].T
+    temps = rg.normal(size=(n, t, c))
+    sbt = template_util.shared_basis_compress_templates(temps, rank=rank, precomputed_basis=basis)
+    np.testing.assert_array_equal(sbt.temporal_components, basis[:rank])
+    np.testing.assert_allclose(sbt.spatial_singular, np.einsum("rt,ntc->nrc", basis[:rank], temps))
 
 
 @pytest.mark.parametrize("unit_ids", [np.arange(5), np.array([0, 0, 1, 1, 2])])

@@ -348,7 +348,7 @@ def _dartsort_impl(
             _nspk = None
         else:
             _nspk = cfg.subsampling_spikes_per_channel * motion.geom.shape[0]
-        _pres = 1.0 if is_final else cfg.subsampling_presence
+        _pres = 1.0 if is_final else cfg.subsampling_fraction(recording)
         (
             step_clus_cfg,
             step_clfeat_cfg,
@@ -386,6 +386,7 @@ def _dartsort_impl(
                 load_simple_features=False,
                 fit_only=fit_only,
                 save_residual=is_final and cfg.save_full_final_residual,
+                save_fit_data=cfg.save_fit_data,
             )
         if fit_only:
             ds_save_models(cfg, f"matching{step}", output_dir, work_dir)
@@ -490,11 +491,12 @@ def initial_detection(
             sampling_cfg=cfg.peeler_sampling_cfg,
             computation_cfg=cfg.computation_cfg,
             stop_after_n_spikes=_nspk,
-            ensure_coverage=cfg.subsampling_presence,
+            ensure_coverage=cfg.subsampling_fraction(recording),
             overwrite=overwrite,
             show_progress=show_progress,
             load_simple_features=load_simple_features,
             save_residual=save_residual,
+            save_fit_data=cfg.save_fit_data,
         )
         assert sorting is not None
     elif cfg.detection_type == "threshold":
@@ -508,11 +510,12 @@ def initial_detection(
             sampling_cfg=cfg.peeler_sampling_cfg,
             featurization_cfg=cfg.featurization_cfg,
             stop_after_n_spikes=_nspk,
-            ensure_coverage=cfg.subsampling_presence,
+            ensure_coverage=cfg.subsampling_fraction(recording),
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
             load_simple_features=load_simple_features,
+            save_fit_data=cfg.save_fit_data,
         )
     elif cfg.detection_type == "match":
         assert isinstance(cfg.initial_detection_cfg, MatchingConfig)
@@ -526,12 +529,13 @@ def initial_detection(
             sampling_cfg=cfg.peeler_sampling_cfg,
             motion=motion,
             stop_after_n_spikes=_nspk,
-            ensure_coverage=cfg.subsampling_presence,
+            ensure_coverage=cfg.subsampling_fraction(recording),
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
             load_simple_features=load_simple_features,
             save_residual=save_residual,
+            save_fit_data=cfg.save_fit_data,
         )
         assert sorting is not None
     else:
@@ -558,6 +562,7 @@ def subtract(
     model_subdir="subtraction_models",
     load_simple_features: bool = True,
     save_residual: bool = False,
+    save_fit_data: bool = False,
 ) -> DARTsortSorting | None:
     output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -585,6 +590,7 @@ def subtract(
         stop_after_n_spikes=stop_after_n_spikes,
         ensure_coverage=ensure_coverage,
         shuffle=shuffle,
+        save_fit_data=save_fit_data,
     )
 
     del subtraction_peeler
@@ -629,6 +635,7 @@ def match(
     load_simple_features: bool = True,
     fit_only: bool = False,
     save_residual: bool = False,
+    save_fit_data: bool = False,
 ) -> DARTsortSorting | None:
     output_dir = ensure_path(output_dir)
     model_dir = output_dir / model_subdir
@@ -700,6 +707,7 @@ def match(
         show_progress=show_progress,
         computation_cfg=computation_cfg,
         fit_only=fit_only,
+        save_fit_data=save_fit_data,
     )
 
     del matching_peeler
@@ -778,6 +786,7 @@ def threshold(
     model_subdir="threshold_models",
     computation_cfg: ComputationConfig | None = None,
     load_simple_features: bool = True,
+    save_fit_data: bool = False,
 ) -> DARTsortSorting:
     output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -802,6 +811,7 @@ def threshold(
         overwrite=overwrite,
         show_progress=show_progress,
         computation_cfg=computation_cfg,
+        save_fit_data=save_fit_data,
     )
 
     del thresholder

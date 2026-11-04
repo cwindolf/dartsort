@@ -300,9 +300,9 @@ def shared_basis_compress_templates(
         assert temporal_comps.shape[0] <= rank
         rank = temporal_comps.shape[0]
     else:
+        assert precomputed_basis.ndim == 2 and precomputed_basis.shape[1] == t
         rank = min(rank, precomputed_basis.shape[0])
-        assert precomputed_basis.shape == (rank, t)
-        temporal_comps = precomputed_basis
+        temporal_comps = precomputed_basis[:rank]
 
     # project templates onto temporal comps (no sparsity here.)
     # spatial_sing = np.einsum("ntc,rt->nrc", templates, temporal_comps)

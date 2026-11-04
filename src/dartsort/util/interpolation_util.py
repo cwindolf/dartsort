@@ -759,7 +759,7 @@ def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
     return kernel
 
 
-def polyharmonic_rbf(source_pos, target_pos=None, sigma=1.0, order: int | float = 2.0):
+def polyharmonic_rbf(source_pos, target_pos=None, sigma=1.0, order: float = 2.0):
     rsq = get_rsq(source_pos, target_pos, sigma)
     r = rsq.sqrt_()
     if isinstance(order, int) and (order % 2):
@@ -936,14 +936,14 @@ class SpikeNeighborhoods(BModule):
             name=self.name,
         )
 
-    def neighborhood_channels(self, id):
+    def neighborhood_channels(self, id: int) -> torch.Tensor:
         nhc = self.b.neighborhoods[id]
         return nhc[nhc < self.n_channels]
 
-    def missing_channels(self, id):
+    def missing_channels(self, id: int) -> torch.Tensor:
         return self.b.chans_arange[self.b.indicators[:, id] == 0]
 
-    def neighborhood_members(self, id):
+    def neighborhood_members(self, id: int) -> torch.Tensor:
         assert self.get_optional_buffer("neighborhood_ids") is not None
         return (self.b.neighborhood_ids == id).nonzero().view(-1)
 
@@ -1234,14 +1234,27 @@ class ToFullProbeInterpolator(BModule):
 
 
 class FromFullProbeInterpolator(BModule):
-    """Interpolate from the registered geom to appropriate drifting geom channels."""
+    """Interpolate from the registered geom to appropriate drifting geom channels.
+
+    The registered geom is motion.rgeom unless registered_geom is given.
+    In which case, maybe it could be a denser grid for templates to live on...
+    """
 
     def __init__(
-        self, *, motion: MotionInfo, params: InterpolationParams, device: torch.device
+        self,
+        *,
+        motion: MotionInfo,
+        params: InterpolationParams,
+        device: torch.device,
+        registered_geom: np.ndarray | None = None,
     ):
         super().__init__()
+        if registered_geom is None:
+            registered_geom = motion.rgeom
+        assert registered_geom.ndim == 2
+        assert registered_geom.shape[1] == motion.geom.shape[1]
         geom = torch.asarray(motion.geom, dtype=torch.float, device=device)
-        rgeom = torch.asarray(motion.rgeom, dtype=torch.float, device=device)
+        rgeom = torch.asarray(registered_geom, dtype=torch.float, device=device)
 
         self.erp_params = params.normalize()
         rchannel_index = make_channel_index(
@@ -1274,18 +1287,24 @@ class FromFullProbeInterpolator(BModule):
             assert disp.shape[1] == 1
             shift[:, 1].copy_(torch.tensor(disp[:, 0]))
 
-        # which rgeom channel does each shifted geom channel land on?
-        sgeom = self.b.geom - shift
-        dist = torch.cdist(sgeom, self.b.rgeom)
-        # closest rgeom channel to each shifted channel determines which
-        # precomputed solver is selected
-        solver_map = dist.argmin(1)
-
         # interpolate from static geom to shifted geom
+        return self.interp_to(self.b.geom - shift, waveforms)
+
+    def interpolation_kernel_at_time(self, t_s: float) -> torch.Tensor:
+        eye = torch.eye(self.c_src, device=self.b.rgeom.device)[:, None, :]
+        return self.interp_at_time(t_s, eye)[:, 0, :].T
+
+    def interp_to(self, target_pos: torch.Tensor, waveforms: torch.Tensor) -> torch.Tensor:
+        assert waveforms.shape[2] == self.c_src
+
+        # closest rgeom channel to each target determines which
+        # precomputed solver is selected
+        solver_map = torch.cdist(target_pos, self.b.rgeom).argmin(1)
+
         return kernel_interpolate(
             features=waveforms,
             source_pos=self.b.rgeom,
-            target_pos=self.b.geom - shift,
+            target_pos=target_pos,
             precomputed_data=self.b.data,
             neighborhoods=self.b.rchannel_index,
             solver_map=solver_map,

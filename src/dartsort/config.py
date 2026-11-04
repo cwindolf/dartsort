@@ -7,13 +7,14 @@ from .util.internal_config import (
     DetectionProposal,
     InterpKernel,
     InterpMethod,
-    KmeansppSampling,
     KmeansppSelection,
     KmeansppStopping,
     MixtureStep,
     MotionBatchingMode,
     PreprocessingStrategy,
     RealignStrategy,
+    SpikeStorage,
+    SplitKmeansppMetric,
     TemplateSVDMethod,
     TPCADenoiserFitStage,
     WhiteningEstimator,
@@ -74,9 +75,13 @@ class DARTsortUserConfig:
 
     subsampling_presence: Annotated[float, Field(gt=0.0, le=1.0)] = 0.025
     """Early detection steps which have already found `subsampling_spikes`
-    spikes are only allowed to end early if they additionally cover this
-    fraction of the recording, to make sure there's some coverage of
-    conditions for template estimation."""
+    spikes are only allowed to end early if they additionally either cover
+    `subsampling_presence` fraction of the recording or if they cover
+    `subsampling_max_seconds`, whichever is smaller, in order to make sure
+    that there's some coverage of conditions for template estimation."""
+
+    subsampling_max_seconds: Annotated[float, Field(gt=0.0)] = float("inf")
+    """See subsampling_presence's documentation."""
 
     matching_iterations: int = 1
     """By default, 1 template matching step is carried out using templates
@@ -84,6 +89,9 @@ class DARTsortUserConfig:
 
     dredge_only: bool = False
     """Whether to stop after initial localization and motion tracking."""
+
+    seed: int = 0
+    """Seeds any subsampled peeling steps and some other places too"""
 
     # -- computer options
     n_jobs_cpu: int = 0
@@ -270,10 +278,10 @@ class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
     # high level behavior
-    initial_steps: Sequence[MixtureStep] = ("split", "demolish", "demolish")
+    initial_steps: Sequence[MixtureStep] = ("split", "demolish", "split", "demolish")
     later_steps: Sequence[MixtureStep] = ("split", "merge", "demolish")
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
-    cluster_strategy: str = "dpc"
+    cluster_strategy: str = "none"
     refinement_strategy: str = "tmm"
     recluster_after_matching: bool = False
 
@@ -291,7 +299,7 @@ class DeveloperConfig(DARTsortUserConfig):
     detection_proposal: DetectionProposal = "tpca"
     proposal_filters: int = 1
     propose_with_score_net: bool = False
-    proposal_threshold: float = 5.0
+    proposal_threshold: float = 7.0
     score_net_threshold: float = 5.0
     do_tpca_denoise: bool = True
     tpca_denoise_fit: TPCADenoiserFitStage = "peeling"
@@ -321,8 +329,11 @@ class DeveloperConfig(DARTsortUserConfig):
     matching_cd_iter: int = 0
     matching_coarse_cd: bool = True
     postprocessing_merge_threshold: float = 0.05
-    template_spikes_per_unit: int = 500
-    template_reduction: Literal["mean", "median"] = "median"
+    template_spikes_per_unit: int = 1024
+    template_reduction: Literal["mean", "median", "huber"] = "huber"
+    template_superres: bool = True
+    template_superres_shrinkage: float = 1e-6
+    template_superres_smoothness: float = 1.0
     template_denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
     min_template_snr: float = 0.0
     min_template_count: int = 10
@@ -373,16 +384,15 @@ class DeveloperConfig(DARTsortUserConfig):
     hellinger_weak: float = 0.0
     dpc_mop: bool = True
     n_neighbors_search: int | None = 50
-    kmeanspp_stop_rms: float = 5.0
+    kmeanspp_stop_dist: float = 4.5
     kmeanspp_tries: int = 5
     kmeanspp_patience: int = 21
     kmeanspp_greedy_proposals: int = 1
     kmeanspp_neighb_overlap: float | None = None
     kmeanspp_selection: KmeansppSelection = "marginal"
     kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
-    kmeanspp_sampling: KmeansppSampling = "d2"
     kmeanspp_alpha: Annotated[float, Field(gt=0)] = 2.0
-    kmeanspp_z0: float = 3.0
+    kmeanspp_min_fraction: Annotated[float, Field(gt=0)] | None = None
 
     # filters
     gmm_isolation_threshold: float | None = None
@@ -396,10 +406,14 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # gaussian mixture high level
     initial_rank: int | None = None
-    initialize_at_rank_0: bool = False
+    initialize_at_rank_0: bool = True
     signal_rank: Annotated[int, Field(ge=0)] = 3
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_048_000
+    gmm_pool_spikes: Annotated[int, Field(gt=0)] | None = None
+    gmm_bucket_sampling_power: Annotated[float, Field(ge=0)] = 0.0
+    gmm_bucket_sampling_max_reweighting: Annotated[float, Field(ge=1)] = 10.0
     kmeansk: int = 4
+    split_kmeanspp_metric: SplitKmeansppMetric = "euc"
     min_cluster_size: int = 5
 
     # gausian mixture low level
@@ -409,21 +423,26 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_cl_alpha: float = 0.05
     gmm_cl_split_only: bool = True
     gmm_em_atol: float = 5e-3
-    gmm_metric: Literal["cosine", "normeuc", "scaled_normeuc"] = "scaled_normeuc"
+    gmm_metric: Literal["euc", "cosine", "normeuc", "scaled_normeuc"] = "scaled_normeuc"
     gmm_n_candidates: int = 5
     gmm_n_search: int | None = 3
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5
     gmm_batch_size: int = 4096
+    gmm_spike_storage: SpikeStorage = "cpu"
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     cov_kind: str = "factorizednoise"
+    gmm_euclidean_threshold: float = 3.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
     gmm_scaled_normeuc_threshold: float = 1.5
-    robust_strategy: Literal["none", "fixed"] = "none"
+    robust_strategy: Literal["none", "fixed", "huber"] = "none"
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
+    huber_quantile: float = 0.9
+    huber_noise: bool = True
+    gmm_criterion_clip_level: Annotated[float, Field(gt=0)] | None = 1.0
     demolish_during_selection: bool = False
     em_after_demolish: bool = True
     tpca_from_templates: bool = True
@@ -448,6 +467,7 @@ class DeveloperConfig(DARTsortUserConfig):
     always_save_detailed_features: bool = False
     precomputed_templates_npz: str | None = None
     save_everything_on_error: bool = False
+    save_fit_data: bool = False
     link_from: str | None = None
     link_step: Literal[
         "denoising", "detection", "refined0", "matching1_models", "matching1"

@@ -92,6 +92,12 @@ def test_shared_flags_agree(detection_type):
             name
         )
 
+    agg_template_cfg = agg_cfg.template_merge_cfg.template_cfg  # ty: ignore[unresolved-attribute]
+    assert agg_template_cfg is not None
+    assert cfg.template_cfg.superres == agg_template_cfg.superres == dev.template_superres
+    assert cfg.template_cfg.superres_subdivide
+    assert not agg_template_cfg.superres_subdivide
+
 
 def test_waveform_config():
     cfg0 = dartsort.WaveformConfig()

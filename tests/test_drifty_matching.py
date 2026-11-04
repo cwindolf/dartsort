@@ -1,8 +1,10 @@
+import dredge.motion_util as mu
 import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
 
+from dartsort import MotionInfo
 from dartsort.peel.matching_util import drifty
 from dartsort.peel.matching_util.matching_base import (
     MatchingPeaks,
@@ -230,6 +232,59 @@ def test_interp_upsampling(up_method, up, radius, deg):
     np.testing.assert_allclose(
         yy_.numpy(force=True), yy_hat.numpy(force=True), atol=atol
     )
+
+
+def test_templates_on_denser_registered_grid():
+    # test tps is exact when interpolating from a denser grid in the
+    # case where motion puts you right on top of the grid
+    pitch, drift_um, n_rows = 20.0, 10.0, 12
+    geom = np.c_[np.tile([0.0, 32.0], n_rows), np.repeat(pitch * np.arange(n_rows), 2)]
+    t_bins = np.arange(10) + 0.5
+    me = mu.get_motion_estimate(np.full(t_bins.size, drift_um), time_bin_centers_s=t_bins)
+    motion = MotionInfo.from_motion_est(geom=geom, dredge_motion_est=me)
+    assert motion.drifting
+
+    grid_z = np.arange(-2 * pitch, pitch * n_rows + 2 * pitch, pitch / 2)
+    grid = np.c_[np.tile([0.0, 32.0], grid_z.size), np.repeat(grid_z, 2)]
+    targets = geom - np.array([0.0, drift_um])
+    dist = np.linalg.norm(targets[:, None] - grid[None], axis=2)
+    node_of_channel = dist.argmin(1)
+    assert np.all(dist.min(1) == 0)
+
+    rg = np.random.default_rng(0)
+    n_templates, rank, t, trough = 2, 3, 11, 5
+    temporal = np.linalg.qr(rg.normal(size=(t, rank)))[0].T
+    spatial = rg.normal(size=(n_templates, rank, len(grid)))
+    templates = drifty.DriftyMatchingTemplates(
+        temporal_comps=torch.asarray(temporal, dtype=torch.float),
+        spatial_sing=torch.asarray(spatial, dtype=torch.float),
+        motion=motion,
+        trough_offset_samples=trough,
+        registered_geom=grid,
+        device=torch.device("cpu"),
+    )
+    ctd = templates.data_at_time(
+        t_s=5.0,
+        scaling=False,
+        free_scaling=False,
+        inv_lambda=0.0,
+        scale_min=1.0,
+        scale_max=1.0,
+        resid_offset=0,
+    )
+    peaks = MatchingPeaks(
+        times=torch.zeros(n_templates, dtype=torch.long),
+        template_inds=torch.arange(n_templates),
+    )
+    channel_index = torch.arange(len(geom))[None].expand(len(geom), -1)
+    wfs = ctd.get_clean_waveforms(
+        peaks,
+        channels=torch.zeros(n_templates, dtype=torch.long),
+        channel_index=channel_index,
+    )
+
+    expected = np.einsum("rt,krc->ktc", temporal, spatial[:, :, node_of_channel])
+    np.testing.assert_allclose(wfs.numpy(force=True), expected, atol=1e-3)
 
 
 @pytest.mark.parametrize("up", [1, 2, 4])

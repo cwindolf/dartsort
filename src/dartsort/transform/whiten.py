@@ -76,6 +76,7 @@ class WaveformWhitener(BaseWaveformDenoiser):
         hdf5_filename: Path | None = None,
         computation_cfg: ComputationConfig,
         pipeline: "WaveformPipeline | None" = None,
+        save_fit_data: bool = False,
         **spike_data: torch.Tensor,
     ):
         super().fit(
@@ -84,6 +85,7 @@ class WaveformWhitener(BaseWaveformDenoiser):
             hdf5_filename=hdf5_filename,
             computation_cfg=computation_cfg,
             pipeline=pipeline,
+            save_fit_data=save_fit_data,
             **spike_data,
         )
         del recording, spike_data, waveforms, pipeline

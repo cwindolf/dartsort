@@ -258,6 +258,7 @@ class TemplateData:
         featurization_basis=None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
+        pilot_templates: "TemplateData | None" = None,
     ) -> "TemplateData":
         # load if saved already and not overwriting
         if save_folder is not None:
@@ -302,6 +303,7 @@ class TemplateData:
             whitener=whitener,
             computation_cfg=computation_cfg,
             show_progress=show_progress,
+            pilot_templates=pilot_templates,
         )
         self = replace(self, featurization_basis=featurization_basis)
 
@@ -326,6 +328,8 @@ class TemplateData:
         whitener: Whitener | None = None,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
+        show_progress: bool = True,
+        pilot_templates: "TemplateData | None" = None,
     ) -> "TemplateData":
         raise NotImplementedError
 

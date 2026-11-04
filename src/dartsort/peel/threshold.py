@@ -12,6 +12,7 @@ from ..detect import detect_and_deduplicate
 from ..transform import BaseWaveformModule, WaveformPipeline
 from ..util.data_util import SpikeDataset
 from ..util.internal_config import (
+    ComputationConfig,
     FeaturizationConfig,
     FitSamplingConfig,
     ThresholdingConfig,
@@ -173,7 +174,12 @@ class Threshold(BasePeeler):
         return self.b.proposal_filters is None
 
     def fit_models(
-        self, save_folder, tmp_dir=None, overwrite=False, computation_cfg=None
+        self,
+        save_folder: str | Path,
+        tmp_dir: Path | None = None,
+        overwrite: bool = False,
+        computation_cfg: ComputationConfig | None = None,
+        save_fit_data: bool = False,
     ):
         self._in_fit_pass = True
         try:
@@ -182,6 +188,7 @@ class Threshold(BasePeeler):
                 tmp_dir=tmp_dir,
                 overwrite=overwrite,
                 computation_cfg=computation_cfg,
+                save_fit_data=save_fit_data,
             )
         finally:
             self._in_fit_pass = False

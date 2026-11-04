@@ -11,6 +11,8 @@ from .cli_util import argfield, dataclass_from_toml
 from .py_util import cfg_dataclass, ensure_path, panic
 
 if TYPE_CHECKING:
+    from spikeinterface.core import BaseRecording
+
     from ..config import DARTsortUserConfig, DeveloperConfig
 
 try:
@@ -232,6 +234,8 @@ class FitSamplingConfig:
     fit_sampling: FitSamplingMethod = "amp_reweighted"
     fit_max_reweighting: float = default_fit_max_reweighting
     n_seconds_fit: int = 100
+    bucket_sampling_power: float = 0.0
+    bucket_sampling_max_reweighting: float = 10.0
 
 
 default_peeling_fit_sampling_cfg = FitSamplingConfig()
@@ -287,7 +291,7 @@ class ClusteringFeaturesConfig:
 class ClusteringConfig:
     """Initial clustering parameters"""
 
-    cluster_strategy: str = "dpc"
+    cluster_strategy: str = "none"
     sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
     # global parameters
@@ -354,9 +358,9 @@ TemplateSVDMethod = Literal[
 class TemplateConfig:
     """Template waveform estimation parameters"""
 
-    spikes_per_unit: int = 500
+    spikes_per_unit: int = 1024
     with_raw_std_dev: bool = False
-    reduction: Literal["median", "mean"] = "median"
+    reduction: Literal["median", "mean", "huber"] = "median"
     algorithm: (
         Literal[
             "unitextract",
@@ -376,6 +380,16 @@ class TemplateConfig:
     min_fraction_at_shift: float = 0.25
     min_count_at_shift: int = 25
     template_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
+
+    superres: bool = False
+    superres_subdivide: bool = True
+    superres_max_row_pitch_um: float = 21.0
+    superres_fit_radius_um: float = 300.0
+    superres_smoothness: float = 1.0
+    superres_shrinkage: float = 1e-6
+    superres_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
+    huber_quantile: float = 0.9
+    huber_radius_um: float = 75.0
 
     # low rank denoising?
     denoising_rank: int = 5
@@ -402,6 +416,20 @@ class TemplateConfig:
         return self.denoising_method in ("svd", "exp_weighted")
 
     def actual_algorithm(self) -> str:
+        if self.reduction == "huber":
+            svd_align = self.svd_alignment_iterations and self.svd_alignment_ms
+            if (
+                self.denoising_method != "svd"
+                or self.svd_method == "peeler"
+                or svd_align
+            ):
+                raise ValueError(
+                    "Huber template reduction needs denoising_method='svd', a "
+                    "pre-fit svd_method, and no SVD alignment."
+                )
+        if self.superres or self.reduction == "huber":
+            assert self.algorithm in ("peelreduce", "peelreduce_if_mean")
+            return "peelreduce"
         if self.algorithm.endswith("_if_mean") and self.reduction == "mean":
             return self.algorithm.removesuffix("_if_mean")
         elif self.algorithm.endswith("_if_mean"):
@@ -470,6 +498,7 @@ class TemplateMergeConfig:
             template_cfg = self.template_cfg
         return replace(
             template_cfg,
+            superres_subdivide=False,
             denoising_method="svd",
             denoising_rank=self.svd_compression_rank,
             whitening=self.whitening,
@@ -477,10 +506,25 @@ class TemplateMergeConfig:
 
 
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
-ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
+ComponentDistanceMetric = Literal["euc", "cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
-KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp", "significance"]
-KmeansppSampling = Literal["d2", "significance"]
+KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
+SplitKmeansppMetric = Literal["euc", "scaled_normeuc"]
+SpikeStorage = Literal["device", "cpu"]
+
+
+@cfg_dataclass
+class KmeansppConfig:
+    tries: int = 5
+    stop_dist: float = 4.5
+    patience: int = 21
+    greedy_proposals: int = 1
+    neighb_overlap: float | None = None
+    selection: KmeansppSelection = "marginal"
+    stopping: KmeansppStopping = "dpmeanspp"
+    alpha: float = 2.0
+    min_fraction: float | None = None
+    max_components_per_channel: int = 5
 
 
 @cfg_dataclass
@@ -510,7 +554,7 @@ class RefinementConfig:
     split_min_count: int = 5
     channels_count_min: int = 1
     signal_rank: int = 3
-    initialize_at_rank_0: bool = False
+    initialize_at_rank_0: bool = True
     cl_alpha: float = 0.05
     cl_split_only: bool = True
     demolish_cl_alpha: float = 0.0
@@ -524,6 +568,7 @@ class RefinementConfig:
     n_explore: int | None = None
     train_batch_size: int = 4096
     eval_batch_size: int = 4096
+    spike_storage: SpikeStorage = "cpu"
     split_friend_distance: float = 0.8
     split_distance_threshold: float = 1.5
     merge_distance_threshold: float = 1.5
@@ -538,28 +583,23 @@ class RefinementConfig:
     single_split_k: int = 3
     kmeans_tries: int = 10
     kmeans_beta: float = 50.0
-    kmeanspp_tries: int = 5
-    kmeanspp_stop_rms: float = 5.0
-    kmeanspp_patience: int = 21
-    kmeanspp_greedy_proposals: int = 1
-    kmeanspp_neighb_overlap: float | None = None
-    kmeanspp_selection: KmeansppSelection = "marginal"
-    kmeanspp_stopping: KmeansppStopping = "dpmeanspp"
-    kmeanspp_sampling: KmeansppSampling = "d2"
-    kmeanspp_alpha: float = 2.0
-    kmeanspp_z0: float = 3.0
+    kmeanspp_cfg: KmeansppConfig = KmeansppConfig()
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
-    robust_strategy: Literal["none", "fixed"] = "none"
+    robust_strategy: Literal["none", "fixed", "huber"] = "none"
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
+    huber_quantile: float = 0.9
+    huber_noise: bool = True
+    criterion_clip_level: float | None = 1.0
     demolition_min_resp_ratio: float = 0.0
     demolish_during_selection: bool = False
     refit_in_demolition: bool = False
     em_after_demolish: bool = True
     whiten_split: bool = True
+    split_kmeanspp_metric: SplitKmeansppMetric = "euc"
     fix_responsibilities_in_split: bool = True
     scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
     whiten_dist: bool = True
@@ -728,7 +768,7 @@ class SubtractionConfig:
     propose_with_score_net: bool = False
 
     voltage_threshold: float = 3.0
-    proposal_threshold: float = 5.0
+    proposal_threshold: float = 7.0
     score_net_threshold: float = 5.0
     subtraction_threshold: float = 9.0
     threshold_before_whitening: float = 10.0
@@ -957,7 +997,9 @@ default_subtraction_cfg = SubtractionConfig()
 default_thresholding_cfg = ThresholdingConfig()
 default_template_cfg = TemplateConfig()
 default_matching_template_cfg = TemplateConfig(
-    whitening=WhiteningConfig(strategy="prewhiten_postapply")
+    reduction="huber",
+    superres=True,
+    whitening=WhiteningConfig(strategy="prewhiten_postapply"),
 )
 default_clustering_cfg = ClusteringConfig()
 default_clustering_features_cfg = ClusteringFeaturesConfig()
@@ -967,13 +1009,17 @@ default_computation_cfg = ComputationConfig()
 default_motion_computation_cfg = ComputationConfig(n_jobs_gpu=2)
 default_refinement_cfg = RefinementConfig()
 default_initial_refinement_cfg = RefinementConfig(
-    mixture_steps=("split", "demolish", "demolish")
+    mixture_steps=("split", "demolish", "split", "demolish")
 )
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 default_agglomerate_cfg = RefinementConfig(
     refinement_strategy="agglomerate",
     template_merge_cfg=TemplateMergeConfig(
-        merge_distance_threshold=0.6, linkage="complete"
+        merge_distance_threshold=0.6,
+        linkage="complete",
+        template_cfg=TemplateConfig(
+            reduction="huber", superres=True, superres_subdivide=False
+        ),
     ),
 )
 default_post_refinement_cfg = RefinementConfig(
@@ -1024,8 +1070,9 @@ class DARTsortInternalConfig:
     # subsampling: intermediate peels will continue until both criteria satisfied
     # need at least this many spikes
     subsampling_spikes_per_channel: int | None = 5000
-    # need to cover at least this fraction of chunks
+    # need to cover at least this fraction of chunks or this many seconds, whichever is smaller
     subsampling_presence: float = 0.025
+    subsampling_max_seconds: float = math.inf
 
     # development / debugging flags
     work_in_tmpdir: bool = False
@@ -1045,6 +1092,7 @@ class DARTsortInternalConfig:
     save_full_final_residual: bool = False
     always_save_detailed_features: bool = False
     save_everything_on_error: bool = False
+    save_fit_data: bool = False
 
     def maybe_tmpdir_parent(self) -> Path | None:
         if self.tmpdir_parent is not None:
@@ -1055,9 +1103,17 @@ class DARTsortInternalConfig:
 
     @property
     def is_subsampling(self) -> bool:
-        return (
-            self.subsampling_spikes_per_channel is not None
-            and self.subsampling_presence != 1.0
+        return self.subsampling_spikes_per_channel is not None and (
+            self.subsampling_presence != 1.0
+            or math.isfinite(self.subsampling_max_seconds)
+        )
+
+    def subsampling_fraction(self, recording: "BaseRecording") -> float:
+        assert self.subsampling_presence > 0.0
+        assert self.subsampling_max_seconds > 0.0
+        duration_s = recording.get_num_samples() / recording.sampling_frequency
+        return min(
+            1.0, self.subsampling_presence, self.subsampling_max_seconds / duration_s
         )
 
     def use_gmm_classifier(self, is_final: bool) -> bool:
@@ -1165,7 +1221,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         featurization_cfg=_featurization_cfg(cfg),
         initial_detection_cfg=initial_detection_cfg,
         peeler_sampling_cfg=_peeler_sampling_cfg(cfg),
-        template_cfg=template_cfg,
+        template_cfg=_matching_template_cfg(template_cfg),
         clustering_cfg=_clustering_cfg(cfg, clustering_sampling_cfg),
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=_initial_refinement_cfg(cfg, refinement_cfg),
@@ -1198,10 +1254,12 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_final_features=cfg.save_final_features,
         save_full_final_residual=cfg.save_full_final_residual,
         save_everything_on_error=cfg.save_everything_on_error,
+        save_fit_data=cfg.save_fit_data,
         link_from=cfg.link_from,
         link_step=cfg.link_step,
         subsampling_spikes_per_channel=cfg.subsampling_spikes_per_channel,
         subsampling_presence=cfg.subsampling_presence,
+        subsampling_max_seconds=cfg.subsampling_max_seconds,
         always_save_detailed_features=cfg.always_save_detailed_features,
     )
 
@@ -1233,6 +1291,7 @@ if hasattr(torch.serialization, "add_safe_globals"):
             ClusteringConfig,
             ClusteringFeaturesConfig,
             FeaturizationConfig,
+            KmeansppConfig,
             RefinementConfig,
             InterpolationParams,
             TemplateMergeConfig,
@@ -1270,7 +1329,18 @@ def _clustering_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
         max_waveforms_fit=cfg.clustering_max_spikes,
         more_waveforms_fit=cfg.gmm_max_spikes,
         fit_sampling=cfg.fit_sampling,
+        bucket_sampling_power=cfg.gmm_bucket_sampling_power,
+        bucket_sampling_max_reweighting=cfg.gmm_bucket_sampling_max_reweighting,
+        seed=cfg.seed,
     )
+
+
+def _default_refinement_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
+    return replace(default_clustering_fit_sampling_cfg, seed=cfg.seed)
+
+
+def _template_fit_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
+    return replace(no_resid_peeling_fit_sampling_cfg, seed=cfg.seed)
 
 
 def _template_cfg(
@@ -1284,9 +1354,19 @@ def _template_cfg(
         svd_method=cfg.template_svd_method,
         whitening=whiten_cfg,
         template_interp_params=_interp_params(cfg.template_interp_kind),
+        superres=cfg.template_superres,
+        superres_subdivide=False,
+        superres_shrinkage=cfg.template_superres_shrinkage,
+        superres_smoothness=cfg.template_superres_smoothness,
+        superres_interp_params=_interp_params(cfg.matching_interp_kind),
         svd_alignment_iterations=cfg.svd_alignment_iterations,
         svd_alignment_ms=cfg.alignment_ms / 2,
+        denoising_fit_sampling_cfg=_template_fit_sampling_cfg(cfg),
     )
+
+
+def _matching_template_cfg(template_cfg: TemplateConfig) -> TemplateConfig:
+    return replace(template_cfg, superres_subdivide=True)
 
 
 def _clustering_cfg(
@@ -1306,20 +1386,23 @@ def _clustering_cfg(
         hellinger_weak=cfg.hellinger_weak,
         mop=cfg.dpc_mop,
         sampling_cfg=sampling_cfg,
+        random_seed=cfg.seed,
     )
 
 
 def _refinement_cfg(
     cfg: "DeveloperConfig", sampling_cfg: FitSamplingConfig
 ) -> RefinementConfig:
-    if cfg.gmm_metric == "cosine":
+    if cfg.gmm_metric == "euc":
+        dist_thresh = cfg.gmm_euclidean_threshold
+    elif cfg.gmm_metric == "cosine":
         dist_thresh = cfg.gmm_cosine_threshold
     elif cfg.gmm_metric == "normeuc":
         dist_thresh = cfg.gmm_normeuc_threshold
     elif cfg.gmm_metric == "scaled_normeuc":
         dist_thresh = cfg.gmm_scaled_normeuc_threshold
     else:
-        raise ValueError(f"Unknown {cfg.gmm_metric=}")
+        panic(cfg.gmm_metric)
     sb = 1.0 + cfg.amplitude_scaling_boundary
     return RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
@@ -1345,22 +1428,28 @@ def _refinement_cfg(
         robust_strategy=cfg.robust_strategy,
         robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
         robust_fixed_power=cfg.robust_fixed_power,
-        kmeanspp_stop_rms=cfg.kmeanspp_stop_rms,
-        kmeanspp_tries=cfg.kmeanspp_tries,
-        kmeanspp_patience=cfg.kmeanspp_patience,
-        kmeanspp_greedy_proposals=cfg.kmeanspp_greedy_proposals,
-        kmeanspp_neighb_overlap=cfg.kmeanspp_neighb_overlap,
-        kmeanspp_selection=cfg.kmeanspp_selection,
-        kmeanspp_stopping=cfg.kmeanspp_stopping,
-        kmeanspp_sampling=cfg.kmeanspp_sampling,
-        kmeanspp_alpha=cfg.kmeanspp_alpha,
-        kmeanspp_z0=cfg.kmeanspp_z0,
+        kmeanspp_cfg=KmeansppConfig(
+            tries=cfg.kmeanspp_tries,
+            stop_dist=cfg.kmeanspp_stop_dist,
+            patience=cfg.kmeanspp_patience,
+            greedy_proposals=cfg.kmeanspp_greedy_proposals,
+            neighb_overlap=cfg.kmeanspp_neighb_overlap,
+            selection=cfg.kmeanspp_selection,
+            stopping=cfg.kmeanspp_stopping,
+            alpha=cfg.kmeanspp_alpha,
+            min_fraction=cfg.kmeanspp_min_fraction,
+        ),
         train_batch_size=cfg.gmm_batch_size,
         eval_batch_size=cfg.gmm_batch_size,
+        spike_storage=cfg.gmm_spike_storage,
         robust_df=cfg.robust_df,
+        huber_quantile=cfg.huber_quantile,
+        huber_noise=cfg.huber_noise,
+        criterion_clip_level=cfg.gmm_criterion_clip_level,
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,
         scale_dist_args=(cfg.amplitude_scaling_stddev, 1.0 / sb, sb / 1.0),
+        split_kmeanspp_metric=cfg.split_kmeanspp_metric,
         censor_ms=cfg.deduplication_ms,
         glom_violation_ms=cfg.agg_violation_ms,
         glom_jitter_ms=cfg.agg_jitter_ms,
@@ -1395,6 +1484,9 @@ def _matching_cfg(
         chunk_length_samples=cfg.chunk_length_samples,
         template_merge_cfg=TemplateMergeConfig(
             merge_distance_threshold=cfg.postprocessing_merge_threshold,
+            template_cfg=TemplateConfig(
+                denoising_fit_sampling_cfg=_template_fit_sampling_cfg(cfg)
+            ),
         ),
         cd_iter=cfg.matching_cd_iter,
         coarse_cd=cfg.matching_coarse_cd,
@@ -1415,6 +1507,7 @@ def _matching_cfg(
                 spikes_per_unit=cfg.template_spikes_per_unit,
                 reduction="mean",
                 template_interp_params=clampna_interp_params,
+                denoising_fit_sampling_cfg=_template_fit_sampling_cfg(cfg),
             ),
         ),
         template_svd_compression_rank=cfg.matching_svd_rank,
@@ -1508,6 +1601,7 @@ def _agglomerate_cfg(
     agg_whiten_cfg = replace(whiten_cfg, strategy=cfg.agg_template_whiten_strategy)
     return RefinementConfig(
         refinement_strategy="agglomerate",
+        sampling_cfg=_default_refinement_sampling_cfg(cfg),
         template_merge_cfg=TemplateMergeConfig(
             linkage=cfg.agg_template_linkage,
             merge_distance_threshold=cfg.agg_max_template_distance,
@@ -1556,6 +1650,7 @@ def _post_refinement_cfgs(
     ):
         filter_cfg = RefinementConfig(
             refinement_strategy="filter",
+            sampling_cfg=_default_refinement_sampling_cfg(cfg),
             gmm_isolation_threshold=cfg.gmm_isolation_threshold,
             collision_cleaning_error_threshold=cfg.collision_cleaning_error_threshold,
         )
@@ -1606,12 +1701,18 @@ def _peeler_sampling_cfg(cfg: "DeveloperConfig") -> FitSamplingConfig:
         n_residual_snips = 0
     else:
         n_residual_snips = cfg.n_residual_snips
+    if cfg.gmm_pool_spikes is None:
+        pool_spikes = cfg.gmm_max_spikes
+    else:
+        assert cfg.gmm_pool_spikes >= cfg.gmm_max_spikes
+        pool_spikes = cfg.gmm_pool_spikes
     return FitSamplingConfig(
         n_waveforms_fit=cfg.n_waveforms_fit,
         max_waveforms_fit=cfg.max_waveforms_fit,
-        more_waveforms_fit=cfg.gmm_max_spikes,
+        more_waveforms_fit=pool_spikes,
         fit_sampling=cfg.fit_sampling,
         n_residual_snips=n_residual_snips,
+        seed=cfg.seed,
     )
 
 
@@ -1684,6 +1785,7 @@ def _pre_refinement_cfg(cfg: "DeveloperConfig") -> RefinementConfig | None:
         return None
     return RefinementConfig(
         refinement_strategy="pcmerge",
+        sampling_cfg=_default_refinement_sampling_cfg(cfg),
         pc_merge_metric=cfg.pre_refinement_merge_metric,
         pc_merge_threshold=cfg.pre_refinement_merge_threshold,
         pc_merge_rank=cfg.initial_pc_feats,
@@ -1693,6 +1795,7 @@ def _pre_refinement_cfg(cfg: "DeveloperConfig") -> RefinementConfig | None:
 def _clean_cfg(cfg: "DeveloperConfig") -> RefinementConfig:
     return RefinementConfig(
         refinement_strategy="clean",
+        sampling_cfg=_default_refinement_sampling_cfg(cfg),
         template_merge_cfg=None,
         dedup_ms=cfg.deduplication_ms,
     )

@@ -1911,7 +1911,7 @@ def vis_obs_interpolation(
             params=ip,
         )
 
-    actual_x = mix_data.train_data.dense_slice(trix).x()
+    actual_x = mix_data.train_data.dense_slice(torch.asarray(trix)).x()
     assert actual_x is not None
     features = {"actual": actual_x}
     origf = mix_data.sorting.slice_feature_by_name(
