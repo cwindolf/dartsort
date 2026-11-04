@@ -593,7 +593,7 @@ class RefinementConfig:
     robust_df: float = 4.0
     huber_quantile: float = 0.9
     huber_noise: bool = True
-    criterion_clip_level: float | None = None
+    criterion_clip_level: float | None = 1.0
     demolition_min_resp_ratio: float = 0.0
     demolish_during_selection: bool = False
     refit_in_demolition: bool = False
