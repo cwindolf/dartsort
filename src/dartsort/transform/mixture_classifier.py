@@ -222,6 +222,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             save_labels_dir=hdf5_filename.parent if save_fit_data else None,
             initial_name="classifier_initial",
             refine_labels_fmt="classifier{stepname}",
+            debug_stats=save_fit_data,
         )
         assert isinstance(clus, TMMRefinement)
 
