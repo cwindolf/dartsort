@@ -493,7 +493,10 @@ def _matching_step_cfgs(
         clfeat_cfg = cfg.matching_classifier_clustering_features_cfg
         ref_cfgs = list(cfg.final_refinement_cfgs)
         feat_cfg = cfg.matching_classifier_featurization_cfg
-        samp_cfg = cfg.refinement_cfg.sampling_cfg
+        samp_cfg = replace(
+            cfg.refinement_cfg.sampling_cfg,
+            more_waveforms_fit=cfg.peeler_sampling_cfg.more_waveforms_fit,
+        )
     else:
         clus_cfg = cfg.clustering_cfg if cfg.recluster_after_matching else None
         clfeat_cfg = cfg.clustering_features_cfg
