@@ -142,11 +142,22 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         return self._needs_fit
 
     def fit(
-        self, recording, waveforms, *, computation_cfg, channels, **fixed_properties
+        self,
+        recording,
+        waveforms,
+        *,
+        computation_cfg,
+        channels,
+        save_fit_data: bool = False,
+        **fixed_properties,
     ):
         weights = fixed_properties.get("weights")
         super().fit(
-            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+            recording,
+            waveforms,
+            computation_cfg=computation_cfg,
+            channels=channels,
+            save_fit_data=save_fit_data,
         )  # just for spike len stuff
         with torch.enable_grad():
             self._fit(waveforms, channels, weights=weights)

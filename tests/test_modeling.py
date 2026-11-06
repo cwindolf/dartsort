@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from dartsort.clustering import mixture
 from dartsort.util.internal_config import (
     ClusteringFeaturesConfig,
+    FitSamplingConfig,
     KmeansppConfig,
     RefinementConfig,
 )
@@ -85,8 +86,21 @@ def low_k_simulations():
 @pytest.mark.parametrize("corruption", [0.2])
 # @pytest.mark.parametrize("demoinsel", [False, True])
 @pytest.mark.parametrize("demoinsel", [True])
+@pytest.mark.parametrize(
+    "robust_strategy,huber_noise", [("none", True), ("huber", True), ("huber", False)]
+)
+@pytest.mark.parametrize("split_kmeanspp_metric", ["euc", "scaled_normeuc"])
 def test_truncated_mixture(
-    moppca_simulations, t_mu, t_cov_zrad, t_w, t_missing, corruption, demoinsel
+    moppca_simulations,
+    t_mu,
+    t_cov_zrad,
+    t_w,
+    t_missing,
+    corruption,
+    demoinsel,
+    robust_strategy,
+    huber_noise,
+    split_kmeanspp_metric,
 ):
     mixture.pnoid = True
 
@@ -118,6 +132,10 @@ def test_truncated_mixture(
         n_candidates=K,
         em_converged_atol=1e-4,
         demolish_during_selection=demoinsel,
+        initialize_at_rank_0=False,
+        robust_strategy=robust_strategy,
+        huber_noise=huber_noise,
+        split_kmeanspp_metric=split_kmeanspp_metric,
     )
     no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
 
@@ -134,6 +152,8 @@ def test_truncated_mixture(
             stable_features=stable_features,
         )
     )
+    huber_noise_unit = robust_strategy == "huber" and huber_noise
+    assert (neighb_cov.huber_k is not None) == huber_noise_unit
     tmm = mixture.TruncatedMixtureModel.from_config(
         noise=noise,
         erp=erp,
@@ -425,6 +445,7 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
         signal_rank=sim["M"],
         n_candidates=n_candidates,
         em_converged_atol=1e-4,
+        initialize_at_rank_0=False,
     )
     no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
 
@@ -713,9 +734,8 @@ def test_truncated_kmeanspp_step():
 
     centroids = (0, n_neighb)
     distsq = X.new_full((n,), torch.inf)
-    dof = X.new_zeros((n,))
     for c in centroids:
-        ix, d, n_feats = mixture._truncated_kmeanspp_propose(
+        ix, d, _ = mixture._truncated_kmeanspp_propose(
             X=X,
             centroid_ix=torch.tensor(c, device=device),
             Xneighbixs=ids,
@@ -730,25 +750,15 @@ def test_truncated_kmeanspp_step():
             scale_dist_args=(0.01, 3.0 / 4.0, 4.0 / 3.0),
         )
         if d is not None:
-            assert n_feats is not None
-            mixture._truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
+            mixture._truncated_kmeanspp_commit_(distsq, ix, d)
 
     assert distsq.isfinite().any()
     assert distsq.isinf().any()
-    assert torch.equal(distsq.isfinite(), dof > 0)
 
 
-@pytest.mark.parametrize(
-    "stopping,sampling",
-    [
-        ("patience", "d2"),
-        ("dpmeanspp", "d2"),
-        ("dpmeanspp", "significance"),
-        ("significance", "significance"),
-    ],
-)
+@pytest.mark.parametrize("stopping", ["patience", "dpmeanspp"])
 @pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
-def test_truncated_kmeanspp(mini_simulations, sim_name, stopping, sampling):
+def test_truncated_kmeanspp(mini_simulations, sim_name, stopping):
     sim = mini_simulations[sim_name]
     sorting = sim["sorting"]
     gt_labels = sorting.labels
@@ -757,7 +767,7 @@ def test_truncated_kmeanspp(mini_simulations, sim_name, stopping, sampling):
 
     refinement_cfg = RefinementConfig(
         distance_metric="euc",
-        kmeanspp_cfg=KmeansppConfig(stop_dist=3.0, stopping=stopping, sampling=sampling),
+        kmeanspp_cfg=KmeansppConfig(stop_dist=3.0, stopping=stopping),
     )
     _, _, train_data, _, _, _, train_ixs, _ = mixture.get_truncated_datasets(
         sorting=unlabeled,
@@ -790,6 +800,74 @@ def test_truncated_kmeanspp(mini_simulations, sim_name, stopping, sampling):
     # good prec, good coverage
     assert (precs * sizes).sum() / sizes.sum() > 0.85
     assert np.unique(match).size >= 0.9 * np.unique(gt[gt >= 0]).size
+
+
+def test_bucket_sampling():
+    mixture.pnoid = True
+    sim = mixture_testing_util.simulate_moppca(
+        K=3, t_mu="smooth", t_cov="eye", t_w="smooth", rank=TEST_RANK, rg=SEED
+    )
+    K = sim["K"]
+    init_sorting = sim["init_sorting"]
+    labels = init_sorting.labels.copy()
+    rg = np.random.default_rng(0)
+    small = np.flatnonzero(labels == K - 1)
+    labels[rg.choice(small, size=int(0.9 * small.size), replace=False)] = -1
+    sorting = init_sorting.ephemeral_replace(labels=labels)
+    pool_counts = np.bincount(labels[labels >= 0], minlength=K)
+    pool_shares = pool_counts / pool_counts.sum()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ref_cfg = RefinementConfig(
+        refinement_strategy="tmm",
+        signal_rank=sim["M"],
+        n_candidates=K,
+        initialize_at_rank_0=False,
+        sampling_cfg=FitSamplingConfig(
+            more_waveforms_fit=int(0.4 * len(sorting)), bucket_sampling_power=0.5
+        ),
+    )
+    neighb_cov, erp, train_data, val_data, _, noise, train_ixs, val_ixs = (
+        mixture.get_truncated_datasets(
+            sorting=sorting,
+            motion=MotionInfo.from_motion_est(geom=sim["prgeom"][:-1]),
+            clustering_features_cfg=ClusteringFeaturesConfig(feature_rank=TEST_RANK),
+            refinement_cfg=ref_cfg,
+            device=device,
+            rg=rg,
+            noise=sim["noise"],
+            stable_features=sim["data"],
+        )
+    )
+    assert val_data is not None
+    assert train_data.sample_weights is not None and val_data.sample_weights is not None
+
+    fit_ixs = np.concatenate([train_ixs.numpy(force=True), val_ixs.numpy(force=True)])
+    fit_labels = labels[fit_ixs]
+    assert (fit_labels >= 0).all()
+    fit_counts = np.bincount(fit_labels, minlength=K)
+    rates = fit_counts / pool_counts
+    assert rates[K - 1] > 1.5 * rates[: K - 1].max()
+
+    weights = torch.cat([train_data.sample_weights, val_data.sample_weights]).numpy(force=True)
+    assert np.isclose(weights.mean(), 1.0, atol=1e-5)
+    weighted_shares = np.bincount(fit_labels, weights=weights, minlength=K) / weights.sum()
+    np.testing.assert_allclose(weighted_shares, pool_shares, atol=1e-5)
+
+    tmm = mixture.TruncatedMixtureModel.from_config(
+        noise=noise,
+        erp=erp,
+        neighb_cov=neighb_cov,
+        train_data=train_data,
+        refinement_cfg=ref_cfg,
+        seed=rg,
+    )
+    tmm.update_lut(train_data.bootstrap_candidates(tmm.unit_distance_matrix()))
+    tmm.em(train_data)
+    props = tmm.b.log_proportions.softmax(dim=0).numpy(force=True)
+    raw_shares = fit_counts / fit_counts.sum()
+    raw_error = np.abs(raw_shares - pool_shares).max()
+    assert np.abs(props - pool_shares).max() < 0.25 * raw_error
 
 
 # fmt: off

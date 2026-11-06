@@ -759,7 +759,7 @@ def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
     return kernel
 
 
-def polyharmonic_rbf(source_pos, target_pos=None, sigma=1.0, order: int | float = 2.0):
+def polyharmonic_rbf(source_pos, target_pos=None, sigma=1.0, order: float = 2.0):
     rsq = get_rsq(source_pos, target_pos, sigma)
     r = rsq.sqrt_()
     if isinstance(order, int) and (order % 2):
@@ -936,14 +936,14 @@ class SpikeNeighborhoods(BModule):
             name=self.name,
         )
 
-    def neighborhood_channels(self, id):
+    def neighborhood_channels(self, id: int) -> torch.Tensor:
         nhc = self.b.neighborhoods[id]
         return nhc[nhc < self.n_channels]
 
-    def missing_channels(self, id):
+    def missing_channels(self, id: int) -> torch.Tensor:
         return self.b.chans_arange[self.b.indicators[:, id] == 0]
 
-    def neighborhood_members(self, id):
+    def neighborhood_members(self, id: int) -> torch.Tensor:
         assert self.get_optional_buffer("neighborhood_ids") is not None
         return (self.b.neighborhood_ids == id).nonzero().view(-1)
 

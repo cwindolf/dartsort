@@ -326,13 +326,18 @@ class Decollider(BaseMultichannelDenoiser):
         computation_cfg,
         channels,
         hdf5_filename=None,
+        save_fit_data: bool = False,
         **spike_data,
     ):
         weights = spike_data.get("weights")
         if self.needs_whiteners() and self._whitener_holder[0] is None:
             self._whitener_holder[0] = self._estimate_loss_whitener(hdf5_filename)
         super().fit(
-            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+            recording,
+            waveforms,
+            computation_cfg=computation_cfg,
+            channels=channels,
+            save_fit_data=save_fit_data,
         )
         self.initialize_whiteners()
         if self.tpca is not None and self.tpca.needs_fit():

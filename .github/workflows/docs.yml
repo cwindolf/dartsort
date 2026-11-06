@@ -29,16 +29,18 @@ jobs:
           # this is a "fine-grained token"
           token: ${{ secrets.DARTSORT_GITHUB_IO }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v3
         with:
-          python-version: 3.x
-          cache: "pip" # caching pip dependencies
+          environment-file: dartsort/environment.yml
+          environment-name: dartsort-docs
 
       - name: pip install stuff
-        run: python3 -m pip install -e dartsort/[doc]
+        shell: bash -el {0}
+        run: python -m pip install -e "dartsort/[doc]"
 
       - name: Zensical build
+        shell: bash -el {0}
         run: pushd dartsort/ && zensical build --clean && popd
 
       - name: overwrite site

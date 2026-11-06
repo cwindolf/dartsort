@@ -59,7 +59,9 @@ def get_clusterer(
     else:
         clus_strategy = "none"
 
-    saving_labels = save_cfg is not None and save_cfg.save_intermediate_labels
+    saving_labels = save_labels_dir is not None and (
+        save_cfg is None or save_cfg.save_intermediate_labels
+    )
     if not saving_labels:
         save_labels_dir = save_cfg = None
 

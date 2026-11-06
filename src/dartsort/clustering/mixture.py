@@ -56,6 +56,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.sparse.csgraph import connected_components
+from scipy.special import gammainc, gammaincc, gammaln
+from scipy.stats import chi2
 from sympy.utilities.iterables import multiset_partitions, subsets
 from torch import Tensor
 
@@ -66,8 +68,8 @@ from ..util.internal_config import (
     ComputationConfig,
     DARTsortInternalConfig,
     KmeansppConfig,
-    KmeansppSampling,
     RefinementConfig,
+    SplitKmeansppMetric,
 )
 from ..util.interpolation_util import (
     NeighborhoodFiller,
@@ -87,13 +89,14 @@ from ..util.logging_util import (
 from ..util.main_util import ds_save_intermediate_labels, ds_save_intermediate_sorting
 from ..util.motion import MotionInfo
 from ..util.noise_util import EmbeddedNoise
-from ..util.py_util import cfg_dataclass, databag, panic
+from ..util.py_util import databag, panic
 from ..util.spiketorch import (
     _nonzero_static,
     cosine_cdist_from_dots,
     cosine_distance,
     csr_members_ordered,
     ecl,
+    elbo,
     entropy,
     mean_elbo_dim1,
     normeuc_distance,
@@ -145,7 +148,9 @@ def tmm_demix(
     """
     prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
 
-    saving = save_cfg is not None and save_cfg.save_intermediate_labels
+    saving = save_step_labels_dir is not None and (
+        save_cfg is None or save_cfg.save_intermediate_labels
+    )
     _init_save_kw = dict(output_dir=save_step_labels_dir, cfg=save_cfg)
 
     mix_data = instantiate_and_bootstrap_tmm(
@@ -243,7 +248,7 @@ def tmm_demix(
             last_outer = outer_it == refinement_cfg.n_total_iters - 1
             last_inner = inner_it == len(refinement_cfg.mixture_steps) - 1
             is_final = last_outer and last_inner
-            if saving and not is_final:
+            if saving and (not is_final or skip_final_assign_and_return_mix_data):
                 save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
 
     if skip_final_assign_and_return_mix_data:
@@ -278,7 +283,7 @@ def tmm_demix(
 # -- shared objects holding precomputed neighborhood-related data
 
 
-RobustnessStrategy = Literal["none", "fixed"]
+RobustnessStrategy = Literal["none", "fixed", "huber"]
 
 
 class MixtureModelAndDatasets(NamedTuple):
@@ -307,6 +312,8 @@ class NeighborhoodCovariance(BModule):
         CooinvCom: Tensor,
         Linv: Tensor,
         full_Linv: Tensor,
+        huber_k: Tensor | None,
+        huber_2logzratio: Tensor | None,
     ):
         """Holds precomputed terms which depend only on the neighborhood
 
@@ -340,6 +347,10 @@ class NeighborhoodCovariance(BModule):
         Linv: Tensor
             Coo = LL', and this is Linv. Cinv=Linv'Linv, so this multiplies from the left.
         full_Linv: Tensor
+        huber_k: Tensor | None
+            noise unit's Huber radius by neighborhood
+        huber_2logzratio: Tensor | None
+            2log(Z_huber / Z_gaussian) by neighborhood (incl in lik_const)
         """
         super().__init__()
         self.feat_rank = feat_rank
@@ -356,7 +367,12 @@ class NeighborhoodCovariance(BModule):
         self.register_buffer("CooinvCom", CooinvCom, persistent=False)
         self.register_buffer("Linv", Linv, persistent=False)
         self.register_buffer("full_Linv", full_Linv, persistent=False)
-        self.register_buffer("lik_const", logdet + LOG_2PI * nobs, persistent=False)
+        lik_const = logdet + LOG_2PI * nobs
+        assert (huber_k is None) == (huber_2logzratio is None)
+        if huber_2logzratio is not None:
+            lik_const += huber_2logzratio
+        self.register_buffer("lik_const", lik_const, persistent=False)
+        self.register_buffer_or_none("huber_k", huber_k, persistent=False)
 
     def __post_init__(self):
         """Shape validation / documentation."""
@@ -371,7 +387,9 @@ class NeighborhoodCovariance(BModule):
         assert self.CooinvCom.shape == (nneighb, obsdim, neardim)
 
     def pad_for_noise_score_(self, new_n_neighbs: int):
-        noise_score_keys = ("Linv", "logdet", "nobs", "lik_const")
+        noise_score_keys = ["Linv", "logdet", "nobs", "lik_const"]
+        if self.huber_k is not None:
+            noise_score_keys.append("huber_k")
         for k in noise_score_keys:
             v = getattr(self, k)
             ndim = v.ndim
@@ -388,6 +406,7 @@ class NeighborhoodCovariance(BModule):
         noise: EmbeddedNoise,
         neighborhoods: SpikeNeighborhoods,
         neighb_overlap: float,
+        huber_quantile: float | None,
     ) -> Self:
         dev = noise.device
         neighborhoods = neighborhoods.to(device=dev)
@@ -407,6 +426,13 @@ class NeighborhoodCovariance(BModule):
         assert obs_ix.shape[0] == miss_near_ix.shape[0] == miss_full_mask.shape[0]
         assert obs_ix.shape[0] == logdet.shape[0]
         assert obs_ix.shape[0] == CooinvCom.shape[0] == Linv.shape[0]
+        nobs = noise.rank * nc_obs
+        if huber_quantile is None:
+            huber_k = huber_2logzratio = None
+        else:
+            huber_k, huber_2logzratio = huber_neighborhood_constants(
+                nobs, huber_quantile
+            )
         return cls(
             feat_rank=noise.rank,
             max_nc_obs=obs_ix.shape[1],
@@ -414,7 +440,7 @@ class NeighborhoodCovariance(BModule):
             n_channels=neighborhoods.n_channels,
             prgeom=prgeom,
             neighb_adj=neighborhoods.adjacency(neighb_overlap),
-            nobs=noise.rank * nc_obs,
+            nobs=nobs,
             obs_ix=obs_ix,
             miss_near_ix=miss_near_ix,
             miss_full_mask=miss_full_mask,
@@ -422,6 +448,8 @@ class NeighborhoodCovariance(BModule):
             CooinvCom=CooinvCom,
             Linv=Linv,
             full_Linv=noise.whitener(),
+            huber_k=huber_k,
+            huber_2logzratio=huber_2logzratio,
         )
 
 
@@ -516,6 +544,8 @@ class LUTParams(BModule):
         Tpad: Tensor | None,
         # main factor for using inverse lemma to compute likelihoods
         wburyroot: Tensor | None,
+        huber_k: Tensor | None,
+        huber_2logzratio: Tensor | None,
     ):
         super().__init__()
         self.signal_rank = signal_rank
@@ -529,6 +559,11 @@ class LUTParams(BModule):
         self.register_buffer_or_none("TWoCooinvmuo", TWoCooinvmuo, persistent=False)
         self.register_buffer_or_none("Tpad", Tpad, persistent=False)
         self.register_buffer_or_none("wburyroot", wburyroot, persistent=False)
+        assert (huber_k is None) == (huber_2logzratio is None)
+        self.register_buffer_or_none("huber_k", huber_k, persistent=False)
+        self.register_buffer_or_none(
+            "huber_2logzratio", huber_2logzratio, persistent=False
+        )
 
     @classmethod
     def from_lut(
@@ -538,9 +573,16 @@ class LUTParams(BModule):
         neighb_cov: NeighborhoodCovariance,
         lut: NeighborhoodLUT,
         latent_prior_std: float,
+        huber_quantile: float | None,
         puff=1.0,
     ):
         signal_rank = 0 if bases is None else bases.shape[1]
+        if huber_quantile is None:
+            huber_k = huber_2logzratio = None
+        else:
+            huber_k, huber_2logzratio = huber_neighborhood_constants(
+                neighb_cov.b.nobs, huber_quantile
+            )
         self = cls._new_empty(
             lut.b.unit_ids.shape[0],
             signal_rank,
@@ -548,6 +590,8 @@ class LUTParams(BModule):
             dim_miss_near=neighb_cov.max_nc_miss_near * neighb_cov.feat_rank,
             device=means.device,
             latent_prior_std=latent_prior_std,
+            huber_k=huber_k,
+            huber_2logzratio=huber_2logzratio,
             puff=puff,
         )
         self.update(means, bases, neighb_cov, lut)
@@ -585,6 +629,8 @@ class LUTParams(BModule):
         dim_miss_near: int,
         device: torch.device,
         latent_prior_std: float,
+        huber_k: Tensor | None,
+        huber_2logzratio: Tensor | None,
         puff=1.0,
     ) -> Self:
         n0 = n_lut if puff == 1.0 else int(puff * n_lut)
@@ -610,6 +656,8 @@ class LUTParams(BModule):
             TWoCooinvmuo=r,
             Tpad=rh,
             wburyroot=romt,
+            huber_k=huber_k,
+            huber_2logzratio=huber_2logzratio,
         )
         if n0 != n_lut:
             self._resize_(n_lut)
@@ -712,6 +760,7 @@ class SufficientStatistics:
 
     count: float
     noise_N: Tensor | None
+    resp_N: Tensor
     N: Tensor
     Nlut: Tensor
     R: Tensor
@@ -720,6 +769,7 @@ class SufficientStatistics:
 
     def diagnostic(self) -> str:
         noise_N = self.noise_N.item() if self.noise_N is not None else None
+        resp_Ns = f"{self.resp_N.amin().item()}, {self.resp_N.amax().item()}"
         Ns = f"{self.N.amin().item()}, {self.N.amax().item()}"
         Nluts = f"{self.Nlut.amin().item()}, {self.Nlut.amax().item()}"
         Rna = self.R.isnan().any(dim=(1, 2)).sum().item()
@@ -729,8 +779,9 @@ class SufficientStatistics:
             f" - count: {self.count}\n"
             f" - ELBO: {self.elbo.item()}\n"
             f" - noise count: {noise_N}\n"
-            f" - unit count min/max: {Ns}\n"
-            f" - LUT count min/max: {Nluts}\n"
+            f" - unit responsibility count min/max: {resp_Ns}\n"
+            f" - unit weight count min/max: {Ns}\n"
+            f" - LUT weight count min/max: {Nluts}\n"
             f" - R na/inf count: {Rna}, {Rinf}"
         )
         return msg
@@ -761,6 +812,7 @@ class SufficientStatistics:
         return cls(
             count=0.0,
             noise_N=noise_N,
+            resp_N=torch.zeros((n_units,), device=device, dtype=count_dtype),
             N=torch.zeros((n_units,), device=device, dtype=count_dtype),
             Nlut=torch.zeros((n_lut,), device=device, dtype=count_dtype),
             R=torch.zeros((n_units, n_channels, hat_dim, feature_rank), device=device),
@@ -774,6 +826,7 @@ class SufficientStatistics:
         self.count = 0.0
         if self.noise_N is not None:
             self.noise_N.zero_()
+        self.resp_N.zero_()
         self.N.zero_()
         self.Nlut.zero_()
         self.R.zero_()
@@ -788,6 +841,7 @@ class SufficientStatistics:
         """Welford running means."""
         self.count += other.count
         w_count = other.count / max(1, self.count)
+        self.resp_N += other.resp_N
         self.N += other.N
         w_N = other.N.div_(self.N.clamp(min=eps))
         self.Nlut += other.Nlut
@@ -832,6 +886,8 @@ class TMMParams:
     main_min_iters: int
     elbo_atol: float
     robust_strategy: RobustnessStrategy
+    huber_quantile: float
+    criterion_clip_level: float | None
     demolition_min_resp_ratio: float
     demolish_during_selection: bool
     refit_in_demolition: bool
@@ -839,6 +895,7 @@ class TMMParams:
     kmeans_beta: float
     kmeanspp_tries: int
     whiten_split: bool
+    split_kmeanspp_metric: SplitKmeansppMetric
     fix_responsibilities: bool
     scale_dist_args: tuple[float, float, float]
     whiten_dist: bool
@@ -877,10 +934,13 @@ class TMMParams:
             demolish_cl_alpha=refinement_cfg.demolish_cl_alpha,
             latent_prior_std=refinement_cfg.latent_prior_std,
             robust_strategy=refinement_cfg.robust_strategy,
+            huber_quantile=refinement_cfg.huber_quantile,
+            criterion_clip_level=refinement_cfg.criterion_clip_level,
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
             demolish_during_selection=refinement_cfg.demolish_during_selection,
             refit_in_demolition=refinement_cfg.refit_in_demolition,
             whiten_split=refinement_cfg.whiten_split,
+            split_kmeanspp_metric=refinement_cfg.split_kmeanspp_metric,
             fix_responsibilities=refinement_cfg.fix_responsibilities_in_split,
             scale_dist_args=refinement_cfg.scale_dist_args,
             whiten_dist=refinement_cfg.whiten_dist,
@@ -1052,6 +1112,7 @@ class SpikeDataBatch:
     CmoCooinvx: Tensor | None
     candidate_count: int | None
     duties: Tensor | None
+    sample_weights: Tensor | None
 
 
 @databag
@@ -1065,6 +1126,7 @@ class DenseSpikeData:
     CmoCooinvx: Tensor | None
     noise_logliks: Tensor
     duties: Tensor | None
+    sample_weights: Tensor | None
     batch_size: int
 
     def __post_init__(self):
@@ -1110,6 +1172,9 @@ class DenseSpikeData:
                 CmoCooinvx=None if self.CmoCooinvx is None else self.CmoCooinvx[sl],
                 candidates=candidates[sl],
                 duties=None if self.duties is None else self.duties[sl],
+                sample_weights=None
+                if self.sample_weights is None
+                else self.sample_weights[sl],
                 candidate_count=int(candidate_counts[sl].sum()),
             )
             batches.append(b)
@@ -1134,6 +1199,10 @@ class DenseSpikeData:
             duties = None
         else:
             duties = self.duties[indices]
+        if self.sample_weights is None:
+            sample_weights = None
+        else:
+            sample_weights = self.sample_weights[indices]
         if self.score_only:
             xt = CmoCooinvx = None
         else:
@@ -1151,6 +1220,7 @@ class DenseSpikeData:
             CmoCooinvx=CmoCooinvx,
             noise_logliks=self.noise_logliks[indices],
             duties=duties,
+            sample_weights=sample_weights,
             batch_size=self.batch_size,
         )
 
@@ -1206,6 +1276,7 @@ class BatchedSpikeData:
         neighborhoods: SpikeNeighborhoods,
         device: torch.device,
         duties: Tensor | None,
+        sample_weights: Tensor | None,
         candidates: Tensor | None = None,
         neighb_adj: Tensor | None = None,
         neighb_supset: Tensor | None = None,
@@ -1233,6 +1304,9 @@ class BatchedSpikeData:
         # per-sample approximate posterior data
         self.candidates = candidates
         self.duties = duties
+        if sample_weights is not None:
+            assert sample_weights.shape == (N,)
+        self.sample_weights = sample_weights
 
         self.n_candidates = n_candidates
         self.n_search = n_search
@@ -1507,6 +1581,7 @@ class StreamingSpikeData(BatchedSpikeData):
         super().__init__(
             N=x.shape[0],
             duties=duties,
+            sample_weights=None,
             n_candidates=n_candidates,
             n_search=0,
             n_explore=0,
@@ -1592,6 +1667,7 @@ class StreamingSpikeData(BatchedSpikeData):
         # my x is not channels-major as the TruncatedSpikeData's is, and that's
         # what's assumed in the statistics pass.
         del x
+        assert self.sample_weights is None
         return SpikeDataBatch(
             batch=spike_indices,
             xt=None,
@@ -1600,6 +1676,7 @@ class StreamingSpikeData(BatchedSpikeData):
             whitenedx=wx,
             noise_logliks=noise_loglik,
             duties=duties,
+            sample_weights=None,
             CmoCooinvx=None,
             candidate_count=None,
         )
@@ -1626,6 +1703,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         noise_logliks: Tensor,
         neighborhoods: SpikeNeighborhoods,
         duties: Tensor | None,
+        sample_weights: Tensor | None,
         search_adj: Literal["top", "explore"] = "top",
         seed: int | np.random.Generator = 0,
         batch_size: int = 128,
@@ -1643,7 +1721,7 @@ class TruncatedSpikeData(BatchedSpikeData):
          - explore = candidates[:, n_candidates + n_search*n_candidates:]
                    = candidates[:, -n_explore:]
         """
-        device = noise_logliks.device
+        device = cast(torch.device, neighborhoods.neighborhood_ids.device)
         super().__init__(
             N=whitenedx.shape[0],
             n_candidates=n_candidates,
@@ -1659,6 +1737,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             seed=seed,
             device=device,
             duties=duties,
+            sample_weights=sample_weights,
         )
         assert self.max_n_explore is not None
         assert self.max_n_total is not None
@@ -1669,8 +1748,12 @@ class TruncatedSpikeData(BatchedSpikeData):
         assert self.candidates.shape[1] >= n_candidates
 
         assert noise_logliks.shape == (self.N,)
-        assert whitenedx.device == neighborhoods.neighborhood_ids.device == device
         assert neighborhoods.neighborhood_ids.shape == (self.N,)
+        self.storage_device = whitenedx.device
+        assert self.storage_device in (device, torch.device("cpu"))
+        for f in (xt, whitenedx, CmoCooinvx, noise_logliks):
+            assert f is None or f.device == self.storage_device
+            assert self.storage_device == device or f is None or f.is_pinned()
 
         self.score_only = xt is None
         assert self.score_only == (CmoCooinvx is None)
@@ -1712,6 +1795,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         labels: Tensor,
         x: Tensor,
         duties: Tensor | None,
+        sample_weights: Tensor | None,
         neighborhoods: SpikeNeighborhoods,
         neighb_cov: NeighborhoodCovariance,
         search_adj: Literal["top", "explore"] = "top",
@@ -1757,6 +1841,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             noise_logliks=noise_logliks,
             neighborhoods=neighborhoods,
             duties=duties,
+            sample_weights=sample_weights,
             seed=seed,
             batch_size=batch_size,
             explore_neighb_steps=explore_neighb_steps,
@@ -1870,44 +1955,74 @@ class TruncatedSpikeData(BatchedSpikeData):
             duties = None
         else:
             duties = self.duties[spike_indices]
-        xt, CmoCooinvx = self.fit_features(spike_indices)
+        if self.sample_weights is None:
+            sample_weights = None
+        else:
+            sample_weights = self.sample_weights[spike_indices]
+        xt, whitenedx, CmoCooinvx, noise_logliks = self.features(spike_indices)
         return SpikeDataBatch(
             batch=spike_indices,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
             xt=xt,
             candidates=candidates,
             CmoCooinvx=CmoCooinvx,
-            whitenedx=self.whitenedx[spike_indices],
-            noise_logliks=self.noise_logliks[spike_indices],
+            whitenedx=whitenedx,
+            noise_logliks=noise_logliks,
             duties=duties,
+            sample_weights=sample_weights,
             candidate_count=int(self.batch_candidate_counts[batch_index]),
         )
 
-    def fit_features(
+    def features(
         self, spike_indices: Tensor | slice
-    ) -> tuple[Tensor | None, Tensor | None]:
-        if self.score_only:
-            return None, None
-        assert self.xt is not None
-        assert self.CmoCooinvx is not None
-        return self.xt[spike_indices], self.CmoCooinvx[spike_indices]
+    ) -> tuple[Tensor | None, Tensor, Tensor | None, Tensor]:
+        """xt, whitenedx, CmoCooinvx, noise_logliks -> device"""
+        if self.storage_device == self.device:
+            return (
+                None if self.xt is None else self.xt[spike_indices],
+                self.whitenedx[spike_indices],
+                None if self.CmoCooinvx is None else self.CmoCooinvx[spike_indices],
+                self.noise_logliks[spike_indices],
+            )
+        if torch.is_tensor(spike_indices):
+            spike_indices = spike_indices.cpu()
+        dev = self.device
+        if self.xt is None:
+            xt = None
+        else:
+            xt = self.xt[spike_indices].to(dev, non_blocking=True)
+        if self.CmoCooinvx is None:
+            CmoCooinvx = None
+        else:
+            CmoCooinvx = self.CmoCooinvx[spike_indices].to(dev, non_blocking=True)
+        return (
+            xt,
+            self.whitenedx[spike_indices].to(dev, non_blocking=True),
+            CmoCooinvx,
+            self.noise_logliks[spike_indices].to(dev, non_blocking=True),
+        )
 
     def dense_slice(self, spike_indices: Tensor) -> DenseSpikeData:
         if self.duties is None:
             duties = None
         else:
             duties = self.duties[spike_indices]
-        xt, CmoCooinvx = self.fit_features(spike_indices)
+        if self.sample_weights is None:
+            sample_weights = None
+        else:
+            sample_weights = self.sample_weights[spike_indices]
+        xt, whitenedx, CmoCooinvx, noise_logliks = self.features(spike_indices)
         return DenseSpikeData(
             indices=spike_indices,
             neighborhoods=self.neighborhoods,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
             neighb_supset=self.neighb_supset,
             xt=xt,
-            whitenedx=self.whitenedx[spike_indices],
+            whitenedx=whitenedx,
             CmoCooinvx=CmoCooinvx,
-            noise_logliks=self.noise_logliks[spike_indices],
+            noise_logliks=noise_logliks,
             duties=duties,
+            sample_weights=sample_weights,
             batch_size=self.batch_size,
         )
 
@@ -2094,6 +2209,7 @@ class FullProposalDataView(BatchedSpikeData):
             neighb_overlap=0.0,
             proposal_is_complete=True,
             duties=data.duties,
+            sample_weights=data.sample_weights,
         )
         self.proposals = proposals.to(self.device)
         self.data = data
@@ -2136,16 +2252,21 @@ class FullProposalDataView(BatchedSpikeData):
             duties = None
         else:
             duties = self.duties[spike_indices]
-        xt, CmoCooinvx = self.data.fit_features(spike_indices)
+        if self.sample_weights is None:
+            sample_weights = None
+        else:
+            sample_weights = self.sample_weights[spike_indices]
+        xt, whitenedx, CmoCooinvx, noise_logliks = self.data.features(spike_indices)
         return SpikeDataBatch(
             batch=spike_indices,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
             xt=xt,
             candidates=candidates,
             CmoCooinvx=CmoCooinvx,
-            whitenedx=self.data.whitenedx[spike_indices],
-            noise_logliks=self.data.noise_logliks[spike_indices],
+            whitenedx=whitenedx,
+            noise_logliks=noise_logliks,
             duties=duties,
+            sample_weights=sample_weights,
             candidate_count=None,
         )
 
@@ -2358,6 +2479,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             noise=noise,
             neighborhoods=neighborhoods,
             neighb_overlap=refinement_cfg.neighb_overlap,
+            huber_quantile=noise_huber_quantile(refinement_cfg),
         )
         lut_dict = {
             k.removeprefix("lut."): v
@@ -2545,7 +2667,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # deliberately not normalizing the proportions here
         # these were historically always fixed from the get
         # normalizing would be bad when we have overlapping subsets here.
-        log_proportions = responsibilities.mean(0).log_()
+        log_proportions = spike_mean(responsibilities, data.sample_weights).log_()
         log_proportions += total_log_proportion
 
         self = cls(
@@ -2699,7 +2821,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # proportions
         if not skip_proportions:
             assert stats.noise_N is not None
-            lp = torch.concatenate([stats.N, stats.noise_N[None]])
+            lp = torch.concatenate([stats.resp_N, stats.noise_N[None]])
             lp = F.log_softmax(lp.log_(), dim=0).clamp_(min=self.LP_MIN)
             self.b.log_proportions.copy_(lp[:-1])
             self.b.noise_log_prop.fill_(lp[-1])
@@ -2772,11 +2894,21 @@ class TruncatedMixtureModel(BaseMixtureModel):
             batch_sparse_ixs.append(
                 (spike_ixs, candidate_ixs, unit_ixs, neighb_ixs, lut_ixs)
             )
+        if self.p.robust_strategy == "huber":
+            mstep_weights_need_scores = True
+        elif self.p.robust_strategy in ("none", "fixed"):
+            mstep_weights_need_scores = False
+        else:
+            panic(self.p.robust_strategy)
         for j in range(self.p.em_iters):
             for batch, spixs in zip(batches, batch_sparse_ixs, strict=True):
                 spike_ixs, candidate_ixs, unit_ixs, neighb_ixs, lut_ixs = spixs
                 bresp = responsibilities[batch.batch]
-                if not fix_responsibilities or j >= self.p.criterion_em_iters:
+                if (
+                    not fix_responsibilities
+                    or j >= self.p.criterion_em_iters
+                    or mstep_weights_need_scores
+                ):
                     # compute log liks for convergence testing below
                     batch_scores = self.score_batch(
                         batch=batch,
@@ -2801,7 +2933,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
                         log_liks=bresp,  # unused, just to fill the field.
                         responsibilities=bresp,
                         candidates=batch.candidates,
-                        duties=batch.duties,
+                        duties=None
+                        if batch.duties is None
+                        else batch.duties[:, None].expand_as(batch.candidates),
                     )
                 batch_stats = self.estep_stats_batch(
                     batch=batch,
@@ -2900,6 +3034,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             whitenedx=wx,
             noise_logliks=noise_logliks,
             duties=duties,
+            sample_weights=None,
             CmoCooinvx=None,
             candidate_count=candidate_count,
         )
@@ -2981,11 +3116,20 @@ class TruncatedMixtureModel(BaseMixtureModel):
             assert unit_ixs is not None
             assert neighb_ixs is not None
             assert lut_ixs is not None
+        if self.p.robust_strategy == "huber":
+            assert scores.duties is not None
+            mstep_weights = scores.duties
+        elif self.p.robust_strategy in ("none", "fixed"):
+            mstep_weights = None
+        else:
+            panic(self.p.robust_strategy)
         return _stat_pass_batch(
             xt=batch.xt,
             whitenedx=batch.whitenedx,
             CmoCooinvx=batch.CmoCooinvx,
             responsibilities=scores.responsibilities,
+            mstep_weights=mstep_weights,
+            sample_weights=batch.sample_weights,
             log_liks=scores.log_liks,
             spike_ixs=spike_ixs,
             candidate_ixs=candidate_ixs,
@@ -3039,8 +3183,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             dev = data.candidates.device
         if self.p.robust_strategy == "none":
             duties = None
+        elif self.p.robust_strategy in ("fixed", "huber"):
+            duties = torch.full((data.N, data.n_candidates), torch.nan, device=dev)
         else:
-            duties = torch.full((data.N,), torch.nan, device=dev)
+            panic(self.p.robust_strategy)
         scores = Scores(
             log_liks=torch.empty((data.N, data.n_candidates + 1), device=dev),
             responsibilities=torch.empty((data.N, data.n_candidates + 1), device=dev),
@@ -3112,6 +3258,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.neighb_cov,
                 lut,
                 latent_prior_std=self.p.latent_prior_std,
+                huber_quantile=huber_quantile_if_huber(
+                    self.p.robust_strategy, self.p.huber_quantile
+                ),
                 puff=puff,
             )
         else:
@@ -3176,6 +3325,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             debug=debug,
             whiten=self.p.whiten_split,
             force_labels=split_data_labels,
+            kmeanspp_metric=self.p.split_kmeanspp_metric,
+            scale_dist_args=self.p.scale_dist_args,
         )
         if debug or logger.isEnabledFor(DARTSORTVERBOSE):
             group_str = ",".join(map(str, group.tolist()))
@@ -3252,7 +3403,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             eval_data=split_eval_data,
             pair_mask=pair_mask,
             cur_scores=cur_scores_batch,
-            cur_unit_ids=torch.as_tensor(group, device=train_data.whitenedx.device),
+            cur_unit_ids=torch.as_tensor(group, device=train_data.device),
             responsibilities=kmeans_responsibilities,
             debug=debug,
         )
@@ -3518,7 +3669,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             pair_mask=pair_mask,
             cur_scores=group_scores,
             responsibilities=None,
-            cur_unit_ids=torch.as_tensor(group, device=train_data.whitenedx.device),
+            cur_unit_ids=torch.as_tensor(group, device=train_data.device),
             use_cl_alpha=not self.p.cl_split_only,
             debug=debug,
         )
@@ -3679,16 +3830,18 @@ class TruncatedMixtureModel(BaseMixtureModel):
             data=val_data, needs_bootstrap=False, full_proposal_view=True
         )
         mean_train_resp = mean_responsibilities(
-            scores=train_scores, n_units=self.n_units
+            scores=train_scores, n_units=self.n_units, weights=train_data.sample_weights
         )
-        mean_val_resp = mean_responsibilities(scores=val_scores, n_units=self.n_units)
+        mean_val_resp = mean_responsibilities(
+            scores=val_scores, n_units=self.n_units, weights=val_data.sample_weights
+        )
         val_row_crit = ecl(
             resps=None,
             log_liks=val_scores.log_liks.double(),
             cl_alpha=self.p.demolish_cl_alpha,
             reduce_mean=False,
         )
-        cur_crit = val_row_crit.mean().item()
+        cur_crit = spike_mean(val_row_crit, val_data.sample_weights).item()
 
         # checking this invariant at the top
         assert self.b.log_proportions.isfinite().all()
@@ -3789,9 +3942,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
         responsibilities to the original means.
         """
         # determine mean responsibilities before and after removing units
-        orig_prop = mean_responsibilities(train_scores, n_units=self.n_units)
+        orig_prop = mean_responsibilities(
+            train_scores, n_units=self.n_units, weights=train_data.sample_weights
+        )
         destroy_scores = remove_units_from_scores(train_scores, unit_ids)
-        new_prop = mean_responsibilities(destroy_scores, n_units=self.n_units)
+        new_prop = mean_responsibilities(
+            destroy_scores, n_units=self.n_units, weights=train_data.sample_weights
+        )
         assert orig_prop.shape == new_prop.shape == (self.n_units + 1,)
 
         # this op won't change noise log prop, so remove that factor
@@ -4353,11 +4510,21 @@ class TMMStack(BaseMixtureModel):
             candidates[:, i0:i1].masked_fill_(score.candidates < 0, -1)
             i0 = i1
         log_liks = torch.concatenate([score.log_liks for score in scores], dim=1)
-        log_liks = torch.concatenate([score.log_liks for score in scores], dim=1)
         if pnoid and not allow_blanks:
             assert log_liks.isfinite().any(dim=1).all()
+        if scores[0].duties is None:
+            assert all(score.duties is None for score in scores)
+            duties = None
+        else:
+            duties = torch.concatenate(
+                [cast(Tensor, score.duties) for score in scores], dim=1
+            )
+            assert duties.shape == candidates.shape
         return Scores(
-            log_liks=log_liks, candidates=candidates, responsibilities=None, duties=None
+            log_liks=log_liks,
+            candidates=candidates,
+            responsibilities=None,
+            duties=duties,
         )
 
 
@@ -4389,7 +4556,7 @@ def get_truncated_datasets(
         stable_features=stable_features,
         device=device,
     )
-    feature_rank, full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom = data  # fmt: skip
+    feature_rank, full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom, train_weights, val_weights = data  # fmt: skip
     del stable_features
 
     if refinement_cfg.robust_strategy == "fixed":
@@ -4401,10 +4568,10 @@ def get_truncated_datasets(
         _abs_log_mean = duties.mean().log().abs().item()
         if _abs_log_mean > 0.3:
             logger.warning(f"Mean duty {duties.mean().item():.4f} is not near 1.")
-    elif refinement_cfg.robust_strategy == "none":
+    elif refinement_cfg.robust_strategy in ("none", "huber"):
         duties = None
     else:
-        panic()
+        panic(refinement_cfg.robust_strategy)
 
     if noise is None:
         noise = EmbeddedNoise.estimate_from_hdf5(
@@ -4431,9 +4598,16 @@ def get_truncated_datasets(
         noise=noise,
         neighborhoods=full_neighbs,
         neighb_overlap=refinement_cfg.neighb_overlap,
+        huber_quantile=noise_huber_quantile(refinement_cfg),
     )
 
-    train_x = full_features[train_ixs].to(device=device)
+    if refinement_cfg.spike_storage == "device" or not sorting.n_units:
+        train_x = full_features[train_ixs].to(device=device)
+    elif refinement_cfg.spike_storage == "cpu":
+        assert full_features.device.type == "cpu"
+        train_x = full_features[train_ixs]
+    else:
+        panic(refinement_cfg.spike_storage)
 
     if not sorting.n_units:
         logger.dartsortdebug("Initializing GMM with kmeans++")
@@ -4463,6 +4637,11 @@ def get_truncated_datasets(
         _t_CmoCooinvx = kmeanspp_res.CmoCooinvx
         _t_noise_logliks = kmeanspp_res.noise_logliks
         del kmeanspp_res
+        if refinement_cfg.spike_storage == "cpu" and device.type != "cpu":
+            _t_xt = _pinned_copy(_t_xt)
+            _t_whitenedx = _pinned_copy(_t_whitenedx)
+            _t_CmoCooinvx = _pinned_copy(_t_CmoCooinvx)
+            _t_noise_logliks = _pinned_copy(_t_noise_logliks)
         cleanup_and_log_gpu_usage(computation_cfg=None, message="kmeanspp", dev=device)
     else:
         _t_xt = _t_whitenedx = _t_CmoCooinvx = _t_noise_logliks = None
@@ -4504,6 +4683,7 @@ def get_truncated_datasets(
         labels=labels[train_ixs].to(device=device),
         x=train_x,
         duties=train_duties,
+        sample_weights=None if train_weights is None else train_weights.to(device=device),
         neighborhoods=train_neighbs,
         neighb_cov=neighb_cov,
         neighb_overlap=refinement_cfg.neighb_overlap,
@@ -4516,6 +4696,10 @@ def get_truncated_datasets(
         noise_logliks=_t_noise_logliks,
     )
     del train_x, _t_xt, _t_whitenedx, _t_CmoCooinvx, _t_noise_logliks
+    on_device = train_data.storage_device == train_data.device
+    assert on_device == (
+        refinement_cfg.spike_storage == "device" or device.type == "cpu"
+    )
     assert torch.equal(full_neighbs.b.neighborhoods, train_neighbs.b.neighborhoods)
     val_n_candidates = min(
         sorting.n_units, max(refinement_cfg.merge_group_size, n_candidates)
@@ -4528,6 +4712,13 @@ def get_truncated_datasets(
             val_duties = None
         else:
             val_duties = duties[val_ixs].to(device=device)
+        if refinement_cfg.spike_storage == "device":
+            val_x = full_features[val_ixs].to(device=device)
+        elif refinement_cfg.spike_storage == "cpu":
+            assert full_features.device.type == "cpu"
+            val_x = full_features[val_ixs]
+        else:
+            panic(refinement_cfg.spike_storage)
         val_data = TruncatedSpikeData.initialize_from_labels(
             n_candidates=val_n_candidates,
             n_search=n_search,
@@ -4538,14 +4729,20 @@ def get_truncated_datasets(
             dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
             labels=labels[val_ixs].to(device=device),
             explore_neighb_steps=0,
-            x=full_features[val_ixs].to(device=device),
+            x=val_x,
             neighborhoods=val_neighbs,
             duties=val_duties,
+            sample_weights=None if val_weights is None else val_weights.to(device=device),
             neighb_cov=neighb_cov,
             seed=rg,
             batch_size=refinement_cfg.eval_batch_size,
             allow_gaps=True,
             score_only=True,
+        )
+        del val_x
+        on_device = val_data.storage_device == val_data.device
+        assert on_device == (
+            refinement_cfg.spike_storage == "device" or device.type == "cpu"
         )
         assert torch.equal(
             val_data.neighborhoods.b.neighborhoods,
@@ -4592,6 +4789,8 @@ def get_full_neighborhood_data(
     Tensor | slice | None,
     SpikeNeighborhoods | None,
     Tensor,
+    Tensor | None,
+    Tensor | None,
 ]:
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -4629,16 +4828,37 @@ def get_full_neighborhood_data(
     full_neighborhoods = full_neighborhoods.to(device=device)
 
     # data splits: -1 full, 0 train, 1 val. stratify by unit, or by neighborhood if no labels (for kmeanspp)
-    if sorting.labels is not None and sorting.labels.max() >= 0:
+    labeled = sorting.labels is not None and sorting.labels.max() >= 0
+    if labeled:
         groups = sorting.labels
     else:
         groups = full_neighborhoods.b.neighborhood_ids.numpy(force=True)
+    sampling_cfg = refinement_cfg.sampling_cfg
+    bucket_sampling = (
+        labeled and n_fit < len(sorting) and sampling_cfg.bucket_sampling_power > 0
+    )
+    if bucket_sampling:
+        _, counts, _ = pos_int_unique_and_counts(groups)
+        fit_prop = bucket_sampling_rates(
+            counts,
+            n_fit=max(1, round(fit_prop_of_total * counts.sum())),
+            power=sampling_cfg.bucket_sampling_power,
+            max_reweighting=sampling_cfg.bucket_sampling_max_reweighting,
+        )
+    else:
+        fit_prop = fit_prop_of_total
     split_mask = _ensure_split_covers_all(
-        groups, rg=rg, fit_prop=fit_prop_of_total, train_prop=train_prop
+        groups, rg=rg, fit_prop=fit_prop, train_prop=train_prop
     )
 
     train_indices = torch.asarray(np.flatnonzero(split_mask == 0))
     val_indices = torch.asarray(np.flatnonzero(split_mask == 1))
+    if bucket_sampling:
+        train_weights, val_weights = _bucket_sample_weights(
+            groups, split_mask, train_indices.numpy(), val_indices.numpy()
+        )
+    else:
+        train_weights = val_weights = None
 
     train_neighborhoods = full_neighborhoods.slice(train_indices)
     if val_indices is None:
@@ -4655,18 +4875,71 @@ def get_full_neighborhood_data(
         val_indices,
         val_neighborhoods,
         prgeom,
+        train_weights,
+        val_weights,
     )
+
+
+def _bucket_sample_weights(
+    groups: np.ndarray,
+    split_mask: np.ndarray,
+    train_indices: np.ndarray,
+    val_indices: np.ndarray,
+) -> tuple[Tensor, Tensor]:
+    grouped = groups >= 0
+    ids, counts = np.unique(groups[grouped], return_counts=True)
+    fit = split_mask >= 0
+    assert grouped[fit].all()
+    fit_counts = np.bincount(np.searchsorted(ids, groups[fit]), minlength=ids.size)
+    assert (fit_counts > 0).all()
+    group_weights = (fit_counts.sum() / counts.sum()) / (fit_counts / counts)
+    train_weights = group_weights[np.searchsorted(ids, groups[train_indices])]
+    val_weights = group_weights[np.searchsorted(ids, groups[val_indices])]
+    return (
+        torch.asarray(train_weights, dtype=torch.float),
+        torch.asarray(val_weights, dtype=torch.float),
+    )
+
+
+def bucket_sampling_rates(
+    counts: np.ndarray, *, n_fit: int, power: float, max_reweighting: float
+) -> np.ndarray:
+    assert counts.ndim == 1 and (counts > 0).all()
+    assert power >= 0 and max_reweighting >= 1
+    total = counts.sum()
+    assert 0 < n_fit <= total
+    uniform = n_fit / total
+    if power == 0:
+        return np.full(counts.shape, uniform)
+    lo_rate = uniform / max_reweighting
+    hi_rate = min(1.0, uniform * max_reweighting)
+    shape = counts.astype(np.float64) ** -power
+
+    def rates_at(log_scale: float) -> np.ndarray:
+        return np.clip(np.exp(log_scale) * shape, lo_rate, hi_rate)
+
+    lo = np.log(lo_rate) - np.log(shape.max())
+    hi = np.log(hi_rate) - np.log(shape.min())
+    for _ in range(100):
+        mid = 0.5 * (lo + hi)
+        if (counts * rates_at(mid)).sum() > n_fit:
+            hi = mid
+        else:
+            lo = mid
+    return rates_at(lo)
 
 
 def _ensure_split_covers_all(
     groups: np.ndarray,
     *,
     rg: np.random.Generator,
-    fit_prop: float,
+    fit_prop: float | np.ndarray,
     train_prop: float,
 ) -> np.ndarray:
     """stratified sampling for train set, -1 full, 0 train, 1 val"""
     _, counts, n_ungrouped = pos_int_unique_and_counts(groups)
+    if isinstance(fit_prop, np.ndarray):
+        assert fit_prop.shape == counts.shape
     fit_counts = np.minimum(counts, np.ceil(counts * fit_prop).astype(np.int64))
     assert fit_counts.dtype.kind == "i"
     train_counts = np.maximum(train_prop * fit_counts, 1).astype(np.int64)
@@ -4800,18 +5073,11 @@ def instantiate_and_bootstrap_tmm(
     )
 
 
-@cfg_dataclass
-class KmeansppSamplingParams:
-    sampling: KmeansppSampling
-    alpha: float
-    z0: float
-    min_count: int
-
-
 @databag
 class TruncatedKmeansppResult:
     full_labels: Tensor
     centroid_ixs: Tensor
+    phase_centroid_counts: tuple[int, int, int]
 
     # data smuggling
     xt: Tensor
@@ -4820,304 +5086,20 @@ class TruncatedKmeansppResult:
     noise_logliks: Tensor
 
 
-def truncated_kmeanspp(
-    *,
-    x: Tensor,
-    train_x: Tensor,
-    neighborhoods: SpikeNeighborhoods,
-    neighb_cov: NeighborhoodCovariance,
-    train_ixs: Tensor | slice,
-    train_neighbs: SpikeNeighborhoods,
-    batch_size: int,
-    seed: np.random.Generator | int,
-    metric: ComponentDistanceMetric,
-    scale_dist_args: tuple[float, float, float],
-    min_count: int,
-    cfg: KmeansppConfig,
-) -> TruncatedKmeansppResult:
-    """Neighborhood-sparsity-aware kmeans++"""
-    if metric == "euc":
-        pass
-    elif metric == "cosine" or metric == "normeuc" or metric == "scaled_normeuc":
-        assert cfg.sampling == "d2" and cfg.stopping != "significance"
-    else:
-        panic(metric)
-    scale_std, scale_min, scale_max = scale_dist_args
-    base_rg = np.random.default_rng(seed)
-    max_components = cfg.max_components_per_channel * neighb_cov.n_channels
-    max_k = min(train_x.shape[0], max_components)
-    feat_rank = neighb_cov.feat_rank
-    n_channels = neighb_cov.n_channels
-    neighb_chans = neighborhoods.b.neighborhoods
-    max_nc_obs = neighb_chans.shape[1]
-    assert torch.equal(neighb_chans, train_neighbs.b.neighborhoods)
-    if isinstance(train_ixs, slice):
-        pass
-    elif torch.is_tensor(train_ixs):
-        assert train_x.shape[0] == train_ixs.shape[0]
-    else:
-        panic(train_ixs)
-
-    xt, whitenedx, CmoCooinvx, noise_logliks = _whiten_impute_and_noise_score(
-        x=train_x, neighborhoods=train_neighbs, neighb_cov=neighb_cov
-    )
-
-    neighb_rel_inds = _neighb_relative_index(neighb_chans, n_channels)
-    obs = (neighb_rel_inds < max_nc_obs).to(whitenedx)
-    if cfg.neighb_overlap is None:
-        neighb_adj = neighb_cov.b.neighb_adj
-    else:
-        neighb_adj = neighborhoods.adjacency(cfg.neighb_overlap).to(whitenedx.device)
-    visible = torch.logical_and(neighb_adj > 0, obs @ obs.T > 0)
-    del obs
-
-    train_neighb_ids = train_neighbs.b.neighborhood_ids
-    if cfg.strategy == "global":
-        centroid_ixs = _kmeanspp_best_of_tries(
-            X=whitenedx,
-            Xneighbixs=train_neighb_ids,
-            base_rg=base_rg,
-            max_k=max_k,
-            cfg=cfg,
-            neighborhoods=neighb_chans,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-            min_count=min_count,
-        )
-    elif cfg.strategy == "stitch":
-        centroid_ixs = _kmeanspp_stitch(
-            X=whitenedx,
-            Xneighbixs=train_neighb_ids,
-            base_rg=base_rg,
-            max_k=max_components,
-            cfg=cfg,
-            neighborhoods=neighb_chans,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-            min_count=min_count,
-        )
-    else:
-        panic(cfg.strategy)
-    n_centroids = centroid_ixs.shape[0]
-
-    # in batches, label each x by its best centroid
-    device = whitenedx.device
-    neighb_ids = neighborhoods.b.neighborhood_ids
-    cent_neighbs = train_neighbs.b.neighborhood_ids[centroid_ixs]
-    cent_rel_inds = neighb_rel_inds[cent_neighbs]
-    cent = whitenedx[centroid_ixs].view(n_centroids, feat_rank, max_nc_obs)
-    cent = F.pad(cent, (0, 1))
-    cent_visible = visible[:, cent_neighbs]
-
-    full_labels = torch.full(x.shape[:1], -1, dtype=torch.long, device=device)
-    order, indptr, _ = sort_to_csr(neighb_ids, neighborhoods.n_neighborhoods)
-    indptr_list = indptr.tolist()
-    for ni in range(neighborhoods.n_neighborhoods):
-        members = order[indptr_list[ni] : indptr_list[ni + 1]]
-        if not members.numel():
-            continue
-
-        (cand,) = cent_visible[ni].nonzero(as_tuple=True)
-        if not cand.numel():
-            # kmeans++ ran out of components before covering this neighborhood
-            continue
-        rel_inds = cent_rel_inds[:, neighb_chans[ni]]
-        shared = rel_inds < max_nc_obs
-        n_shared = shared.sum(dim=1)
-        cvals = torch.take_along_dim(cent[cand], rel_inds[cand][:, None, :], dim=2)
-        cvals = cvals.reshape(cand.shape[0], feat_rank * max_nc_obs)
-        cmask = shared[cand].to(cvals)
-        cnormsq = cvals.square().sum(dim=1)
-        denom = n_shared[cand].mul(feat_rank).to(cvals)
-
-        for bs in range(0, members.numel(), batch_size):
-            bix = members[bs : bs + batch_size]
-            xb = x[bix.to(x.device)].to(device)
-            wx, _ = _whiten_and_noise_score_batch(
-                x=xb, neighb_ids=neighb_ids[bix], neighb_cov=neighb_cov
-            )
-            # foil, but only on overlap!
-            xsq = wx.view(bix.shape[0], feat_rank, max_nc_obs).square().sum(dim=1)
-            if metric == "euc":
-                d = xsq @ cmask.T
-                d = d.addmm_(wx, cvals.T, alpha=-2.0)
-                d = d.add_(cnormsq).div_(denom)
-            elif metric == "cosine":
-                d = cosine_cdist_from_dots(wx @ cvals.T, xsq @ cmask.T, cnormsq)
-            elif metric == "normeuc":
-                d = scaled_normeuc_cdist_from_dots(
-                    wx @ cvals.T, xsq @ cmask.T, cnormsq, scale_var=0.0
-                )
-            elif metric == "scaled_normeuc":
-                d = scaled_normeuc_cdist_from_dots(
-                    wx @ cvals.T,
-                    xsq @ cmask.T,
-                    cnormsq,
-                    scale_var=scale_std**2,
-                    scale_min=scale_min,
-                    scale_max=scale_max,
-                )
-            else:
-                panic(metric)
-            full_labels[bix] = cand[d.argmin(dim=1)]
-
-    n_unlabeled = (full_labels < 0).sum().item()
-    if n_unlabeled:
-        logger.warning(f"kmeans++ left {n_unlabeled} spikes unlabeled.")
-
-    return TruncatedKmeansppResult(
-        full_labels=full_labels,
-        centroid_ixs=centroid_ixs,
-        xt=xt,
-        whitenedx=whitenedx,
-        CmoCooinvx=CmoCooinvx,
-        noise_logliks=noise_logliks,
-    )
+@databag
+class NeighborhoodCenters:
+    values: Tensor
+    shared: Tensor
+    normsq: Tensor
+    n_feats: Tensor
 
 
-def _kmeanspp_best_of_tries(
-    *,
-    X: Tensor,
-    Xneighbixs: Tensor,
-    base_rg: np.random.Generator,
-    max_k: int,
-    cfg: KmeansppConfig,
-    neighborhoods: Tensor,
-    neighb_rel_inds: Tensor,
-    visible: Tensor,
-    feat_rank: int,
-    metric: ComponentDistanceMetric,
-    scale_dist_args: tuple[float, float, float],
-    min_count: int,
-    first_neighb: int | None = None,
-) -> Tensor:
-    centroid_ixs: Tensor | None = None
-    best_score = torch.inf
-    best_phi = torch.inf
-    centroid_cost = min_count * cfg.stop_dist**2 / X.shape[0]
-    if logger.isEnabledFor(DARTSORTDEBUG):
-        pbar = progrange(cfg.tries, desc="kmeans++ tries")
-    else:
-        pbar = None
-    for _ in range(cfg.tries) if pbar is None else pbar:
-        try_ixs, phi = _truncated_kmeanspp_inner(
-            X=X,
-            Xneighbixs=Xneighbixs,
-            base_rg=base_rg,
-            max_k=max_k,
-            cfg=cfg,
-            neighborhoods=neighborhoods,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-            min_count=min_count,
-            first_neighb=first_neighb,
-        )
-        if cfg.selection == "phi":
-            score = phi
-        elif cfg.selection == "marginal":
-            score = phi + centroid_cost * try_ixs.shape[0]
-        else:
-            panic(cfg.selection)
-        logger.dartsortdebug(
-            f"kmeans++ try: k={try_ixs.shape[0]} phi={phi:.5f} score={score:.5f}"
-        )
-        if centroid_ixs is None or score < best_score:
-            if pbar is not None:
-                pbar.set_description(
-                    f"best: k={try_ixs.shape[0]} phi={phi:.4f} {cfg.selection}={score:.4f}"
-                )
-            centroid_ixs = try_ixs
-            best_score = score
-            best_phi = phi
-    assert centroid_ixs is not None
-    logger.dartsortdebug(
-        f"kmeans++: {centroid_ixs.shape[0]} centroids at dist={math.sqrt(best_phi):0.3f}, "
-        f"best of {cfg.tries} by {cfg.selection} (centroid cost {centroid_cost:0.3g} "
-        f"over {X.shape[0]} train spikes)."
-    )
-    return centroid_ixs
+class TruncatedKmeanspp:
+    """Neighborhood-sparsity-aware kmeans++
 
+    Sparse flavor of kmeans++ which has some strategies for picking k
 
-def _kmeanspp_stitch(
-    *,
-    X: Tensor,
-    Xneighbixs: Tensor,
-    base_rg: np.random.Generator,
-    max_k: int,
-    cfg: KmeansppConfig,
-    neighborhoods: Tensor,
-    neighb_rel_inds: Tensor,
-    visible: Tensor,
-    feat_rank: int,
-    metric: ComponentDistanceMetric,
-    scale_dist_args: tuple[float, float, float],
-    min_count: int,
-) -> Tensor:
-    n_neighb = visible.shape[0]
-    order, indptr, counts = sort_to_csr(Xneighbixs, n_neighb)
-    (present,) = (counts > 0).nonzero(as_tuple=True)
-    window_rgs = base_rg.spawn(present.numel())
-    accepted = []
-    for nj, rg in zip(present.tolist(), window_rgs, strict=True):
-        (window_neighbs,) = visible[nj].nonzero(as_tuple=True)
-        window = csr_members_ordered(order, indptr, counts, window_neighbs)
-        window_ixs = _kmeanspp_best_of_tries(
-            X=X[window],
-            Xneighbixs=Xneighbixs[window],
-            base_rg=rg,
-            max_k=min(window.numel(), max_k),
-            cfg=cfg,
-            neighborhoods=neighborhoods,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-            min_count=min_count,
-            first_neighb=nj,
-        )
-        centroids = window[window_ixs]
-        accepted.append(centroids[Xneighbixs[centroids] == nj])
-    centroid_ixs = torch.cat(accepted)
-    assert centroid_ixs.unique().numel() == centroid_ixs.numel()
-    covered = visible[:, Xneighbixs[centroid_ixs]].any(dim=1)
-    assert covered[present].all(), (
-        f"stitch left {(~covered[present]).sum()} neighborhoods uncovered"
-    )
-    logger.dartsortdebug(
-        f"kmeans++ stitch: {centroid_ixs.numel()} centroids from {present.numel()} windows."
-    )
-    return centroid_ixs
-
-
-def _truncated_kmeanspp_inner(
-    *,
-    X: Tensor,
-    Xneighbixs: Tensor,
-    base_rg: np.random.Generator,
-    max_k: int,
-    cfg: KmeansppConfig,
-    neighborhoods: Tensor,
-    neighb_rel_inds: Tensor,
-    visible: Tensor,
-    feat_rank: int,
-    metric: ComponentDistanceMetric,
-    scale_dist_args: tuple[float, float, float],
-    min_count: int,
-    first_neighb: int | None = None,
-) -> tuple[Tensor, float]:
-    """Sparse flavor of kmeans++ which has some strategies for picking k
-
-    3 stages:
+    3 stages per try:
         - 1: make sure neighbs are covered
         - 2: do usual kmeans++ until a simple coverage criterion is hit
         - 3: check stopping criteria at each iteration
@@ -5137,218 +5119,390 @@ def _truncated_kmeanspp_inner(
     [5] Bamas et al. Analyzing D^alpha seeding for k-means. ICML 2024.
         https://arxiv.org/abs/2310.13474
     """
-    n = X.shape[0]
-    gen = spawn_torch_rg(base_rg, device=X.device)
-    max_nc_obs = neighborhoods.shape[1]
-    n_neighb = visible.shape[0]
-    assert X.shape == (n, feat_rank * max_nc_obs)
-    assert cfg.alpha > 0
-    assert cfg.stopping != "significance" or cfg.sampling == "significance"
-    assert cfg.sampling != "significance" or cfg.alpha == 2.0
-    sampling_params = KmeansppSamplingParams(
-        sampling=cfg.sampling, alpha=cfg.alpha, z0=cfg.z0, min_count=min_count
-    )
 
-    # Initialize
-    train_centroid_ixs = X.new_full((max_k,), n, dtype=torch.long)
-    distsq = X.new_full((n,), torch.inf)
-    dof = X.new_zeros((n,))
-    order, indptr, counts = sort_to_csr(Xneighbixs, n_neighb)
+    def __init__(
+        self,
+        *,
+        X: Tensor,
+        Xneighbixs: Tensor,
+        neighborhoods: Tensor,
+        neighb_rel_inds: Tensor,
+        visible: Tensor,
+        feat_rank: int,
+        max_k: int,
+        metric: ComponentDistanceMetric,
+        scale_dist_args: tuple[float, float, float],
+        min_count: float,
+        cfg: KmeansppConfig,
+    ):
+        self.X = X
+        self.Xneighbixs = Xneighbixs
+        self.neighborhoods = neighborhoods
+        self.neighb_rel_inds = neighb_rel_inds
+        self.visible = visible
+        self.feat_rank = feat_rank
+        self.max_k = max_k
+        self.metric = metric
+        self.scale_dist_args = scale_dist_args
+        self.min_count = min_count
+        self.cfg = cfg
+        self.n_neighb = visible.shape[0]
+        self.order, self.indptr, self.counts = sort_to_csr(Xneighbixs, self.n_neighb)
 
-    buf = torch.empty_like(distsq)
-    wbuf = torch.empty_like(distsq)
-    stop_distsq = cfg.stop_dist**2
-    k = 0
-
-    # -- phase 1: cover neighborhoods so dists are finite
-    covered = counts == 0
-    if first_neighb is not None:
-        assert counts[first_neighb] > 0
-    while k < max_k and not covered.all():
-        if k == 0 and first_neighb is not None:
-            nj = first_neighb
+    @classmethod
+    def fit_predict(
+        cls,
+        *,
+        x: Tensor,
+        train_x: Tensor,
+        neighborhoods: SpikeNeighborhoods,
+        neighb_cov: NeighborhoodCovariance,
+        train_ixs: Tensor | slice,
+        train_neighbs: SpikeNeighborhoods,
+        batch_size: int,
+        seed: np.random.Generator | int,
+        metric: ComponentDistanceMetric,
+        scale_dist_args: tuple[float, float, float],
+        min_count: float,
+        cfg: KmeansppConfig,
+    ) -> TruncatedKmeansppResult:
+        if metric not in ("euc", "cosine", "normeuc", "scaled_normeuc"):
+            panic(metric)
+        base_rg = np.random.default_rng(seed)
+        max_k = min(
+            train_x.shape[0], cfg.max_components_per_channel * neighb_cov.n_channels
+        )
+        n_channels = neighb_cov.n_channels
+        neighb_chans = neighborhoods.b.neighborhoods
+        max_nc_obs = neighb_chans.shape[1]
+        assert torch.equal(neighb_chans, train_neighbs.b.neighborhoods)
+        if isinstance(train_ixs, slice):
+            pass
+        elif torch.is_tensor(train_ixs):
+            assert train_x.shape[0] == train_ixs.shape[0]
         else:
-            (uncov,) = covered.logical_not().nonzero(as_tuple=True)
-            nj = uncov[torch.multinomial(counts[uncov].to(X), 1, generator=gen)[0]]
-        j = torch.rand((), device=X.device, generator=gen).mul_(counts[nj]).long()
-        train_centroid_ixs[k] = order[indptr[nj] + j]
-        ix, d, n_feats = _truncated_kmeanspp_propose(
-            X=X,
-            centroid_ix=train_centroid_ixs[k],
-            Xneighbixs=Xneighbixs,
-            neighborhoods=neighborhoods,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            order=order,
-            indptr=indptr,
-            counts=counts,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-        )
-        if d is not None:
-            assert n_feats is not None
-            _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
-        covered.logical_or_(visible[Xneighbixs[train_centroid_ixs[k]]])
-        k += 1
+            panic(train_ixs)
 
-    # -- significance: sample by excess over z0, until no neighborhood has enough
-    while cfg.stopping == "significance" and k < max_k:
-        w = _truncated_kmeanspp_sampling_weights(
-            sampling_params, distsq, dof, Xneighbixs, n_neighb, out=wbuf
+        xt, whitenedx, CmoCooinvx, noise_logliks = _whiten_impute_and_noise_score(
+            x=train_x, neighborhoods=train_neighbs, neighb_cov=neighb_cov
         )
-        if w is None:
-            break
-        train_centroid_ixs[k] = _one_gumbel_nolog(w, gen, buf)
-        ix, d, n_feats = _truncated_kmeanspp_propose(
-            X=X,
-            centroid_ix=train_centroid_ixs[k],
-            Xneighbixs=Xneighbixs,
-            neighborhoods=neighborhoods,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            order=order,
-            indptr=indptr,
-            counts=counts,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-        )
-        assert d is not None and n_feats is not None
-        _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
-        k += 1
 
-    # -- phase 2: regular kmeanspp until well covered neighborhoods
-    while cfg.stopping != "significance" and k < max_k:
-        mass = _truncated_kmeanspp_uncovered_mass(
-            distsq, Xneighbixs, n_neighb, stop_distsq, buf
-        )
-        (unsat,) = (mass >= min_count).nonzero(as_tuple=True)
-        if not unsat.numel():
-            break
-        w = _truncated_kmeanspp_sampling_weights(
-            sampling_params, distsq, dof, Xneighbixs, n_neighb, out=wbuf
-        )
-        if w is None:
-            break
-        train_centroid_ixs[k] = _one_gumbel_nolog(w, gen, buf)
-        ix, d, n_feats = _truncated_kmeanspp_propose(
-            X=X,
-            centroid_ix=train_centroid_ixs[k],
-            Xneighbixs=Xneighbixs,
-            neighborhoods=neighborhoods,
-            neighb_rel_inds=neighb_rel_inds,
-            visible=visible,
-            order=order,
-            indptr=indptr,
-            counts=counts,
-            feat_rank=feat_rank,
-            metric=metric,
-            scale_dist_args=scale_dist_args,
-        )
-        if d is not None:
-            assert n_feats is not None
-            _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
-        k += 1
-
-    # -- phase 3: with stopping and other criteria
-    floor = min_count * stop_distsq
-    centroid_budget = floor / n
-    fails = 0
-    phase3_enabled = cfg.stopping != "significance" and (
-        cfg.stopping != "patience" or cfg.patience > 0
-    )
-    while phase3_enabled and k < max_k:
-        best_gain, best = -1.0, None
-        w = _truncated_kmeanspp_sampling_weights(
-            sampling_params, distsq, dof, Xneighbixs, n_neighb, out=wbuf
-        )
-        if w is None:
-            break
-        # TODO remove greedy
-        # TODO maybe remove significance and alpha
-        # TODO parallel proposals for patience: many proposals at once, take the first that passes
-        # TODO proposals are entirely independent for neighborhoods that don't overlap, could segment the adjacency into a checkerboard...
-        for _ in range(cfg.greedy_proposals):
-            cix = _one_gumbel_nolog(w, gen, buf)
-            ix, d, n_feats = _truncated_kmeanspp_propose(
-                X=X,
-                centroid_ix=cix,
-                Xneighbixs=Xneighbixs,
-                neighborhoods=neighborhoods,
-                neighb_rel_inds=neighb_rel_inds,
-                visible=visible,
-                order=order,
-                indptr=indptr,
-                counts=counts,
-                feat_rank=feat_rank,
-                metric=metric,
-                scale_dist_args=scale_dist_args,
+        neighb_rel_inds = _neighb_relative_index(neighb_chans, n_channels)
+        obs = (neighb_rel_inds < max_nc_obs).to(whitenedx)
+        if cfg.neighb_overlap is None:
+            neighb_adj = neighb_cov.b.neighb_adj
+        else:
+            neighb_adj = neighborhoods.adjacency(cfg.neighb_overlap).to(
+                whitenedx.device
             )
-            if d is None:
-                continue
-            assert n_feats is not None
-            gain = distsq[ix].sub_(d).clamp_(min=0.0).sum().item()
-            if gain > best_gain:
-                best_gain, best = gain, (cix, ix, d, n_feats)
-        if cfg.stopping in ("patience", "patientdpmeanspp"):
-            if best is None or best_gain < floor:
-                fails += 1
-                if fails >= cfg.patience:
-                    break
-                continue
-            fails = 0
-        if cfg.stopping in ("dpmeanspp", "patientdpmeanspp"):
-            if best is None:
-                break
-            if distsq.mean().item() <= centroid_budget * k * (math.log2(k) + 2):
-                break
-        if best is None:
-            panic(cfg.stopping)
-        train_centroid_ixs[k], ix, d, n_feats = best
-        _truncated_kmeanspp_commit_(distsq, dof, ix, d, n_feats)
-        k += 1
+        visible = torch.logical_and(neighb_adj > 0, obs @ obs.T > 0)
+        del obs
 
-    phi = distsq.mean().item()
-    if not math.isfinite(phi):
-        logger.warning(
-            f"kmeans++ hit {max_k=}, leaving {distsq.isinf().sum().item()} uncovered"
+        if cfg.min_fraction is not None:
+            min_count = cfg.min_fraction * train_x.shape[0]
+        kmeanspp = cls(
+            X=whitenedx,
+            Xneighbixs=train_neighbs.b.neighborhood_ids,
+            neighborhoods=neighb_chans,
+            neighb_rel_inds=neighb_rel_inds,
+            visible=visible,
+            feat_rank=neighb_cov.feat_rank,
+            max_k=max_k,
+            metric=metric,
+            scale_dist_args=scale_dist_args,
+            min_count=min_count,
+            cfg=cfg,
+        )
+        centroid_ixs, phase_centroid_counts = kmeanspp.best_of_tries(base_rg)
+        full_labels = kmeanspp.label(
+            x=x,
+            neighborhoods=neighborhoods,
+            neighb_cov=neighb_cov,
+            centroid_ixs=centroid_ixs,
+            batch_size=batch_size,
         )
 
-    return train_centroid_ixs[:k], phi
+        return TruncatedKmeansppResult(
+            full_labels=full_labels,
+            centroid_ixs=centroid_ixs,
+            phase_centroid_counts=phase_centroid_counts,
+            xt=xt,
+            whitenedx=whitenedx,
+            CmoCooinvx=CmoCooinvx,
+            noise_logliks=noise_logliks,
+        )
+
+    def label(
+        self,
+        *,
+        x: Tensor,
+        neighborhoods: SpikeNeighborhoods,
+        neighb_cov: NeighborhoodCovariance,
+        centroid_ixs: Tensor,
+        batch_size: int,
+    ) -> Tensor:
+        """In batches, label each x by its best centroid"""
+        max_nc_obs = self.neighborhoods.shape[1]
+        device = self.X.device
+        neighb_ids = neighborhoods.b.neighborhood_ids
+        cent_visible = self.visible[:, self.Xneighbixs[centroid_ixs]]
+
+        full_labels = torch.full(x.shape[:1], -1, dtype=torch.long, device=device)
+        order, indptr, _ = sort_to_csr(neighb_ids, neighborhoods.n_neighborhoods)
+        indptr_list = indptr.tolist()
+        for ni in range(neighborhoods.n_neighborhoods):
+            members = order[indptr_list[ni] : indptr_list[ni + 1]]
+            if not members.numel():
+                continue
+
+            (cand,) = cent_visible[ni].nonzero(as_tuple=True)
+            if not cand.numel():
+                # kmeans++ ran out of components before covering this neighborhood
+                continue
+            centers = self.centers_in_neighborhood(ni, centroid_ixs[cand])
+
+            for bs in range(0, members.numel(), batch_size):
+                bix = members[bs : bs + batch_size]
+                xb = x[bix.to(x.device)].to(device)
+                wx, _ = _whiten_and_noise_score_batch(
+                    x=xb, neighb_ids=neighb_ids[bix], neighb_cov=neighb_cov
+                )
+                xsq = wx.view(bix.shape[0], self.feat_rank, max_nc_obs)
+                xsq = xsq.square().sum(dim=1)
+                d = self.center_dists(wx, xsq, centers)
+                full_labels[bix] = cand[d.argmin(dim=1)]
+
+        n_unlabeled = (full_labels < 0).sum().item()
+        if n_unlabeled:
+            logger.warning(f"kmeans++ left {n_unlabeled} spikes unlabeled.")
+        return full_labels
+
+    def centers_in_neighborhood(
+        self, ni: int, center_ixs: Tensor
+    ) -> NeighborhoodCenters:
+        max_nc_obs = self.neighborhoods.shape[1]
+        n_centers = center_ixs.shape[0]
+        rel_inds = self.neighb_rel_inds[self.Xneighbixs[center_ixs]]
+        rel_inds = rel_inds[:, self.neighborhoods[ni]]
+        shared = rel_inds < max_nc_obs
+        cent = self.X[center_ixs].view(n_centers, self.feat_rank, max_nc_obs)
+        cent = F.pad(cent, (0, 1))
+        values = torch.take_along_dim(cent, rel_inds[:, None, :], dim=2)
+        values = values.reshape(n_centers, self.feat_rank * max_nc_obs)
+        return NeighborhoodCenters(
+            values=values,
+            shared=shared.to(values),
+            normsq=values.square().sum(dim=1),
+            n_feats=shared.sum(dim=1).mul(self.feat_rank).to(values),
+        )
+
+    def center_dists(
+        self, wx: Tensor, xsq: Tensor, centers: NeighborhoodCenters
+    ) -> Tensor:
+        """(spikes, centers) distances of whitened spikes with per-channel norms xsq"""
+        scale_std, scale_min, scale_max = self.scale_dist_args
+        # foil, but only on overlap!
+        if self.metric == "euc":
+            d = xsq @ centers.shared.T
+            d = d.addmm_(wx, centers.values.T, alpha=-2.0)
+            return d.add_(centers.normsq).div_(centers.n_feats)
+        elif self.metric == "cosine":
+            return cosine_cdist_from_dots(
+                wx @ centers.values.T, xsq @ centers.shared.T, centers.normsq
+            )
+        elif self.metric == "normeuc":
+            return scaled_normeuc_cdist_from_dots(
+                wx @ centers.values.T,
+                xsq @ centers.shared.T,
+                centers.normsq,
+                scale_var=0.0,
+            )
+        elif self.metric == "scaled_normeuc":
+            return scaled_normeuc_cdist_from_dots(
+                wx @ centers.values.T,
+                xsq @ centers.shared.T,
+                centers.normsq,
+                scale_var=scale_std**2,
+                scale_min=scale_min,
+                scale_max=scale_max,
+            )
+        else:
+            panic(self.metric)
+
+    def best_of_tries(
+        self, base_rg: np.random.Generator
+    ) -> tuple[Tensor, tuple[int, int, int]]:
+        cfg = self.cfg
+        n = self.X.shape[0]
+        centroid_ixs: Tensor | None = None
+        phase_centroid_counts: tuple[int, int, int] | None = None
+        best_score = torch.inf
+        best_phi = torch.inf
+        centroid_cost = self.min_count * cfg.stop_dist**2 / n
+        if logger.isEnabledFor(DARTSORTDEBUG):
+            pbar = progrange(cfg.tries, desc="kmeans++ tries")
+        else:
+            pbar = None
+        for _ in range(cfg.tries) if pbar is None else pbar:
+            gen = spawn_torch_rg(base_rg, device=self.X.device)
+            try_ixs, phi, try_phase_centroid_counts = self.one_try(gen)
+            if cfg.selection == "phi":
+                score = phi
+            elif cfg.selection == "marginal":
+                score = phi + centroid_cost * try_ixs.shape[0]
+            else:
+                panic(cfg.selection)
+            logger.dartsortdebug(
+                f"kmeans++ try: k={try_ixs.shape[0]} by phase {try_phase_centroid_counts} "
+                f"phi={phi:.5f} score={score:.5f}"
+            )
+            if centroid_ixs is None or score < best_score:
+                if pbar is not None:
+                    pbar.set_description(
+                        f"best: k={try_ixs.shape[0]} phi={phi:.4f} {cfg.selection}={score:.4f}"
+                    )
+                centroid_ixs = try_ixs
+                phase_centroid_counts = try_phase_centroid_counts
+                best_score = score
+                best_phi = phi
+        assert centroid_ixs is not None and phase_centroid_counts is not None
+        logger.dartsortdebug(
+            f"kmeans++: {centroid_ixs.shape[0]} centroids (phases: {phase_centroid_counts}) "
+            f"at dist={math.sqrt(best_phi):0.3f}, best of {cfg.tries} by {cfg.selection} "
+            f"(centroid cost {centroid_cost:0.3g} over {n} train spikes)."
+        )
+        return centroid_ixs, phase_centroid_counts
+
+    def one_try(
+        self, gen: torch.Generator
+    ) -> tuple[Tensor, float, tuple[int, int, int]]:
+        cfg = self.cfg
+        n = self.X.shape[0]
+        max_nc_obs = self.neighborhoods.shape[1]
+        assert self.X.shape == (n, self.feat_rank * max_nc_obs)
+        assert cfg.alpha > 0
+
+        # Initialize
+        train_centroid_ixs = self.X.new_full((self.max_k,), n, dtype=torch.long)
+        distsq = self.X.new_full((n,), torch.inf)
+
+        buf = torch.empty_like(distsq)
+        wbuf = torch.empty_like(distsq)
+        stop_distsq = cfg.stop_dist**2
+        k = 0
+
+        # -- phase 1: cover neighborhoods so dists are finite
+        covered = self.counts == 0
+        while k < self.max_k and not covered.all():
+            (uncov,) = covered.logical_not().nonzero(as_tuple=True)
+            nj = uncov[
+                torch.multinomial(self.counts[uncov].to(self.X), 1, generator=gen)[0]
+            ]
+            j = torch.rand((), device=self.X.device, generator=gen)
+            j = j.mul_(self.counts[nj]).long()
+            train_centroid_ixs[k] = self.order[self.indptr[nj] + j]
+            ix, d, _ = self.propose(train_centroid_ixs[k])
+            if d is not None:
+                _truncated_kmeanspp_commit_(distsq, ix, d)
+            covered.logical_or_(self.visible[self.Xneighbixs[train_centroid_ixs[k]]])
+            k += 1
+        k_after_cover = k
+
+        # -- phase 2: regular kmeanspp until well covered neighborhoods
+        while k < self.max_k:
+            mass = _truncated_kmeanspp_uncovered_mass(
+                distsq, self.Xneighbixs, self.n_neighb, stop_distsq, buf
+            )
+            (unsat,) = (mass >= self.min_count).nonzero(as_tuple=True)
+            if not unsat.numel():
+                break
+            w = _truncated_kmeanspp_weights(distsq, cfg.alpha, out=wbuf)
+            train_centroid_ixs[k] = _one_gumbel_nolog(w, gen, buf)
+            ix, d, _ = self.propose(train_centroid_ixs[k])
+            if d is not None:
+                _truncated_kmeanspp_commit_(distsq, ix, d)
+            k += 1
+
+        k_after_coverage = k
+
+        # -- phase 3: with stopping and other criteria
+        floor = self.min_count * stop_distsq
+        centroid_budget = floor / n
+        fails = 0
+        phase3_enabled = cfg.stopping != "patience" or cfg.patience > 0
+        while phase3_enabled and k < self.max_k:
+            best_gain, best = -1.0, None
+            w = _truncated_kmeanspp_weights(distsq, cfg.alpha, out=wbuf)
+            # TODO remove greedy
+            # TODO maybe remove alpha
+            # TODO parallel proposals for patience: many proposals at once, take the first that passes
+            # TODO proposals are entirely independent for neighborhoods that don't overlap, could segment the adjacency into a checkerboard...
+            for _ in range(cfg.greedy_proposals):
+                cix = _one_gumbel_nolog(w, gen, buf)
+                ix, d, _ = self.propose(cix)
+                if d is None:
+                    continue
+                gain = distsq[ix].sub_(d).clamp_(min=0.0).sum().item()
+                if gain > best_gain:
+                    best_gain, best = gain, (cix, ix, d)
+            if cfg.stopping in ("patience", "patientdpmeanspp"):
+                if best is None or best_gain < floor:
+                    fails += 1
+                    if fails >= cfg.patience:
+                        break
+                    continue
+                fails = 0
+            if cfg.stopping in ("dpmeanspp", "patientdpmeanspp"):
+                if best is None:
+                    break
+                if distsq.mean().item() <= centroid_budget * k * (math.log2(k) + 2):
+                    break
+            if best is None:
+                panic(cfg.stopping)
+            train_centroid_ixs[k], ix, d = best
+            _truncated_kmeanspp_commit_(distsq, ix, d)
+            k += 1
+
+        phi = distsq.mean().item()
+        if not math.isfinite(phi):
+            logger.warning(
+                f"kmeans++ hit max_k={self.max_k}, leaving "
+                f"{distsq.isinf().sum().item()} uncovered"
+            )
+
+        phase_centroid_counts = (
+            k_after_cover,
+            k_after_coverage - k_after_cover,
+            k - k_after_coverage,
+        )
+        return train_centroid_ixs[:k], phi, phase_centroid_counts
+
+    def propose(
+        self, centroid_ix: Tensor
+    ) -> tuple[Tensor, Tensor | None, Tensor | None]:
+        return _truncated_kmeanspp_propose(
+            X=self.X,
+            centroid_ix=centroid_ix,
+            Xneighbixs=self.Xneighbixs,
+            neighborhoods=self.neighborhoods,
+            neighb_rel_inds=self.neighb_rel_inds,
+            visible=self.visible,
+            order=self.order,
+            indptr=self.indptr,
+            counts=self.counts,
+            feat_rank=self.feat_rank,
+            metric=self.metric,
+            scale_dist_args=self.scale_dist_args,
+        )
 
 
-def _truncated_kmeanspp_sampling_weights(
-    p: KmeansppSamplingParams,
-    distsq: Tensor,
-    dof: Tensor,
-    Xneighbixs: Tensor,
-    n_neighb: int,
-    out: Tensor,
-) -> Tensor | None:
-    if p.sampling == "d2":
-        return _truncated_kmeanspp_weights(distsq, p.alpha, out=out)
-    assert p.sampling == "significance"
-    assert distsq.isfinite().all() and (dof > 0).all()
-    z = _truncated_kmeanspp_significance(distsq, dof, out=out)
-    n_sig = distsq.new_zeros(n_neighb).index_add_(0, Xneighbixs, (z > p.z0).to(z))
-    dense = n_sig >= p.min_count
-    if not dense.any():
-        return None
-    return z.sub_(p.z0).clamp_(min=0.0).mul_(dense[Xneighbixs])
+truncated_kmeanspp = TruncatedKmeanspp.fit_predict
 
 
 def _truncated_kmeanspp_weights(distsq: Tensor, alpha: float, out: Tensor) -> Tensor:
     if alpha == 2.0:
         return distsq
     return torch.pow(distsq, alpha / 2.0, out=out)
-
-
-def _truncated_kmeanspp_significance(
-    distsq: Tensor, dof: Tensor, out: Tensor
-) -> Tensor:
-    z = torch.div(dof, 2.0, out=out).sqrt_()
-    return z.mul_(distsq.div(2.0).sub_(1.0))
 
 
 def _truncated_kmeanspp_uncovered_mass(
@@ -5432,13 +5586,8 @@ def _shared_dots_normsqs(
     return dots, xs.square().sum(dim=(1, 2)), cs.square().sum(dim=(1, 2))[:, None]
 
 
-def _truncated_kmeanspp_commit_(
-    distsq: Tensor, dof: Tensor, ix: Tensor, d: Tensor, n_feats: Tensor
-) -> None:
-    closer = d < distsq[ix]
-    ix = ix[closer]
-    distsq[ix] = d[closer]
-    dof[ix] = n_feats[closer]
+def _truncated_kmeanspp_commit_(distsq: Tensor, ix: Tensor, d: Tensor) -> None:
+    distsq[ix] = torch.minimum(distsq[ix], d, out=d)
 
 
 def run_split(
@@ -5660,7 +5809,7 @@ def initialize_parameters_by_unit(
         log_proportions = rank0_model.b.log_proportions
         noise_log_prop = rank0_model.b.noise_log_prop
 
-    dev = data.noise_logliks.device
+    dev = data.device
     if rank0_model is None:
         means = torch.zeros((puff_K, feat_rank, nc), device=dev)
         means = means.resize_(K, *means.shape[1:])
@@ -5938,7 +6087,9 @@ def brute_merge(
     )
     if score_res is None:
         return None
-    train_subset_scores, cur_scores, crit_full_scores, crit_subset_scores = score_res
+    train_subset_scores, cur_scores, crit_full_scores, crit_subset_scores, crit_data = (
+        score_res
+    )
 
     # if demolition is happening, see where
     if mm.p.demolish_during_selection:
@@ -5977,6 +6128,8 @@ def brute_merge(
         cl_alpha=alpha,
         can_demolish_mask=can_demolish_mask,
         debug=debug,
+        clip_level=mm.p.criterion_clip_level,
+        eval_weights=crit_data.sample_weights,
     )
     train_assignments, means, bases, sub_props = _extract_partition(
         part=best_part,
@@ -5986,6 +6139,7 @@ def brute_merge(
         train_subset_scores=train_subset_scores,
         mm=mm,
         subset_models=subset_models,
+        train_weights=train_data.sample_weights,
     )
 
     return SuccessfulGroupMergeResult(
@@ -6159,7 +6313,9 @@ def _score_subset_models(
     cur_scores: Scores,
     train_data: DenseSpikeData,
     eval_data: DenseSpikeData | None,
-) -> tuple[Scores, Scores, Scores, Scores] | None:
+) -> tuple[Scores, Scores, Scores, Scores, DenseSpikeData] | None:
+    """Scores for the criterion, and the spikes it is computed on (eval_data restricted to
+    the spikes both models cover, or train_data without eval_data)."""
     train_subset_scores = subset_models.score(train_data, skip_noise=True)
     assert train_subset_scores.log_liks.shape[1] == subset_models.n_units
     if eval_data is not None and isinstance(mm, TMMView):
@@ -6198,7 +6354,14 @@ def _score_subset_models(
         crit_subset_scores = train_subset_scores
         crit_full_scores = train_full_scores
 
-    return train_subset_scores, cur_scores, crit_full_scores, crit_subset_scores
+    crit_data = train_data if eval_data is None else eval_data
+    return (
+        train_subset_scores,
+        cur_scores,
+        crit_full_scores,
+        crit_subset_scores,
+        crit_data,
+    )
 
 
 def _select_partition(
@@ -6213,8 +6376,13 @@ def _select_partition(
     train_full_responsibilities: Tensor,
     train_subset_responsibilities: Tensor,
     debug: bool,
-):
-    # get scores for unaffected units
+    clip_level: float | None = None,
+    eval_weights: Tensor | None = None,
+) -> tuple[GroupPartition, Tensor]:
+    if eval_weights is not None:
+        assert can_demolish_mask is None, "demolish during selection is unweighted"
+        assert eval_weights.shape == (cur_scores.log_liks.shape[0],)
+    per_spike = clip_level is not None or eval_weights is not None
     cur_mask = torch.isin(cur_scores.candidates, cur_unit_ids)
     cur_log_liks = cur_scores.log_liks
     if pnoid:
@@ -6236,28 +6404,67 @@ def _select_partition(
         logger.dartsortdebug(
             f"brute_merge cur score {cur_crit.item():.4f} entropy {h:.4f}"
         )
+    if per_spike:
+        cur_crit_per_spike = ecl(
+            cur_resp, cur_log_liks, cl_alpha=cl_alpha, reduce_mean=False
+        )
+    else:
+        cur_crit_per_spike = None
     del cur_resp
 
     # if destruction is allowed, consider partitions with single-unit destruction
     sel_partitions = all_demolished_partitions(partitions, can_demolish_mask)
     improvements = rest_logliks.new_full((len(sel_partitions),), -torch.inf)
     for j, part in enumerate(sel_partitions):
+        single_ixs = torch.tensor(part.single_ixs, dtype=torch.long)
+        subset_ids = torch.tensor(part.subset_ids, dtype=torch.long)
+        single_demolish_ixs = torch.tensor(part.single_demolish_ixs, dtype=torch.long)
         part_score, part_h = _determine_part_score(
             rest_logliks=rest_logliks,
             crit_full_log_liks=crit_full_scores.log_liks,
             crit_subset_log_liks=crit_subset_scores.log_liks,
             train_full_responsibilities=train_full_responsibilities,
             train_subset_responsibilities=train_subset_responsibilities,
-            single_ixs=torch.tensor(part.single_ixs, dtype=torch.long),
-            subset_ids=torch.tensor(part.subset_ids, dtype=torch.long),
-            single_demolish_ixs=torch.tensor(
-                part.single_demolish_ixs, dtype=torch.long
-            ),
+            single_ixs=single_ixs,
+            subset_ids=subset_ids,
+            single_demolish_ixs=single_demolish_ixs,
             cl_alpha=cl_alpha,
             lp_min=TruncatedMixtureModel.LP_MIN,
             return_entropy=debug,
         )
-        improvements[j] = part_score - cur_crit
+        if per_spike:
+            assert cur_crit_per_spike is not None
+            part_per_spike, _ = _determine_part_score(
+                rest_logliks=rest_logliks,
+                crit_full_log_liks=crit_full_scores.log_liks,
+                crit_subset_log_liks=crit_subset_scores.log_liks,
+                train_full_responsibilities=train_full_responsibilities,
+                train_subset_responsibilities=train_subset_responsibilities,
+                single_ixs=single_ixs,
+                subset_ids=subset_ids,
+                single_demolish_ixs=single_demolish_ixs,
+                cl_alpha=cl_alpha,
+                lp_min=TruncatedMixtureModel.LP_MIN,
+                return_entropy=False,
+                reduce_mean=False,
+            )
+            part_differences = part_per_spike - cur_crit_per_spike
+        else:
+            part_differences = None
+        if clip_level is None and eval_weights is None:
+            improvements[j] = part_score - cur_crit
+        else:
+            assert part_differences is not None
+            if clip_level is None:
+                selected_differences = part_differences
+            else:
+                selected_differences = part_differences.clamp(-clip_level, clip_level)
+            if eval_weights is None:
+                improvements[j] = selected_differences.mean()
+            else:
+                improvements[j] = (
+                    selected_differences * eval_weights
+                ).sum() / eval_weights.sum()
         if debug:
             assert part_h is not None
             h = part_h.item()
@@ -6291,6 +6498,7 @@ def _determine_part_score(
     cl_alpha: float,
     lp_min: float,
     return_entropy: bool,
+    reduce_mean: bool = True,
 ):
     single_ll = crit_full_log_liks[:, single_ixs]
     subset_ll = crit_subset_log_liks[:, subset_ids]
@@ -6314,7 +6522,15 @@ def _determine_part_score(
         h = entropy(part_resps)
     else:
         h = None
-    return ecl(part_resps, part_logliks, cl_alpha=cl_alpha), h
+    return ecl(part_resps, part_logliks, cl_alpha=cl_alpha, reduce_mean=reduce_mean), h
+
+
+def spike_mean(x: Tensor, weights: Tensor | None) -> Tensor:
+    if weights is None:
+        return x.mean(0)
+    assert weights.shape == x.shape[:1]
+    w = weights.view(-1, *([1] * (x.ndim - 1)))
+    return (x * w).sum(0) / weights.sum()
 
 
 def _extract_partition(
@@ -6326,6 +6542,7 @@ def _extract_partition(
     train_subset_scores: Scores,
     mm: BaseMixtureModel,
     subset_models: BaseMixtureModel,
+    train_weights: Tensor | None,
 ):
     # spike assignments
     invalid, train_assignments = get_part_assignments(
@@ -6350,11 +6567,13 @@ def _extract_partition(
         bases = None
 
     # fraction
-    prop = responsibilities.mean(0)
+    prop = spike_mean(responsibilities, train_weights)
     single_prop = prop[part.single_ixs]
     if part.single_demolish_ixs:
         single_prop[part.single_demolish_ixs] = 0.0
-    sub_props = [subset_resps[:, sid].mean(0)[None] for sid in part.subset_ids]
+    sub_props = [
+        spike_mean(subset_resps[:, sid], train_weights)[None] for sid in part.subset_ids
+    ]
     sub_props = torch.concatenate([single_prop, *sub_props], dim=0)
     sub_props = sub_props[reorder]
     assert sub_props.shape == (len(part.single_ixs) + len(part.subset_ids),)
@@ -6403,6 +6622,8 @@ def try_kmeans(
     whiten: bool = False,
     bail_at: int = 1,
     force_labels: Tensor | None = None,
+    kmeanspp_metric: SplitKmeansppMetric = "euc",
+    scale_dist_args: tuple[float, float, float] | None = None,
 ) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
     # interpolate whitened data
     channels = data.covered_channels(min_channel_count)
@@ -6443,9 +6664,12 @@ def try_kmeans(
                 kmeanspp_seeds_per_try=n_kmeanspp_tries,
                 n_tries=n_kmeans_tries,
                 beta=kmeans_beta,
+                kmeanspp_metric=kmeanspp_metric,
+                scale_dist_args=scale_dist_args,
             )
         else:
             assert kmeans_beta == 1.0
+            assert kmeanspp_metric == "euc"
             kres = kmeans(
                 x,
                 n_components=k,
@@ -6485,12 +6709,18 @@ def evaluate_group_demolitions(
     eval_row_crit: Tensor | None = None,
 ) -> GroupDemolition:
     group_ = group.to(train_scores.candidates)
+    train_weights = train_data.sample_weights
+    eval_weights = eval_data.sample_weights
 
     # select which units in the group are candidates for demolition
     if mean_train_resp is None:
-        mean_train_resp = mean_responsibilities(scores=train_scores, n_units=mm.n_units)
+        mean_train_resp = mean_responsibilities(
+            scores=train_scores, n_units=mm.n_units, weights=train_weights
+        )
     if mean_eval_resp is None:
-        mean_eval_resp = mean_responsibilities(scores=eval_scores, n_units=mm.n_units)
+        mean_eval_resp = mean_responsibilities(
+            scores=eval_scores, n_units=mm.n_units, weights=eval_weights
+        )
     ratio = mean_train_resp[group] / mean_eval_resp[group]
     can_demolish = ratio > mm.p.demolition_min_resp_ratio
 
@@ -6501,11 +6731,14 @@ def evaluate_group_demolitions(
     # loop over possible demolitions, evaluate their improvements, track best
     alpha = mm.p.demolish_cl_alpha
     if cur_crit is None:
-        cur_crit = ecl(
+        eval_rows = ecl(
             resps=eval_scores.responsibilities,
             log_liks=eval_scores.log_liks,
             cl_alpha=alpha,
-        ).item()
+            reduce_mean=False,
+        )
+        cur_crit = spike_mean(eval_rows, eval_weights).item()
+        del eval_rows
     assert isinstance(cur_crit, float)
     best_demo = GroupDemolition(
         unit_ids=group, improvement=0.0, demolished=torch.zeros_like(can_demolish)
@@ -6513,6 +6746,7 @@ def evaluate_group_demolitions(
     best_imp = 0.0
 
     if mm.p.refit_in_demolition:
+        assert train_weights is None and eval_weights is None, "refit demolition is unweighted"
         group = group.to(device=train_scores.candidates.device)
         (train_ixs,) = (
             torch.isin(train_scores.candidates, group).any(dim=1).nonzero(as_tuple=True)
@@ -6554,11 +6788,14 @@ def evaluate_group_demolitions(
                 orig_log_props=mm.b.log_proportions,
                 noise_log_prop=mm.b.noise_log_prop,
                 cl_alpha=alpha,
+                robust_strategy=mm.p.robust_strategy,
                 group=group_,
                 demolish_mask=demo_mask,
                 train_scores=train_scores,
                 eval_scores=eval_scores,
                 eval_row_crit=eval_row_crit,
+                train_weights=train_weights,
+                eval_weights=eval_weights,
             )
         if imp > best_imp:
             best_demo = GroupDemolition(
@@ -6573,11 +6810,14 @@ def _evaluate_single_demolition(
     orig_log_props: Tensor,
     noise_log_prop: Tensor,
     cl_alpha: float,
+    robust_strategy: RobustnessStrategy,
     group: Tensor,
     demolish_mask: Tensor,
     train_scores: Scores,
     eval_scores: Scores,
     eval_row_crit: Tensor | None = None,
+    train_weights: Tensor | None = None,
+    eval_weights: Tensor | None = None,
 ) -> float:
     n_units = orig_log_props.numel()
     assert demolish_mask.shape == group.shape
@@ -6587,7 +6827,10 @@ def _evaluate_single_demolition(
     if not chopping_block.numel():
         return 0.0
     adj_train_resp = mean_responsibilities_after_removal(
-        scores=train_scores, remove_units=chopping_block, n_units=n_units
+        scores=train_scores,
+        remove_units=chopping_block,
+        n_units=n_units,
+        weights=train_weights,
     )
     assert adj_train_resp.shape == (n_units + 1,)
 
@@ -6603,7 +6846,9 @@ def _evaluate_single_demolition(
         orig_log_props=orig_log_props,
         new_log_props=new_log_props,
         cl_alpha=cl_alpha,
+        robust_strategy=robust_strategy,
         orig_row_criterion=eval_row_crit,
+        weights=eval_weights,
     )
 
 
@@ -6874,6 +7119,14 @@ def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
     return logdet, CooinvCom, Linv
 
 
+def _huber_twicerho_and_weight(sqdist: Tensor, k: Tensor) -> tuple[Tensor, Tensor]:
+    r = sqdist.clamp_(min=0.0).sqrt_()
+    c = torch.minimum(r, k)
+    weight = k.div(r).clamp_(max=1.0)
+    twicerho = r.mul_(2.0).sub_(c).mul_(c)
+    return twicerho, weight
+
+
 def _whiten_and_noise_score(
     *,
     x: Tensor,
@@ -6881,28 +7134,39 @@ def _whiten_and_noise_score(
     neighb_cov: NeighborhoodCovariance,
     batch_size=1024,
 ) -> tuple[Tensor, Tensor]:
-    wx = torch.empty_like(x)
+    dev = neighborhoods.neighborhood_ids.device
+    on_device = x.device == dev
+    if on_device:
+        wx = torch.empty_like(x)
+        noise_loglik = wx.new_zeros((len(x),))
+    else:
+        assert x.device.type == "cpu"
+        wx = torch.empty(x.shape, dtype=x.dtype, pin_memory=True)
+        noise_loglik = torch.zeros((len(x),), dtype=x.dtype, pin_memory=True)
     assert neighborhoods.n_neighborhoods == neighb_cov.b.obs_ix.shape[0]
-
-    noise_loglik = wx.new_zeros((len(x),))
 
     for ni in range(neighborhoods.n_neighborhoods):
         inni = neighborhoods.neighborhood_members(ni)
+        if not on_device:
+            inni = inni.cpu()
 
         right_factor = neighb_cov.b.Linv[ni].T
-        nll_const = neighb_cov.b.logdet[ni] + LOG_2PI * neighb_cov.b.nobs[ni]
+        nll_const = neighb_cov.b.lik_const[ni]
+        huber_k = None if neighb_cov.huber_k is None else neighb_cov.b.huber_k[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
-            wxb = x[binni] @ right_factor
+            wxb = x[binni].to(dev) @ right_factor  # ty: ignore[no-matching-overload]
 
-            wx[binni] = wxb
+            wx[binni] = wxb.to(wx.device)
 
             nll = wxb.square_().sum(dim=1)
+            if huber_k is not None:
+                nll, _ = _huber_twicerho_and_weight(nll, huber_k)
             nll += nll_const
             nll *= -0.5
             assert nll.isfinite().all()
-            noise_loglik[binni] = nll
+            noise_loglik[binni] = nll.to(noise_loglik.device)
 
     return wx, noise_loglik
 
@@ -6914,62 +7178,88 @@ def _whiten_impute_and_noise_score(
     neighb_cov: NeighborhoodCovariance,
     batch_size=1024,
 ):
-    wx = torch.empty_like(x)
+    dev = cast(torch.device, neighborhoods.neighborhood_ids.device)
+    on_device = x.device == dev
+    cmo_shape = (len(x), neighb_cov.max_nc_miss_near, neighb_cov.feat_rank)
+    if on_device:
+        wx = torch.empty_like(x)
+        noise_loglik = wx.new_zeros((len(x),))
+        CmoCooinvx = wx.new_empty(cmo_shape)
+    else:
+        assert x.device.type == "cpu"
+        wx = torch.empty(x.shape, dtype=x.dtype, pin_memory=True)
+        noise_loglik = torch.zeros((len(x),), dtype=x.dtype, pin_memory=True)
+        CmoCooinvx = torch.empty(cmo_shape, dtype=x.dtype, pin_memory=True)
     assert neighborhoods.n_neighborhoods == neighb_cov.b.obs_ix.shape[0]
-
-    noise_loglik = wx.new_zeros((len(x),))
-    CmoCooinvx = wx.new_empty(
-        (len(x), neighb_cov.max_nc_miss_near, neighb_cov.feat_rank)
-    )
 
     for ni in range(neighborhoods.n_neighborhoods):
         inni = neighborhoods.neighborhood_members(ni)
+        if not on_device:
+            inni = inni.cpu()
 
         right_factor = neighb_cov.b.Linv[ni].T
         neighb_CooinvCom = neighb_cov.b.CooinvCom[ni]
 
-        nll_const = neighb_cov.b.logdet[ni] + LOG_2PI * neighb_cov.b.nobs[ni]
+        nll_const = neighb_cov.b.lik_const[ni]
+        huber_k = None if neighb_cov.huber_k is None else neighb_cov.b.huber_k[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
-            xb = x[binni]
+            xb = x[binni].to(dev)
             wxb = xb @ right_factor
 
-            wx[binni] = wxb
+            wx[binni] = wxb.to(wx.device)
 
             CmoCooinvx_batch = xb @ neighb_CooinvCom
             CmoCooinvx_batch = CmoCooinvx_batch.view(
                 binni.numel(), neighb_cov.feat_rank, neighb_cov.max_nc_miss_near
             )
-            CmoCooinvx[binni] = CmoCooinvx_batch.mT
+            CmoCooinvx[binni] = CmoCooinvx_batch.mT.to(CmoCooinvx.device)
 
             nll = wxb.square_().sum(dim=1)
+            if huber_k is not None:
+                nll, _ = _huber_twicerho_and_weight(nll, huber_k)
             nll += nll_const
             nll *= -0.5
             assert nll.isfinite().all()
-            noise_loglik[binni] = nll
+            noise_loglik[binni] = nll.to(noise_loglik.device)
 
     xt = x.view(x.shape[0], neighb_cov.feat_rank, neighb_cov.max_nc_obs)
-    xt = xt.transpose(1, 2).contiguous()
+    if on_device:
+        xt = xt.transpose(1, 2).contiguous()
+    else:
+        xt = _pinned_copy(xt.transpose(1, 2))
 
     return xt, wx, CmoCooinvx, noise_loglik
+
+
+def _pinned_copy(x: Tensor) -> Tensor:
+    pinned = torch.empty(x.shape, dtype=x.dtype, pin_memory=True)
+    pinned.copy_(x)
+    return pinned
 
 
 def _whiten_and_noise_score_batch(
     *, x: Tensor, neighb_ids: Tensor, neighb_cov: NeighborhoodCovariance
 ):
     return _whiten_and_noise_score_batch_k(
-        x, neighb_ids, neighb_cov.b.Linv, neighb_cov.b.lik_const
+        x, neighb_ids, neighb_cov.b.Linv, neighb_cov.b.lik_const, neighb_cov.huber_k
     )
 
 
 @torch_compiler(fullgraph=False)
 def _whiten_and_noise_score_batch_k(
-    x: Tensor, neighb_ids: Tensor, Linv: Tensor, lik_const: Tensor
+    x: Tensor,
+    neighb_ids: Tensor,
+    Linv: Tensor,
+    lik_const: Tensor,
+    huber_k: Tensor | None,
 ):
     batch_whitener = Linv[neighb_ids]
     wx = torch.bmm(batch_whitener, x[:, :, None])[:, :, 0]
     nll = torch.linalg.vector_norm(wx, dim=1).square_()
+    if huber_k is not None:
+        nll, _ = _huber_twicerho_and_weight(nll, huber_k[neighb_ids])
     const = lik_const[neighb_ids]
     nll += const
     nll *= -0.5
@@ -7499,9 +7789,10 @@ def concatenate_scores(scoress: list[Scores], dim=0) -> Scores:
             [cast(Tensor, s.responsibilities) for s in scoress], dim=dim
         )
     if scoress[0].duties is None:
+        assert all(s.duties is None for s in scoress)
         duties = None
     else:
-        duties = scoress[0].duties
+        duties = torch.concatenate([cast(Tensor, s.duties) for s in scoress], dim=dim)
     return Scores(
         log_liks=log_liks,
         responsibilities=responsibilities,
@@ -7560,6 +7851,7 @@ def proportion_adjust_scores(
     batch_size: int = 2**16,
 ) -> Scores:
     """What would the scores be if the log props were these, not those?"""
+    assert scores.duties is None
     diff = new_log_props - orig_log_props
     diff.nan_to_num_()
     diff = F.pad(diff, (0, 1))
@@ -7575,8 +7867,6 @@ def proportion_adjust_scores(
         i1 = min(n, i0 + batch_size)
 
         bdiff = diff[scores.candidates[i0:i1]]
-        if scores.duties is not None:
-            bdiff *= scores.duties[i0:i1, None]
         torch.add(
             scores.log_liks[i0:i1, :ncand], bdiff, out=new_log_liks[i0:i1, :ncand]
         )
@@ -7617,12 +7907,16 @@ def ensure_sorted_scores(scores: Scores) -> Scores:
         responsibilities = F.softmax(log_liks, dim=1).nan_to_num_()
     else:
         responsibilities = None
+    if scores.duties is not None:
+        duties = scores.duties.take_along_dim(indices=order, dim=1)
+    else:
+        duties = None
 
     return Scores(
         candidates=candidates,
         log_liks=log_liks,
         responsibilities=responsibilities,
-        duties=scores.duties,
+        duties=duties,
     )
 
 
@@ -7672,6 +7966,7 @@ def mean_responsibilities(
     responsibilities: torch.Tensor | None = None,
     candidates: torch.Tensor | None = None,
     batch_size: int = 2**16,
+    weights: Tensor | None = None,
 ) -> torch.Tensor:
     """Average per-spike responsibility by unit for scores a Scores object."""
     if responsibilities is not None:
@@ -7705,22 +8000,37 @@ def mean_responsibilities(
     knoise = n_units + includes_noise
     resp_mean = resp.new_zeros(knoise + 1, dtype=torch.double)
     rsum_batch = resp_mean.clone()
-    for i0 in range(0, n, batch_size):
-        i1 = min(n, i0 + batch_size)
-        nbatch = i1 - i0
-        rsum_batch.zero_()
+    if weights is None:
+        for i0 in range(0, n, batch_size):
+            i1 = min(n, i0 + batch_size)
+            nbatch = i1 - i0
+            rsum_batch.zero_()
 
-        cix = F.threshold(cand[i0:i1], threshold=-1, value=knoise)
-        rsum_batch.scatter_add_(
-            dim=0,
-            index=cix.view(-1),
-            src=resp[i0:i1, :ncand].double().reshape(-1),
-        )
-        if includes_noise:
-            rsum_batch[n_units] += resp[i0:i1, -1].double().sum()
+            cix = F.threshold(cand[i0:i1], threshold=-1, value=knoise)
+            rsum_batch.scatter_add_(
+                dim=0,
+                index=cix.view(-1),
+                src=resp[i0:i1, :ncand].double().reshape(-1),
+            )
+            if includes_noise:
+                rsum_batch[n_units] += resp[i0:i1, -1].double().sum()
 
-        rmean_batch = rsum_batch.mul_(1.0 / nbatch)
-        resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+            rmean_batch = rsum_batch.mul_(1.0 / nbatch)
+            resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+    else:
+        assert weights.shape == (n,)
+        for i0 in range(0, n, batch_size):
+            i1 = min(n, i0 + batch_size)
+            bweights = weights[i0:i1].double()
+            cix = F.threshold(cand[i0:i1], threshold=-1, value=knoise)
+            resp_mean.scatter_add_(
+                dim=0,
+                index=cix.view(-1),
+                src=resp[i0:i1, :ncand].double().mul_(bweights[:, None]).reshape(-1),
+            )
+            if includes_noise:
+                resp_mean[n_units] += resp[i0:i1, -1].double().mul_(bweights).sum()
+        resp_mean /= weights.double().sum()
     resp_mean = resp_mean[:knoise]
 
     # check that things didn't explode
@@ -7745,9 +8055,11 @@ def mean_responsibilities_after_removal(
     remove_units: Tensor,
     n_units: int,
     batch_size: int = 2**18,
+    weights: Tensor | None = None,
 ) -> Tensor:
     n, ncand = scores.candidates.shape
     assert scores.log_liks.shape == (n, ncand + 1)
+    assert weights is None or weights.shape == (n,)
     remove_units = remove_units.sort().values
     remove_units = remove_units.to(scores.candidates)
     nremove = remove_units.shape[0]
@@ -7771,16 +8083,25 @@ def mean_responsibilities_after_removal(
         bresp = bll.softmax(dim=1).nan_to_num_()
 
         cix = F.threshold(bcand, threshold=-1, value=knoise)
-        rsum_batch.scatter_add_(
-            dim=0,
-            index=cix.reshape(-1),
-            src=bresp[:, :ncand].double().reshape(-1),
-        )
-        rsum_batch[n_units] += bresp[:, -1].double().sum()
+        if weights is None:
+            rsum_batch.scatter_add_(
+                dim=0,
+                index=cix.reshape(-1),
+                src=bresp[:, :ncand].double().reshape(-1),
+            )
+            rsum_batch[n_units] += bresp[:, -1].double().sum()
 
-        rmean_batch = rsum_batch.mul_(1.0 / nbatch)
-        resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+            rmean_batch = rsum_batch.mul_(1.0 / nbatch)
+            resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
+        else:
+            bresp = bresp.double().mul_(weights[i0:i1].double()[:, None])
+            resp_mean.scatter_add_(
+                dim=0, index=cix.reshape(-1), src=bresp[:, :ncand].reshape(-1)
+            )
+            resp_mean[n_units] += bresp[:, -1].sum()
 
+    if weights is not None:
+        resp_mean /= weights.double().sum()
     resp_mean = resp_mean[:knoise]
     _assert_propclose(resp_mean.sum(), resp_mean.new_ones(()))
     return resp_mean
@@ -7792,8 +8113,10 @@ def proportion_adjust_criterion_change(
     orig_log_props: Tensor,
     new_log_props: Tensor,
     cl_alpha: float,
+    robust_strategy: RobustnessStrategy,
     orig_row_criterion: Tensor | None = None,
     batch_size: int = 2**18,
+    weights: Tensor | None = None,
 ) -> float:
     """How much would ecl change if the log props were these, not those?"""
     diff = (new_log_props.double() - orig_log_props.double()).nan_to_num_()
@@ -7802,6 +8125,15 @@ def proportion_adjust_criterion_change(
     cand, log_liks = scores.candidates, scores.log_liks
     n, ncand = cand.shape
     assert orig_row_criterion is None or orig_row_criterion.shape == (n,)
+    assert weights is None or weights.shape == (n,)
+
+    if robust_strategy == "fixed":
+        assert scores.duties is not None
+        tempering = scores.duties
+    elif robust_strategy in ("none", "huber"):
+        tempering = None
+    else:
+        panic(robust_strategy)
 
     mean = diff.new_zeros(())
     for i0 in range(0, n, batch_size):
@@ -7809,8 +8141,8 @@ def proportion_adjust_criterion_change(
         nbatch = i1 - i0
 
         bdiff = diff[cand[i0:i1]]
-        if scores.duties is not None:
-            bdiff *= scores.duties[i0:i1, None]
+        if tempering is not None:
+            bdiff *= tempering[i0:i1]
 
         bll = log_liks[i0:i1].double()
         if orig_row_criterion is None:
@@ -7821,9 +8153,14 @@ def proportion_adjust_criterion_change(
         bll[:, :ncand] += bdiff
         badj = ecl(resps=None, log_liks=bll, cl_alpha=cl_alpha, reduce_mean=False)
 
-        bmean = badj.sub_(borig).mean()
-        mean += bmean.sub_(mean).mul_(nbatch / i1)
+        if weights is None:
+            bmean = badj.sub_(borig).mean()
+            mean += bmean.sub_(mean).mul_(nbatch / i1)
+        else:
+            mean += badj.sub_(borig).mul_(weights[i0:i1].double()).sum()
 
+    if weights is not None:
+        mean /= weights.double().sum()
     return mean.item()
 
 
@@ -7838,6 +8175,51 @@ def stack_tmms(tmms: list[TruncatedMixtureModel]) -> BaseMixtureModel:
 
 
 LOG_2PI = math.log(math.tau)
+
+
+def huber_quantile_if_huber(
+    robust_strategy: RobustnessStrategy, huber_quantile: float
+) -> float | None:
+    if robust_strategy == "huber":
+        return huber_quantile
+    elif robust_strategy in ("none", "fixed"):
+        return None
+    else:
+        panic(robust_strategy)
+
+
+def noise_huber_quantile(refinement_cfg: RefinementConfig) -> float | None:
+    if not refinement_cfg.huber_noise:
+        return None
+    return huber_quantile_if_huber(
+        refinement_cfg.robust_strategy, refinement_cfg.huber_quantile
+    )
+
+
+def huber_neighborhood_constants(
+    nobs: Tensor, quantile: float
+) -> tuple[Tensor, Tensor]:
+    """Huber radius k and 2log(Z_huber / Z_gaussian) for each observed dim d
+
+    k^2 = chi2(d).ppf(quantile), and
+        Z_huber / Z_gaussian = P(d/2, k^2/2)
+            + 2^(1-d/2) Gamma(d) Q(d, k^2) exp(k^2/2) / (Gamma(d/2) k^d),
+    with P and Q the regularized lower and upper incomplete gamma functions.
+    """
+    assert 0.0 < quantile < 1.0
+    d = nobs.numpy(force=True).astype(np.float64)
+    assert np.all(d > 0)
+    ksq = chi2.ppf(quantile, d)
+    log_tail = (1.0 - 0.5 * d) * math.log(2.0)
+    log_tail += gammaln(d) - gammaln(0.5 * d)
+    log_tail += 0.5 * ksq - 0.5 * d * np.log(ksq)
+    log_tail += np.log(gammaincc(d, ksq))
+    log_core = np.log(gammainc(0.5 * d, 0.5 * ksq))
+    log_ratio = np.logaddexp(log_core, log_tail)
+    assert np.all(np.isfinite(log_ratio))
+    k = torch.asarray(np.sqrt(ksq), dtype=torch.float, device=nobs.device)
+    twologzratio = torch.asarray(2.0 * log_ratio, dtype=torch.float, device=nobs.device)
+    return k, twologzratio
 
 
 def _update_lut_mean_batch(
@@ -7858,8 +8240,8 @@ def _update_lut_mean_batch(
          obs_dim * log(2pi) + logdet(cov)
        -2x because _calc_loglik multiplies by -0.5 anyway.
        NB that logdet(cov) = logdet(Coo) + logdet(ppca term). Here we just put in
-       the dim 2pi constant and the logdet(Coo). The next fn deals with the second
-       term if needed.
+       the dim 2pi constant and the logdet(Coo), plus 2log(Z_huber / Z_gaussian)
+       when using Huber tails. The next fn deals with the second term if needed.
     """
     n = i1 - i0
     uu = lut.b.unit_ids[i0:i1]
@@ -7895,6 +8277,8 @@ def _update_lut_mean_batch(
     # constplogdet. add in the signal-rank-0-only terms.
     lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)  # type: ignore  # ty: ignore[x]
     lut_params.constplogdet[i0:i1] += neighb_cov.b.logdet[nn]  # ty: ignore[not-subscriptable]
+    if lut_params.huber_2logzratio is not None:
+        lut_params.constplogdet[i0:i1] += lut_params.b.huber_2logzratio[nn]  # ty: ignore[not-subscriptable]
     if pnoid:
         assert lut_params.constplogdet[i0:i1].isfinite().all()  # type: ignore  # ty: ignore[x]
 
@@ -8027,35 +8411,51 @@ def _score_batch(
         lls[:, -1] += noise_log_prop
 
     if lut_params.signal_rank and not force_rank0:
-        lls[spike_ixs, candidate_ixs] = _calc_loglik_ppca(
+        sparse_lls, sparse_weights = _calc_loglik_ppca(
             whitenedx=whitenedx,
             log_proportions=log_proportions,
             spike_ixs=spike_ixs,
             lut_ixs=lut_ixs,
             unit_ixs=unit_ixs,
+            neighb_ixs=neighb_ixs,
             constplogdet=lut_params.constplogdet,
             Linvmuo=lut_params.Linvmuo,
             wburyroot=lut_params.wburyroot,
+            huber_k=lut_params.huber_k,
         )
     else:
-        lls[spike_ixs, candidate_ixs] = _calc_loglik_rank0(
+        sparse_lls, sparse_weights = _calc_loglik_rank0(
             whitenedx=whitenedx,
             log_proportions=log_proportions,
             spike_ixs=spike_ixs,
             lut_ixs=lut_ixs,
             unit_ixs=unit_ixs,
+            neighb_ixs=neighb_ixs,
             constplogdet=lut_params.constplogdet,
             Linvmuo=lut_params.Linvmuo,
+            huber_k=lut_params.huber_k,
         )
+    lls[spike_ixs, candidate_ixs] = sparse_lls
+    del sparse_lls
+    if sparse_weights is None:
+        huber_weights = None
+    else:
+        huber_weights = whitenedx.new_zeros((n, Ctot))
+        huber_weights[spike_ixs, candidate_ixs] = sparse_weights
+    del sparse_weights
 
     if do_resp:
         n_top = min(n_candidates, Ctot)
         toplls, topinds = torch.topk(lls[:, :-1], n_top, dim=1)
         candidates = candidates.take_along_dim(indices=topinds, dim=1)
+        if huber_weights is not None:
+            huber_weights = huber_weights.take_along_dim(indices=topinds, dim=1)
         if n_top < n_candidates:
             n_pad = n_candidates - n_top
             toplls = F.pad(toplls, (0, n_pad), value=-torch.inf)
             candidates = F.pad(candidates, (0, n_pad), value=-1)
+            if huber_weights is not None:
+                huber_weights = F.pad(huber_weights, (0, n_pad), value=0.0)
         toplls = torch.concatenate((toplls, lls[:, -1:]), dim=1)
     else:
         toplls = lls
@@ -8063,11 +8463,21 @@ def _score_batch(
 
     if robust_strategy == "fixed":
         assert duties is not None
+        assert duties.shape == (n,)
+        assert huber_weights is None
         toplls *= duties[:, None]
+        candidate_duties = duties[:, None].expand_as(candidates)
+    elif robust_strategy == "huber":
+        assert duties is None
+        assert huber_weights is not None
+        assert huber_weights.shape == candidates.shape
+        candidate_duties = huber_weights
     elif robust_strategy == "none":
         assert duties is None
+        assert huber_weights is None
+        candidate_duties = None
     else:
-        panic()
+        panic(robust_strategy)
 
     if do_resp:
         responsibilities = torch.softmax(toplls, dim=1)
@@ -8078,7 +8488,7 @@ def _score_batch(
         log_liks=toplls,
         responsibilities=responsibilities,
         candidates=candidates,
-        duties=duties,
+        duties=candidate_duties,
     )
 
 
@@ -8130,16 +8540,22 @@ def _calc_loglik_rank0(
     spike_ixs: Tensor,
     lut_ixs: Tensor,
     unit_ixs: Tensor,
+    neighb_ixs: Tensor,
     constplogdet: Tensor,
     Linvmuo: Tensor,
-):
+    huber_k: Tensor | None,
+) -> tuple[Tensor, Tensor | None]:
     wdxz = whitenedx[spike_ixs]
     wdxz -= Linvmuo[lut_ixs]
     ll = wdxz.square_().sum(dim=1)
+    if huber_k is None:
+        weight = None
+    else:
+        ll, weight = _huber_twicerho_and_weight(ll, huber_k[neighb_ixs])
     ll += constplogdet[lut_ixs]
     ll *= -0.5
     ll += log_proportions[unit_ixs]
-    return ll
+    return ll, weight
 
 
 @torch_compiler(fullgraph=False)
@@ -8150,10 +8566,12 @@ def _calc_loglik_ppca(
     spike_ixs: Tensor,
     lut_ixs: Tensor,
     unit_ixs: Tensor,
+    neighb_ixs: Tensor,
     constplogdet: Tensor,
     Linvmuo: Tensor,
     wburyroot: Tensor,
-):
+    huber_k: Tensor | None,
+) -> tuple[Tensor, Tensor | None]:
     wdxz = whitenedx[spike_ixs]
     wdxz -= Linvmuo[lut_ixs]
 
@@ -8163,11 +8581,15 @@ def _calc_loglik_ppca(
 
     ll = term_a.sub_(term_b)
     ll = ll.nan_to_num_(nan=torch.inf)
+    if huber_k is None:
+        weight = None
+    else:
+        ll, weight = _huber_twicerho_and_weight(ll, huber_k[neighb_ixs])
 
     ll += constplogdet[lut_ixs]
     ll *= -0.5
     ll += log_proportions[unit_ixs]
-    return ll
+    return ll, weight
 
 
 def _stat_pass_batch(
@@ -8176,6 +8598,8 @@ def _stat_pass_batch(
     whitenedx: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
+    mstep_weights: Tensor | None,
+    sample_weights: Tensor | None,
     log_liks: Tensor,
     spike_ixs: Tensor,
     candidate_ixs: Tensor,
@@ -8189,15 +8613,22 @@ def _stat_pass_batch(
     eps: Tensor,
 ) -> SufficientStatistics:
     n = responsibilities.shape[0]
+    if mstep_weights is not None:
+        assert mstep_weights.shape == (n, n_candidates)
+    unweighted_responsibilities = responsibilities
+    if sample_weights is not None:
+        assert sample_weights.shape == (n,)
+        responsibilities = responsibilities * sample_weights[:, None]
     if lut_params.signal_rank:
         assert lut_params.TWoCooinvsqrt is not None
         assert lut_params.TWoCooinvmuo is not None
         assert lut_params.Tpad is not None
-        noise_N, N, Nlut, Ulut, R, elb = _stat_pass_batch_ppca(
+        noise_N, resp_N, N, Nlut, Ulut, R, elb = _stat_pass_batch_ppca(
             xt=xt,
             whitenedx=whitenedx,
             CmoCooinvx=CmoCooinvx,
             responsibilities=responsibilities,
+            mstep_weights=mstep_weights,
             log_liks=log_liks,
             spike_ixs=spike_ixs,
             candidate_ixs=candidate_ixs,
@@ -8220,13 +8651,21 @@ def _stat_pass_batch(
             eps=eps,
         )
         stats = SufficientStatistics(
-            count=n, noise_N=noise_N, N=N, Nlut=Nlut, Ulut=Ulut, R=R, elbo=elb
+            count=n,
+            noise_N=noise_N,
+            resp_N=resp_N,
+            N=N,
+            Nlut=Nlut,
+            Ulut=Ulut,
+            R=R,
+            elbo=elb,
         )
     else:
-        noise_N, N, Nlut, R, elb = _stat_pass_batch_rank0(
+        noise_N, resp_N, N, Nlut, R, elb = _stat_pass_batch_rank0(
             xt=xt,
             CmoCooinvx=CmoCooinvx,
             responsibilities=responsibilities,
+            mstep_weights=mstep_weights,
             log_liks=log_liks,
             spike_ixs=spike_ixs,
             candidate_ixs=candidate_ixs,
@@ -8245,8 +8684,18 @@ def _stat_pass_batch(
             eps=eps,
         )
         stats = SufficientStatistics(
-            count=n, noise_N=noise_N, N=N, Nlut=Nlut, Ulut=None, R=R, elbo=elb
+            count=n,
+            noise_N=noise_N,
+            resp_N=resp_N,
+            N=N,
+            Nlut=Nlut,
+            Ulut=None,
+            R=R,
+            elbo=elb,
         )
+    if sample_weights is not None:
+        spike_elbos = elbo(unweighted_responsibilities, log_liks, reduce_mean=False)
+        stats.elbo = (spike_elbos * sample_weights).sum() / sample_weights.sum()
     return stats
 
 
@@ -8254,6 +8703,7 @@ def _stat_pass_batch(
 def _count_batch(
     *,
     responsibilities: Tensor,
+    weightsflat: Tensor | None,
     n_candidates: int,
     spike_ixs: Tensor,
     candidate_ixs: Tensor,
@@ -8262,7 +8712,7 @@ def _count_batch(
     n_units: int,
     n_lut: int,
     eps: Tensor,
-) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor]:
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor, Tensor]:
     have_noise = responsibilities.shape[1] == n_candidates + 1
     if have_noise:
         noise_N = responsibilities[:, -1].sum()
@@ -8270,19 +8720,25 @@ def _count_batch(
         noise_N = None
 
     Qflat = responsibilities[spike_ixs, candidate_ixs]
+    resp_N = Qflat.new_zeros(n_units)
+    resp_N.scatter_add_(dim=0, index=unit_ixs, src=Qflat)
+    if weightsflat is None:
+        QWflat = Qflat
+    else:
+        QWflat = Qflat * weightsflat
+
     N = Qflat.new_zeros(n_units)
     Nlut = Qflat.new_zeros(n_lut)
-
-    N.scatter_add_(dim=0, index=unit_ixs, src=Qflat)
-    Nlut.scatter_add_(dim=0, index=lut_ixs, src=Qflat)
+    N.scatter_add_(dim=0, index=unit_ixs, src=QWflat)
+    Nlut.scatter_add_(dim=0, index=lut_ixs, src=QWflat)
 
     Qnflat = N[unit_ixs].clamp_(min=eps)
-    Qnflat = torch.div(Qflat, Qnflat, out=Qnflat)
+    Qnflat = torch.div(QWflat, Qnflat, out=Qnflat)
 
     Qnflatlut = Nlut[lut_ixs].clamp_(min=eps)
     Qnflatlut = torch.div(Qflat, Qnflatlut, out=Qnflatlut)
 
-    return noise_N, N, Nlut, Qnflat, Qnflatlut
+    return noise_N, resp_N, N, Nlut, Qnflat, Qnflatlut
 
 
 @torch_compiler(fullgraph=False)
@@ -8292,6 +8748,7 @@ def _stat_pass_batch_ppca(
     whitenedx: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
+    mstep_weights: Tensor | None,
     log_liks: Tensor,
     spike_ixs: Tensor,
     candidate_ixs: Tensor,
@@ -8312,7 +8769,7 @@ def _stat_pass_batch_ppca(
     hat_dim: int,
     n_lut: int,
     eps: Tensor,
-) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor, Tensor]:
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """
     neighb_ixs, lut_ixs, candidate_ixs, unit_ixs, spike_ixs are all the
     same shape, and are sparse indices of the valid candidates for this batch.
@@ -8338,9 +8795,14 @@ def _stat_pass_batch_ppca(
     miss_near_ix = neighb_cov_miss_near_ix[neighb_ixs]
     TWoCooinvsqrt = lut_params_TWoCooinvsqrt[lut_ixs]
     TWoCooinvmuo = lut_params_TWoCooinvmuo[lut_ixs]
+    if mstep_weights is None:
+        weightsflat = None
+    else:
+        weightsflat = mstep_weights[spike_ixs, candidate_ixs]
 
-    noise_N, N, Nlut, Qnflat, Qnflatlut = _count_batch(
+    noise_N, resp_N, N, Nlut, Qnflat, Qnflatlut = _count_batch(
         responsibilities=responsibilities,
+        weightsflat=weightsflat,
         n_candidates=n_candidates,
         spike_ixs=spike_ixs,
         candidate_ixs=candidate_ixs,
@@ -8360,7 +8822,12 @@ def _stat_pass_batch_ppca(
     hatU = lut_params_Tpad[lut_ixs]
 
     # not saving the bottom row, Tpad should just be 0padded on inner dim
-    hatU.addcmul_(ubar[:, :, None], hatubar[:, None, :])
+    # weights multiply E[u]E[hatu]' but not the posterior covariance T
+    if weightsflat is None:
+        hatU.addcmul_(ubar[:, :, None], hatubar[:, None, :])
+    else:
+        wubar = ubar * weightsflat[:, None]
+        hatU.addcmul_(wubar[:, :, None], hatubar[:, None, :])
 
     # U sufficient stat (LUT binned)
     hatU *= Qnflatlut[:, None, None]
@@ -8401,7 +8868,7 @@ def _stat_pass_batch_ppca(
     # objective
     elb = mean_elbo_dim1(responsibilities, log_liks)
 
-    return noise_N, N, Nlut, Ulut, R, elb
+    return noise_N, resp_N, N, Nlut, Ulut, R, elb
 
 
 @torch_compiler(fullgraph=False)
@@ -8410,6 +8877,7 @@ def _stat_pass_batch_rank0(
     xt: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
+    mstep_weights: Tensor | None,
     log_liks: Tensor,
     spike_ixs: Tensor,
     candidate_ixs: Tensor,
@@ -8426,7 +8894,7 @@ def _stat_pass_batch_rank0(
     n_units: int,
     n_lut: int,
     eps: Tensor,
-) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor]:
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """
     neighb_ixs, lut_ixs, candidate_ixs, unit_ixs, spike_ixs are all the
     same shape, and are sparse indices of the valid candidates for this batch.
@@ -8450,9 +8918,14 @@ def _stat_pass_batch_rank0(
     obs_ix = neighb_cov_obs_ix[neighb_ixs]
     miss_near_ix = neighb_cov_miss_near_ix[neighb_ixs]
     R = xt.new_zeros((n_units * (n_channels + 1), 1, feat_rank))
+    if mstep_weights is None:
+        weightsflat = None
+    else:
+        weightsflat = mstep_weights[spike_ixs, candidate_ixs]
 
-    noise_N, N, Nlut, Qnflat, _Qnflatlut = _count_batch(
+    noise_N, resp_N, N, Nlut, Qnflat, _Qnflatlut = _count_batch(
         responsibilities=responsibilities,
+        weightsflat=weightsflat,
         n_candidates=n_candidates,
         spike_ixs=spike_ixs,
         candidate_ixs=candidate_ixs,
@@ -8488,7 +8961,7 @@ def _stat_pass_batch_rank0(
     # objective
     elb = mean_elbo_dim1(responsibilities, log_liks)
 
-    return noise_N, N, Nlut, R, elb
+    return noise_N, resp_N, N, Nlut, R, elb
 
 
 def _finalize_e_stats(

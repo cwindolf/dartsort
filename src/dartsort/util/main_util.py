@@ -118,7 +118,9 @@ def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
     logger.info(f"Recorded config to {json_path}.")
 
 
-def ds_will_copy_recording(internal_cfg: DARTsortInternalConfig, recording: BaseRecording):
+def ds_will_copy_recording(
+    internal_cfg: DARTsortInternalConfig, recording: BaseRecording
+):
     if internal_cfg.copy_recording_to_tmpdir == "if_preprocessing":
         if internal_cfg.already_preprocessed == "yes":
             return False
@@ -219,7 +221,7 @@ def ds_check_motion(rec: BaseRecording, motion: "MotionInfo"):
 def motion_needs_peaks(
     cfg: DARTsortInternalConfig, recording: BaseRecording, sorting: DARTsortSorting
 ):
-    if cfg.subsampling_presence == 1.0:
+    if cfg.subsampling_fraction(recording) >= 1.0:
         return False
     if cfg.subsampling_spikes_per_channel is None:
         return False
@@ -491,7 +493,10 @@ def _matching_step_cfgs(
         clfeat_cfg = cfg.matching_classifier_clustering_features_cfg
         ref_cfgs = list(cfg.final_refinement_cfgs)
         feat_cfg = cfg.matching_classifier_featurization_cfg
-        samp_cfg = cfg.refinement_cfg.sampling_cfg
+        samp_cfg = replace(
+            cfg.refinement_cfg.sampling_cfg,
+            more_waveforms_fit=cfg.peeler_sampling_cfg.more_waveforms_fit,
+        )
     else:
         clus_cfg = cfg.clustering_cfg if cfg.recluster_after_matching else None
         clfeat_cfg = cfg.clustering_features_cfg

@@ -105,10 +105,15 @@ class BaseTemporalPCA(BaseWaveformModule):
         *,
         computation_cfg,
         channels,
+        save_fit_data: bool = False,
         **spike_data,
     ):
         super().fit(
-            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+            recording,
+            waveforms,
+            computation_cfg=computation_cfg,
+            channels=channels,
+            save_fit_data=save_fit_data,
         )
         waveforms_fit = self.extract_snippets(
             waveforms,

@@ -99,11 +99,23 @@ class BaseWaveformModule(BModule):
         computation_cfg: ComputationConfig,
         channels: torch.Tensor,
         pipeline: "WaveformPipeline | None" = None,
+        save_fit_data: bool = False,
         **spike_data: torch.Tensor,
     ) -> Any:
-        del recording, spike_data
+        del recording, spike_data, save_fit_data
         self.spike_length_samples = waveforms.shape[1]
         self.initialize_spike_length_dependent_params()
+
+    def fit_from_disk(
+        self,
+        *,
+        recording: BaseRecording,
+        hdf5_filename: Path,
+        pipeline: "WaveformPipeline",
+        computation_cfg: ComputationConfig,
+        save_fit_data: bool = False,
+    ) -> None:
+        raise NotImplementedError
 
     def get_extra_state(self):
         return dict(
@@ -263,6 +275,7 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
                 waveform_cfg=waveform_cfg,
                 sampling_frequency=sampling_frequency,
             )
+        assert pipeline is None or pipeline.fit_from_disk_index() is None
         self.pipeline = pipeline
         self.class_names_and_kwargs = class_names_and_kwargs
 
@@ -290,6 +303,7 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
         computation_cfg: ComputationConfig,
         channels: torch.Tensor,
         pipeline: "WaveformPipeline | None" = None,
+        save_fit_data: bool = False,
         **spike_data: torch.Tensor,
     ):
         del pipeline
@@ -301,6 +315,7 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
             hdf5_filename=hdf5_filename,
             computation_cfg=computation_cfg,
             channels=channels,
+            save_fit_data=save_fit_data,
             **spike_data,
         )
 
@@ -314,13 +329,10 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
             del pipeline_features["waveforms"]
         return waveforms, pipeline_features
 
-    def spike_datasets(self, force_save=False):
-        datasets = []
-        if self.pipeline is not None:
-            for t in self.pipeline.transformers:
-                if t.is_featurizer:
-                    datasets.extend(t.spike_datasets())
-        return datasets
+    def spike_datasets(self, force_save: bool = False) -> list[SpikeDataset]:
+        if self.pipeline is None:
+            return []
+        return self.pipeline.spike_datasets(force_save=force_save)
 
     def transform(self, waveforms, **spike_data):
         if self.pipeline is None:

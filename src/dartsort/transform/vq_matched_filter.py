@@ -61,6 +61,7 @@ class VQMatchedFilter(BaseTemporalPCA):
         *,
         computation_cfg,
         channels,
+        save_fit_data: bool = False,
         **spike_data,
     ):
         BaseWaveformModule.fit(
@@ -69,6 +70,7 @@ class VQMatchedFilter(BaseTemporalPCA):
             waveforms,
             computation_cfg=computation_cfg,
             channels=channels,
+            save_fit_data=save_fit_data,
         )
 
         snippets = self.extract_snippets(

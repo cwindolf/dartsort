@@ -1,8 +1,11 @@
-from typing import Sequence
+import itertools
+from collections.abc import Sequence
 
 import torch
 import torch.nn.functional as F
 from torch import nn
+
+from ..util.py_util import panic
 
 
 class AttentionBlock(nn.Module):
@@ -200,7 +203,7 @@ def get_mlp(
 
     elif res_type == "blocks_add":
         input_dims = [input_dim, *hidden_dims[:-1]]
-        for ind, outd in zip(input_dims, hidden_dims):
+        for ind, outd in zip(input_dims, hidden_dims, strict=True):
             layers.append(ResidualBlock(ind, outd, norm_kind))
             if attention_layer:
                 layers.append(AttentionBlock(outd, num_heads=num_heads))
@@ -244,7 +247,7 @@ def get_mlp(
         layers.append(nn.Linear(final_dim, 2 * output_dim))
         layers.append(nn.GLU())
     else:
-        assert False
+        panic(output_layer)
 
     return nn.Sequential(*layers)
 
@@ -277,7 +280,7 @@ def fullheight_layers(
         layers.append(nn.ReLU())
 
     n_blocks = len(dims) - 1
-    for i, (din, dout) in enumerate(zip(dims[:-1], dims[1:], strict=True)):
+    for i, (din, dout) in enumerate(itertools.pairwise(dims)):
         layers.append(nn.Conv1d(din, dout, kernel_size=1))
         post(is_last=(i == n_blocks - 1) and not channel_mix)
     if channel_mix:
@@ -468,7 +471,7 @@ class Rescaling(nn.Module):
         elif self.scale_kind == "std":
             scales = input.std(dim=dim, keepdim=True)
         else:
-            assert False
+            panic(self.scale_kind)
         if self.waveform_only:
             output = self.module((input / scales, masks))
         else:
@@ -496,7 +499,7 @@ class WaveformOnlyResidualForm(nn.Module):
         self.module = module
 
     def forward(self, inputs):
-        waveforms, masks = inputs
+        waveforms, _masks = inputs
         output = self.module(inputs)
         return waveforms + output
 
