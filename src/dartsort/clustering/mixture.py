@@ -2846,7 +2846,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             denom = stats.N.clamp_(min=self.eps)
             tikh = self.p.prior_pseudocount / denom
             U.diagonal(dim1=-2, dim2=-1).add_(tikh[:, None])
-        soln = torch.linalg.solve(U, stats.R)
+        Uchol, _ = torch.linalg.cholesky_ex(U)
+        soln = torch.cholesky_solve(stats.R, Uchol)
         self.b.means.copy_(soln[:, -1])
         self.b.bases.copy_(soln[:, :-1])
 
