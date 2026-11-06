@@ -263,6 +263,7 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         pilot: torch.Tensor | None = None,
         motion: MotionInfo | None = None,
     ):
+        assert shrinkage > 0 and smoothness >= 0
         super().__init__(geom=geom, channel_index=channel_index, name=[])
         self.shape = []
         self.dtype = []
@@ -474,7 +475,8 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
             )
             rhs = data_fit - cross[ix].double() + shrinkage * prior_fit
             rhs = rhs.sub_(self.smoothness * q).mul_(ok[:, :, None])
-            fit = torch.linalg.solve(system, rhs)
+            chol, _ = torch.linalg.cholesky_ex(system)
+            fit = torch.cholesky_solve(rhs, chol)
             fit = torch.where(ok[:, :, None] > 0, fit, prior_fit)
             features[ix] = features[ix].scatter(2, node_ix, fit.mT.float())
             del P, q, system, rhs, fit, prior_fit, data_fit
