@@ -18,7 +18,7 @@ from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import databag
 from .cluster_util import hierarchical_cluster, reorder_by_depth
-from .clustering_features import StableWaveformFeatures
+from .clustering_features import StableWaveformFeatures, _read_ix_maybe_mmap
 
 logger = get_logger(__name__)
 HAVE_KDEPY = importlib.util.find_spec("KDEpy") is not None
@@ -63,7 +63,7 @@ def pc_merge(
 
     # make stable features, no need for core features though.
     kept = np.flatnonzero(subset_sorting.labels >= 0)
-    x = stable_features.features[kept]
+    x = _read_ix_maybe_mmap(stable_features.features, kept)
     x = x[:, : refinement_cfg.pc_merge_rank]
     xlabels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
     n_reg_chans = motion.rgeom.shape[0]
@@ -456,7 +456,7 @@ def collision_cleaning_errors(
 
     # average feature
     kept = np.flatnonzero(subset_sorting.labels >= 0)
-    x = stable_features.features[kept]
+    x = _read_ix_maybe_mmap(stable_features.features, kept)
     xlabels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
     n_reg_chans = motion.rgeom.shape[0]
     means, counts = spiketorch.average_by_label(

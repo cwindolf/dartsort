@@ -243,7 +243,7 @@ class StableWaveformFeatures:
     # n, nc_extract
     channels: Tensor
     # n, rank, nc_extract
-    features: Tensor
+    features: Tensor | np.ndarray
     neighborhoods: SpikeNeighborhoods
     erp: StableFeaturesInterpolator
 
@@ -292,6 +292,9 @@ class StableWaveformFeatures:
                 trim_to_rank=clustering_features_cfg.feature_rank,
                 params=clustering_features_cfg.interp_params.normalize(),
                 device=computation_cfg.actual_device(),
+                store_on_disk=computation_cfg.low_memory,
+                tmpdir_parent=computation_cfg.maybe_tmpdir_parent(),
+                nan_to_num=True,
             )
         else:
             assert sorting.parent_h5_path is not None
@@ -308,19 +311,35 @@ class StableWaveformFeatures:
                     trim_to_rank=clustering_features_cfg.feature_rank,
                     params=clustering_features_cfg.interp_params.normalize(),
                     device=computation_cfg.actual_device(),
+                    store_on_disk=computation_cfg.low_memory,
+                    tmpdir_parent=computation_cfg.maybe_tmpdir_parent(),
+                    nan_to_num=True,
                 )
 
-        logger.dartsortdebug(f"StableWaveformFeatures {features.shape=}.")
+        logger.dartsortdebug(
+            f"StableWaveformFeatures {features.shape=} {computation_cfg.low_memory=}."
+        )
 
         return cls(
             channels=channels,
-            features=torch.asarray(features),
+            features=features,
             neighborhoods=spike_neighborhoods,
             erp=erp,
         )
 
 
 # -- helpers
+
+
+def _read_ix_maybe_mmap(x: Tensor | np.ndarray, ix: Tensor | np.ndarray | slice) -> Tensor:
+    if isinstance(x, Tensor):
+        return x[ix]
+    if isinstance(ix, slice):
+        return torch.from_numpy(np.array(x[ix]))
+    if isinstance(ix, Tensor):
+        ix = ix.numpy(force=True)
+    assert ix.ndim == 1
+    return torch.from_numpy(x[ix])
 
 
 def _interpolate_main_channel_features(

@@ -137,6 +137,8 @@ class DARTsortUserConfig:
     workdir_follow_symlinks: bool = False
     tmpdir_parent: str | None = None
     """Control where tmpdirs are created."""
+    low_memory: bool = False
+    """Best effort at not using tons of RAM. If you notice memory problems, please get in touch!"""
     save_intermediates: bool = False
     """Store all spike features from intermediate steps (for debugging)"""
 

@@ -1,5 +1,7 @@
 """Library for flavors of kernel interpolation and data interp utilities"""
 
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
 import h5py
@@ -33,9 +35,12 @@ def interpolate_by_chunk(
     params: InterpolationParams = tps_interp_params,
     device=None,
     store_on_device=False,
+    store_on_disk: bool = False,
+    tmpdir_parent: Path | str | None = None,
+    nan_to_num: bool = False,
     show_progress=True,
     shift_dim: int = 1,
-):
+) -> "tuple[StableFeaturesInterpolator, torch.Tensor | np.ndarray]":
     """Interpolate data living in an HDF5 file
 
     If dataset is a h5py.Dataset and mask is a boolean array indicating
@@ -70,9 +75,10 @@ def interpolate_by_chunk(
 
     Returns
     -------
-    out : torch.Tensor
+    out : torch.Tensor or np.memmap if store_on_disk
         (n_spikes, feature_dim, n_target_chans)
     """
+    assert not (store_on_device and store_on_disk)
     # check shapes
     assert geom.shape[1] == 2, "Haven't implemented 3d."
     if torch.is_tensor(mask):
@@ -107,7 +113,11 @@ def interpolate_by_chunk(
     else:
         out_feature_dim = feature_dim
     out_shape = n_spikes, out_feature_dim, n_target_chans
-    out = torch.empty(out_shape, dtype=dtype, device=storage_device)
+    if store_on_disk:
+        with tempfile.TemporaryFile(dir=tmpdir_parent) as tmpfile:
+            out = np.memmap(tmpfile, dtype=dataset.dtype, mode="w+", shape=out_shape)
+    else:
+        out = torch.empty(out_shape, dtype=dtype, device=storage_device)
 
     # build data needed for interpolation
     source_geom = pad_geom(geom, dtype=dtype, device=device)
@@ -134,13 +144,20 @@ def interpolate_by_chunk(
         if trim_to_rank is not None:
             chunk_features = chunk_features[:, :trim_to_rank]
         chunk_features = torch.asarray(chunk_features, device=device, dtype=dtype)
-        out[sli] = erp.interp(
+        chunk_out = erp.interp(
             features=chunk_features,
             source_main_channels=channels[sli].to(device),
             target_channels=target_channels[sli],
             source_shifts=shifts[sli].to(device),
             allow_destroy=True,
-        ).to(out)
+        )
+        if nan_to_num:
+            chunk_out = chunk_out.nan_to_num_()
+        if store_on_disk:
+            out[sli] = chunk_out.numpy(force=True)
+        else:
+            out[sli] = chunk_out.to(out)
+        del chunk_out
 
     return erp, out
 

@@ -49,10 +49,10 @@ dartvis.set_plt_style()
 
 # %%
 # update this for your machine!
-experiment_path = dartsort.ensure_path("~/scratch/ibl-dandi-chunked-example/", mkdir=True)
+experiment_path = dartsort.ensure_path("~/scratch/ibl-dandi-example/", mkdir=True)
 
 # %%
-ds_dir = experiment_path / "dartsort"
+ds_dir = experiment_path / "dartsort-chunked"
 
 # %%
 # IBL BWM dandiset, example recording
@@ -100,7 +100,7 @@ else:
     rec._sampling_frequency = 30_000
 
     rec = dartsort.preprocess(rec, strategy="ibllike")
-    rec = rec.save(preprocessing_path, format="binary")
+    rec = rec.save(folder=preprocessing_path, format="binary")
 
 # %%
 plt.imshow(

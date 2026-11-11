@@ -949,6 +949,7 @@ class ComputationConfig:
     executor: str = "threading_unless_multigpu"
     device: str | None = argfield(default=None, arg_type=str)
     tmpdir_parent: str | None = None
+    low_memory: bool = False
 
     @classmethod
     def from_n_jobs(cls, n_jobs, n_jobs_small=8):
@@ -1099,7 +1100,7 @@ class DARTsortInternalConfig:
         if self.tmpdir_parent is not None:
             return ensure_path(self.tmpdir_parent, strict=True)
         if self.computation_cfg.tmpdir_parent is not None:
-            return ensure_path(self.tmpdir_parent, strict=True)
+            return ensure_path(self.computation_cfg.tmpdir_parent, strict=True)
         return None
 
     @property
@@ -1727,6 +1728,7 @@ def _computation_cfg(cfg: "DeveloperConfig") -> ComputationConfig:
         device=cfg.device,
         executor=cfg.executor,
         tmpdir_parent=cfg.tmpdir_parent,
+        low_memory=cfg.low_memory,
     )
 
 
