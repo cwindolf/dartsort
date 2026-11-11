@@ -80,7 +80,7 @@ else:
     rec._sampling_frequency = 30_000
 
     rec = dartsort.preprocess(rec, strategy="ibllike")
-    rec = rec.save(preprocessing_path, format="binary")
+    rec = rec.save(folder=preprocessing_path, format="binary")
 
 # %%
 plt.imshow(
