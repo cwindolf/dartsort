@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, cast
 
 from dredge.motion_util import MotionEstimate
+from numpy import ndarray
 from spikeinterface.core import BaseRecording, Motion
 from torch import Tensor
 
@@ -227,7 +228,6 @@ def _dartsort_impl(
     store_dir = output_dir if work_dir is None else work_dir
 
     # if there are previous results stored, resume where they leave off
-    # TODO uhh. overwrite, right?
     next_step, sorting, _motion = ds_fast_forward(store_dir, cfg)
     if motion is not None:
         ds_check_motion(recording, motion)
@@ -263,7 +263,9 @@ def _dartsort_impl(
 
     if next_step == 0:
         # first step: initial detection and motion estimation
-        is_final = cfg.dredge_only or not cfg.matching_iterations
+        is_final = (
+            cfg.fit_motion_models_only or cfg.dredge_only or not cfg.matching_iterations
+        )
         with timer("initial_detection", ret["timing"]):
             sorting = initial_detection(
                 output_dir=store_dir,
@@ -292,9 +294,14 @@ def _dartsort_impl(
                     sampling_cfg=cfg.peeler_sampling_cfg,
                     waveform_cfg=cfg.waveform_cfg,
                     overwrite=overwrite,
+                    _fit_localizer_only=cfg.fit_motion_models_only,
                     _save_cfg=cfg,
                     _save_dir=output_dir,
                 )
+            if cfg.fit_motion_models_only:
+                assert motion is None  # outside of my typing deliberately.
+                ret["sorting"] = sorting
+                return ret
             ret["motion"] = motion
             ds_save_motion(motion, output_dir, work_dir, overwrite)
 
@@ -551,7 +558,7 @@ def subtract(
     subtraction_cfg=default_subtraction_cfg,
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples=None,
+    chunk_starts_samples: ndarray | None = None,
     stop_after_n_spikes: int | None = None,
     ensure_coverage: float | None = None,
     overwrite=False,
@@ -618,7 +625,7 @@ def match(
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     prev_step_name: str | None = None,
     save_cfg: DARTsortInternalConfig | None = None,
-    chunk_starts_samples=None,
+    chunk_starts_samples: ndarray | None = None,
     stop_after_n_spikes: int | None = None,
     ensure_coverage: float | None = None,
     overwrite=False,
@@ -731,7 +738,7 @@ def grab(
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     featurization_cfg: FeaturizationConfig = default_featurization_cfg,
     sampling_cfg: FitSamplingConfig = no_resid_peeling_fit_sampling_cfg,
-    chunk_starts_samples=None,
+    chunk_starts_samples: ndarray | None = None,
     overwrite=False,
     show_progress=True,
     hdf5_filename="grab.h5",
@@ -777,7 +784,7 @@ def threshold(
     featurization_pipeline: WaveformPipeline | None = None,
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     extract_channel_index: Tensor | None = None,
-    chunk_starts_samples=None,
+    chunk_starts_samples: ndarray | None = None,
     stop_after_n_spikes: int | None = None,
     ensure_coverage: float | None = None,
     overwrite=False,

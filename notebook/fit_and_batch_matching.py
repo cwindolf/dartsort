@@ -5,11 +5,11 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.5
+#       jupytext_version: 1.19.6
 #   kernelspec:
-#     display_name: Python [conda env:dart14]
+#     display_name: Python [conda env:a]
 #     language: python
-#     name: conda-env-dart14-py
+#     name: conda-env-a-py
 # ---
 
 # %% [markdown]
@@ -31,18 +31,17 @@
 # recording.
 
 # %%
+import dataclasses
+
 import matplotlib.pyplot as plt
-
-# %%
-# dandi-related
-from dandi.dandiapi import DandiAPIClient
-import fsspec
-
-# %%
 import numpy as np
 import spikeinterface.full as si
+from dandi.dandiapi import DandiAPIClient
+
 import dartsort
 import dartsort.vis as dartvis
+from dartsort.util.main_util import motion_needs_peaks
+
 dartvis.set_plt_style()
 
 # %% [markdown]
@@ -50,9 +49,7 @@ dartvis.set_plt_style()
 
 # %%
 # update this for your machine!
-experiment_path = dartsort.ensure_path(
-    "~/scratch/ibl-dandi-example/", mkdir=True
-)
+experiment_path = dartsort.ensure_path("~/scratch/ibl-dandi-chunked-example/", mkdir=True)
 
 # %%
 ds_dir = experiment_path / "dartsort"
@@ -93,7 +90,7 @@ else:
     print(rec0)
 
     # slice 10 minutes near the end
-    #TODO better IBL sampling rate handling
+    # TODO better IBL sampling rate handling
     rec = rec0
     end_time = rec.get_end_time()
     start_frame = rec.time_to_sample_index(end_time - 30 * 60)
@@ -103,36 +100,102 @@ else:
     rec._sampling_frequency = 30_000
 
     rec = dartsort.preprocess(rec, strategy="ibllike")
-    rec = rec.save_to_folder(preprocessing_path)
+    rec = rec.save(preprocessing_path, format="binary")
 
 # %%
 plt.imshow(
     rec.get_traces(0, 10_000, 11_000).T,
-    aspect='auto',
+    aspect="auto",
     vmin=-5,
     vmax=5,
-    interpolation='nearest',
+    interpolation="nearest",
 )
-plt.colorbar(shrink=0.5, label='standardized voltage')
-plt.xlabel('time (samples')
-plt.ylabel('channels');
-
+plt.colorbar(shrink=0.5, label="standardized voltage")
+plt.xlabel("time (samples")
+plt.ylabel("channels")
 # %% [markdown]
 # # Configuration
 
 # %%
 # use defaults, except for the pipeline change
-cfg = dartsort.DARTsortUserConfig(fit_matching_models_only=True)
+cfg = dartsort.DARTsortUserConfig()
 
 # %%
 # process into an internal config object for later use
 internal_cfg = dartsort.to_internal_config(cfg)
 
 # %% [markdown]
-# # Fit models
+# # Initial spike detection and motion tracking model fits
 
 # %%
-dartsort.dartsort(rec, ds_dir, cfg=cfg)
+dartsort.dartsort(rec, ds_dir, cfg=dataclasses.replace(cfg, fit_motion_models_only=True))
+
+# %% [markdown]
+# # Chunked spike detection for motion tracking
+#
+# While dartsort itself only needs to detect spikes on a subsample of the recording
+# in order to do clustering, motion tracking does require spikes from the whole
+# recording. dartsort uses a cheap but good spike detection and localization pass for
+# this, which is very fast, but users at the thousand hour scale still might want to
+# parallelize it.
+#
+# This runs that cheap spike detection for motion tracking in 1-minute batches for demo
+# purposes.
+#
+# Here, the `chunk_starts_samples` argument slices the recording for us.
+# This is better in this case than using `.frame_slice` or `.time_slice` on the recording,
+# since this way the sample indices (spike times) are relative to the full recording without extra bookkeeping.
+#
+# If the initial detection already covered the whole recording, motion tracking uses its
+# spikes and this step is skipped.
+
+# %%
+subtraction_sorting = dartsort.load(ds_dir / "subtraction.h5")
+need_motion_peaks = cfg.do_motion_estimation and motion_needs_peaks(
+    internal_cfg, rec, subtraction_sorting
+)
+
+# %%
+chunk_length_samples = internal_cfg.motion_estimation_cfg.threshold_cfg.chunk_length_samples
+batch_length_samples = 60 * chunk_length_samples
+duration_samples = rec.get_num_samples()
+
+if need_motion_peaks:
+    for batch_ix, batch_start_samples in enumerate(range(0, duration_samples, batch_length_samples)):
+        batch_end_samples = min(duration_samples, batch_start_samples + batch_length_samples)
+        res = dartsort.detect_for_motion(
+            recording=rec,
+            output_dir=ds_dir,
+            previous_sorting=subtraction_sorting,
+            hdf5_filename=f"motionthreshold_batch{batch_ix:05}.h5",
+            chunk_starts_samples=np.arange(batch_start_samples, batch_end_samples, chunk_length_samples),
+            motion_cfg=internal_cfg.motion_estimation_cfg,
+            computation_cfg=internal_cfg.motion_computation_cfg,
+            sampling_cfg=internal_cfg.peeler_sampling_cfg,
+            waveform_cfg=internal_cfg.waveform_cfg,
+        )
+        del res
+
+# %% [markdown]
+# Combine the output of those detections into one sorting, and check that together the
+# batches covered the recording.
+
+# %%
+if need_motion_peaks:
+    motion_chunk_h5s = sorted(ds_dir.glob("motionthreshold_batch*.h5"))
+    dartsort.virtual_concatenate_sorting_h5s(motion_chunk_h5s, ds_dir / "motionthreshold.h5")
+    motion_sorting = dartsort.load(ds_dir / "motionthreshold.h5")
+    assert np.array_equal(
+        motion_sorting.load_dataset("chunk_starts_samples"),
+        np.arange(0, duration_samples, chunk_length_samples),
+    )
+    print(motion_sorting)
+
+# %% [markdown]
+# # Resume: estimate motion, cluster, learn templates and the matching step classifier
+
+# %%
+dartsort.dartsort(rec, ds_dir, cfg=dataclasses.replace(cfg, fit_matching_models_only=True))
 
 # %%
 # !ls {ds_dir}
@@ -146,11 +209,8 @@ dartsort.dartsort(rec, ds_dir, cfg=cfg)
 # %% [markdown]
 # # Chunked template matching
 #
-# This runs template matching in 1-minute batches.
-#
-# Here, `chunk_starts_samples` slices the recording for us.
-# This might be better than using `.frame_slice` or `.time_slice` on the recording,
-# since this way the sample indices (spike times) are relative to the full recording without extra bookkeeping.
+# This runs template matching in 1-minute batches, with the same loop over chunks
+# as the motion tracking's spike detection above.
 #
 
 # %%
@@ -186,7 +246,9 @@ for batch_ix, batch_start_samples in enumerate(range(0, duration_samples, 60 * 3
 # which can be turned off for users who don't need them.
 
 # %%
-sorting = dartsort.concatenate_sortings([dartsort.load(h5) for h5 in sorted(ds_dir.glob("matching1_batch*.h5"))])
+sorting = dartsort.concatenate_sortings(
+    [dartsort.load(h5) for h5 in sorted(ds_dir.glob("matching1_batch*.h5"))]
+)
 
 # %%
 sorting = dartsort.cluster(
@@ -199,7 +261,7 @@ sorting = dartsort.cluster(
 
 # %%
 # if you want to keep this...
-sorting.save(ds_dir / 'dartsort_sorting.npz')
+sorting.save(ds_dir / "dartsort_sorting.npz")
 
 # %% [markdown]
 # # Visualize

@@ -16,14 +16,15 @@
 import matplotlib.pyplot as plt
 
 # %%
-# dandi-related
-from dandi.dandiapi import DandiAPIClient
-import fsspec
+import spikeinterface.full as si
 
 # %%
-import spikeinterface.full as si
+# dandi-related
+from dandi.dandiapi import DandiAPIClient
+
 import dartsort
 import dartsort.vis as dartvis
+
 dartvis.set_plt_style()
 
 # %% [markdown]
@@ -31,9 +32,7 @@ dartvis.set_plt_style()
 
 # %%
 # update this for your machine!
-experiment_path = dartsort.ensure_path(
-    "~/scratch/ibl-dandi-example/", mkdir=True
-)
+experiment_path = dartsort.ensure_path("~/scratch/ibl-dandi-example/", mkdir=True)
 
 # %%
 # IBL BWM dandiset, example recording
@@ -71,7 +70,7 @@ else:
     print(rec0)
 
     # slice 10 minutes near the end
-    #TODO better IBL sampling rate handling
+    # TODO better IBL sampling rate handling
     rec = rec0
     end_time = rec.get_end_time()
     start_frame = rec.time_to_sample_index(end_time - 30 * 60)
@@ -81,20 +80,19 @@ else:
     rec._sampling_frequency = 30_000
 
     rec = dartsort.preprocess(rec, strategy="ibllike")
-    rec = rec.save_to_folder(preprocessing_path)
+    rec = rec.save(preprocessing_path, format="binary")
 
 # %%
 plt.imshow(
     rec.get_traces(0, 10_000, 11_000).T,
-    aspect='auto',
+    aspect="auto",
     vmin=-5,
     vmax=5,
-    interpolation='nearest',
+    interpolation="nearest",
 )
-plt.colorbar(shrink=0.5, label='standardized voltage')
-plt.xlabel('time (samples')
-plt.ylabel('channels');
-
+plt.colorbar(shrink=0.5, label="standardized voltage")
+plt.xlabel("time (samples")
+plt.ylabel("channels")
 # %% [markdown]
 # ## Run *dartsort*
 
@@ -106,6 +104,6 @@ ds_res = dartsort.dartsort(rec, ds_dir)
 # # Visualize
 
 # %%
-dartvis.scatter_spike_features(sorting=ds_res["sorting"]);
+dartvis.scatter_spike_features(sorting=ds_res["sorting"])
 
 # %%

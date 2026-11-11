@@ -63,6 +63,7 @@ from .util.data_util import (
     sorting_from_spikeinterface,
     try_get_denoising_pipeline,
     try_get_model_dir,
+    virtual_concatenate_sorting_h5s,
 )
 from .util.drift_util import registered_geometry
 from .util.internal_config import *

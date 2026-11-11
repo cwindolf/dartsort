@@ -58,6 +58,7 @@ def get_motion_info(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     overwrite: bool = False,
     show_progress: bool = True,
+    _fit_localizer_only: bool = False,
     _save_cfg: DARTsortInternalConfig | None = None,
     _save_dir: Path | None = None,
 ) -> "MotionInfo":
@@ -86,6 +87,9 @@ def get_motion_info(
     need_new_peaks = detect_new_peaks and (
         need_motion_estimate or _saving_intermediates
     )
+    if _fit_localizer_only and not need_new_peaks:
+        # deliberately untyped dev tooling code path
+        return None  # type: ignore
     if need_new_peaks:
         assert output_directory is not None
         assert sorting is not None
@@ -93,7 +97,7 @@ def get_motion_info(
         assert waveform_cfg is not None
         output_directory = ensure_path(output_directory)
         motion_sorting = detect_for_motion(
-            output_directory=output_directory,
+            output_dir=output_directory,
             recording=recording,
             previous_sorting=sorting,
             motion_cfg=motion_cfg,
@@ -102,7 +106,11 @@ def get_motion_info(
             waveform_cfg=waveform_cfg,
             overwrite=overwrite,
             show_progress=show_progress,
+            _fit_localizer_only=_fit_localizer_only,
         )
+        if _fit_localizer_only:
+            # deliberately untyped dev tooling code path
+            return None  # type: ignore
         ds_save_features(
             cfg=_save_cfg,
             sorting=motion_sorting,
@@ -465,22 +473,23 @@ def resample_motion(
 
 def detect_for_motion(
     *,
-    output_directory: Path | str,
+    output_dir: Path | str,
+    recording: BaseRecording,
     hdf5_filename="motionthreshold.h5",
     model_subdir="motionthreshold_models",
-    recording: BaseRecording,
     previous_sorting: "DARTsortSorting | None",
     motion_cfg: MotionEstimationConfig,
     computation_cfg: ComputationConfig | None = None,
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
+    chunk_starts_samples: np.ndarray | None = None,
     overwrite: bool = False,
     featurization_kw: dict | None = None,
     show_progress: bool = False,
-):
+    _fit_localizer_only: bool = False,
+) -> DARTsortSorting:
     """Thresholding detection and localization to get spikes for motion estimation."""
-    from ..main import threshold
-    from ..peel import Shaver
+    from ..peel import Shaver, Threshold
     from ..transform import WaveformPipeline
     from ..util.peel_util import run_peeler
     from .data_util import try_get_denoising_pipeline
@@ -524,46 +533,47 @@ def detect_for_motion(
         sampling_frequency=recording.sampling_frequency,
     )
     if denoising_pipeline is None:
-        return threshold(
-            output_dir=output_directory,
+        peeler = Threshold.from_config(
+            recording=recording,
+            waveform_cfg=waveform_cfg,
+            thresholding_cfg=motion_cfg.threshold_cfg,
+            featurization_cfg=featurization_cfg,
+            featurization_pipeline=pipeline,
+            extract_channel_index=channel_index,
+            sampling_cfg=sampling_cfg,
+        )
+    else:
+        peeler = Shaver.from_config(
             recording=recording,
             waveform_cfg=waveform_cfg,
             thresholding_cfg=motion_cfg.threshold_cfg,
             featurization_cfg=featurization_cfg,
             featurization_pipeline=pipeline,
             sampling_cfg=sampling_cfg,
+            denoising_pipeline=denoising_pipeline,
             extract_channel_index=channel_index,
-            chunk_starts_samples=None,
-            overwrite=overwrite,
-            show_progress=show_progress,
-            hdf5_filename=hdf5_filename,
-            model_subdir=model_subdir,
-            computation_cfg=computation_cfg,
         )
-    shaver = Shaver.from_config(
-        recording=recording,
-        waveform_cfg=waveform_cfg,
-        thresholding_cfg=motion_cfg.threshold_cfg,
-        featurization_cfg=featurization_cfg,
-        featurization_pipeline=pipeline,
-        sampling_cfg=sampling_cfg,
-        denoising_pipeline=denoising_pipeline,
-        extract_channel_index=channel_index,
-    )
-    shave_path = run_peeler(
-        peeler=shaver,
-        output_directory=output_directory,
+    peel_path = run_peeler(
+        peeler=peeler,
+        output_directory=output_dir,
         hdf5_filename=hdf5_filename,
         model_subdir=model_subdir,
         computation_cfg=computation_cfg,
         featurization_cfg=featurization_cfg,
+        chunk_starts_samples=chunk_starts_samples,
+        overwrite=overwrite,
         show_progress=show_progress,
+        fit_only=_fit_localizer_only,
     )
 
-    del shaver
-    cleanup_and_log_gpu_usage(computation_cfg, f"Post shave ({hdf5_filename}):")
+    del peeler
+    cleanup_and_log_gpu_usage(computation_cfg, f"Post motion peel ({hdf5_filename}):")
 
-    assert shave_path is not None
-    sorting = DARTsortSorting.from_peeling_hdf5(shave_path)
+    if _fit_localizer_only:
+        # deliberately untyped dev tooling code path
+        return None  # type: ignore
+
+    assert peel_path is not None
+    sorting = DARTsortSorting.from_peeling_hdf5(peel_path)
 
     return sorting

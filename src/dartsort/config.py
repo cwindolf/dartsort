@@ -269,6 +269,7 @@ class DARTsortUserConfig:
     """Chunk length in seconds for online motion tracking"""
 
     # -- pipeline control parameters for specific use cases
+    fit_motion_models_only: bool = False
     fit_matching_models_only: bool = False
     save_full_final_residual: bool = False
 

@@ -1057,6 +1057,7 @@ class DARTsortInternalConfig:
     motion_computation_cfg: ComputationConfig = default_motion_computation_cfg
 
     # high level behavior
+    fit_motion_models_only: bool = False
     dredge_only: bool = False
     fit_matching_models_only: bool = False
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
@@ -1240,6 +1241,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         already_preprocessed=cfg.already_preprocessed,
         preprocessing_dtype=cfg.preprocessing_dtype,
         detection_type=cfg.detection_type,
+        fit_motion_models_only=cfg.fit_motion_models_only,
         dredge_only=cfg.dredge_only,
         fit_matching_models_only=cfg.fit_matching_models_only,
         matching_iterations=cfg.matching_iterations,
