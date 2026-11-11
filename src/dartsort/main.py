@@ -299,7 +299,6 @@ def _dartsort_impl(
                     _save_dir=output_dir,
                 )
             if cfg.fit_motion_models_only:
-                assert motion is None  # outside of my typing deliberately.
                 ret["sorting"] = sorting
                 return ret
             ret["motion"] = motion

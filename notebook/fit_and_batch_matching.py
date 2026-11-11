@@ -153,6 +153,7 @@ subtraction_sorting = dartsort.load(ds_dir / "subtraction.h5")
 need_motion_peaks = cfg.do_motion_estimation and dartsort.motion_needs_peaks(
     internal_cfg, rec, subtraction_sorting
 )
+need_motion_peaks
 
 # %%
 chunk_length_samples = internal_cfg.motion_estimation_cfg.threshold_cfg.chunk_length_samples
@@ -180,7 +181,7 @@ if need_motion_peaks:
 # batches covered the recording.
 
 # %%
-if need_motion_peaks:
+if need_motion_peaks and not (ds_dir / "motionthreshold.h5").exists():
     motion_chunk_h5s = sorted(ds_dir.glob("motionthreshold_batch*.h5"))
     dartsort.virtual_concatenate_sorting_h5s(motion_chunk_h5s, ds_dir / "motionthreshold.h5")
     motion_sorting = dartsort.load(ds_dir / "motionthreshold.h5")
@@ -189,6 +190,12 @@ if need_motion_peaks:
         np.arange(0, duration_samples, chunk_length_samples),
     )
     print(motion_sorting)
+
+# %%
+# !ls -lah {ds_dir}
+
+# %% [markdown]
+# ^ Notice all of the chunked motion files! But motionthreshold.h5 itself is tiny, because the concatenation is virtual.
 
 # %% [markdown]
 # # Resume: estimate motion, cluster, learn templates and the matching step classifier
