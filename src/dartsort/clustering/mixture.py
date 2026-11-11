@@ -109,7 +109,7 @@ from ..util.spiketorch import (
 )
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage, torch_compiler
 from .cluster_util import decrumb, linkage, maximal_leaf_groups, violation_statistics
-from .clustering_features import StableWaveformFeatures
+from .clustering_features import StableWaveformFeatures, _read_ix_maybe_mmap
 from .kmeans import _one_gumbel_nolog, batched_kmeans, kmeans
 
 if TYPE_CHECKING:
@@ -1568,7 +1568,7 @@ class StreamingSpikeData(BatchedSpikeData):
         *,
         n_candidates: int,
         max_n_candidates: int,
-        x: Tensor,
+        x: Tensor | np.ndarray,
         duties: Tensor | None,
         neighborhoods: SpikeNeighborhoods,
         device: torch.device,
@@ -1660,7 +1660,7 @@ class StreamingSpikeData(BatchedSpikeData):
             duties = None
         else:
             duties = self.duties[spike_indices].to(self.device)
-        x = self.x[spike_indices].to(self.device)
+        x = _read_ix_maybe_mmap(self.x, spike_indices).to(self.device)
         wx, noise_loglik = _whiten_and_noise_score_batch(
             x=x, neighb_ids=neighb_ids, neighb_cov=self.neighb_cov
         )
@@ -1753,7 +1753,12 @@ class TruncatedSpikeData(BatchedSpikeData):
         assert self.storage_device in (device, torch.device("cpu"))
         for f in (xt, whitenedx, CmoCooinvx, noise_logliks):
             assert f is None or f.device == self.storage_device
-            assert self.storage_device == device or f is None or f.is_pinned()
+            assert (
+                self.storage_device == device
+                or f is None
+                or not f.numel()
+                or f.is_pinned()
+            )
 
         self.score_only = xt is None
         assert self.score_only == (CmoCooinvx is None)
@@ -2846,7 +2851,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             denom = stats.N.clamp_(min=self.eps)
             tikh = self.p.prior_pseudocount / denom
             U.diagonal(dim1=-2, dim2=-1).add_(tikh[:, None])
-        soln = torch.linalg.solve(U, stats.R)
+        Uchol, _ = torch.linalg.cholesky_ex(U)
+        soln = torch.cholesky_solve(stats.R, Uchol)
         self.b.means.copy_(soln[:, -1])
         self.b.bases.copy_(soln[:, :-1])
 
@@ -4544,6 +4550,7 @@ def get_truncated_datasets(
     noise: EmbeddedNoise | None = None,
     stable_features: StableWaveformFeatures | None = None,
     save_kwargs: dict | None = None,
+    computation_cfg: ComputationConfig | None = None,
 ):
     # we assume that the core neighborhoods are exactly the same as extract ones
     data = get_full_neighborhood_data(
@@ -4555,6 +4562,7 @@ def get_truncated_datasets(
         fit_indices=fit_indices,
         stable_features=stable_features,
         device=device,
+        computation_cfg=computation_cfg,
     )
     feature_rank, full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom, train_weights, val_weights = data  # fmt: skip
     del stable_features
@@ -4601,11 +4609,11 @@ def get_truncated_datasets(
         huber_quantile=noise_huber_quantile(refinement_cfg),
     )
 
+    train_x = _read_ix_maybe_mmap(full_features, train_ixs)
     if refinement_cfg.spike_storage == "device" or not sorting.n_units:
-        train_x = full_features[train_ixs].to(device=device)
+        train_x = train_x.to(device=device)
     elif refinement_cfg.spike_storage == "cpu":
-        assert full_features.device.type == "cpu"
-        train_x = full_features[train_ixs]
+        assert train_x.device.type == "cpu"
     else:
         panic(refinement_cfg.spike_storage)
 
@@ -4712,11 +4720,11 @@ def get_truncated_datasets(
             val_duties = None
         else:
             val_duties = duties[val_ixs].to(device=device)
+        val_x = _read_ix_maybe_mmap(full_features, val_ixs)
         if refinement_cfg.spike_storage == "device":
-            val_x = full_features[val_ixs].to(device=device)
+            val_x = val_x.to(device=device)
         elif refinement_cfg.spike_storage == "cpu":
-            assert full_features.device.type == "cpu"
-            val_x = full_features[val_ixs]
+            assert val_x.device.type == "cpu"
         else:
             panic(refinement_cfg.spike_storage)
         val_data = TruncatedSpikeData.initialize_from_labels(
@@ -4822,8 +4830,7 @@ def get_full_neighborhood_data(
     if clustering_features_cfg is not None:
         assert 0 < frank <= clustering_features_cfg.feature_rank
     assert xfull.shape[0] == full_neighborhoods.b.neighborhood_ids.shape[0]
-    xfull = xfull.view(len(xfull), -1)
-    xfull = xfull.nan_to_num_()
+    xfull = xfull.reshape(len(xfull), -1)
 
     full_neighborhoods = full_neighborhoods.to(device=device)
 
@@ -5008,6 +5015,7 @@ def instantiate_and_bootstrap_tmm(
             device=device,
             rg=rg,
             save_kwargs=save_kwargs,
+            computation_cfg=computation_cfg,
         )
     )
 
@@ -5153,7 +5161,7 @@ class TruncatedKmeanspp:
     def fit_predict(
         cls,
         *,
-        x: Tensor,
+        x: Tensor | np.ndarray,
         train_x: Tensor,
         neighborhoods: SpikeNeighborhoods,
         neighb_cov: NeighborhoodCovariance,
@@ -5235,42 +5243,52 @@ class TruncatedKmeanspp:
     def label(
         self,
         *,
-        x: Tensor,
+        x: Tensor | np.ndarray,
         neighborhoods: SpikeNeighborhoods,
         neighb_cov: NeighborhoodCovariance,
         centroid_ixs: Tensor,
         batch_size: int,
+        chunk_size: int = 2**20,
     ) -> Tensor:
         """In batches, label each x by its best centroid"""
         max_nc_obs = self.neighborhoods.shape[1]
         device = self.X.device
+        n_neighbs = neighborhoods.n_neighborhoods
         neighb_ids = neighborhoods.b.neighborhood_ids
         cent_visible = self.visible[:, self.Xneighbixs[centroid_ixs]]
 
-        full_labels = torch.full(x.shape[:1], -1, dtype=torch.long, device=device)
-        order, indptr, _ = sort_to_csr(neighb_ids, neighborhoods.n_neighborhoods)
-        indptr_list = indptr.tolist()
-        for ni in range(neighborhoods.n_neighborhoods):
-            members = order[indptr_list[ni] : indptr_list[ni + 1]]
-            if not members.numel():
-                continue
-
+        neighb_centers: dict[int, tuple[Tensor, NeighborhoodCenters]] = {}
+        for ni in range(n_neighbs):
             (cand,) = cent_visible[ni].nonzero(as_tuple=True)
             if not cand.numel():
                 # kmeans++ ran out of components before covering this neighborhood
                 continue
-            centers = self.centers_in_neighborhood(ni, centroid_ixs[cand])
+            neighb_centers[ni] = cand, self.centers_in_neighborhood(
+                ni, centroid_ixs[cand]
+            )
 
-            for bs in range(0, members.numel(), batch_size):
-                bix = members[bs : bs + batch_size]
-                xb = x[bix.to(x.device)].to(device)
-                wx, _ = _whiten_and_noise_score_batch(
-                    x=xb, neighb_ids=neighb_ids[bix], neighb_cov=neighb_cov
-                )
-                xsq = wx.view(bix.shape[0], self.feat_rank, max_nc_obs)
-                xsq = xsq.square().sum(dim=1)
-                d = self.center_dists(wx, xsq, centers)
-                full_labels[bix] = cand[d.argmin(dim=1)]
+        full_labels = torch.full(x.shape[:1], -1, dtype=torch.long, device=device)
+        for i0 in range(0, x.shape[0], chunk_size):
+            i1 = min(x.shape[0], i0 + chunk_size)
+            x_chunk = _read_ix_maybe_mmap(x, slice(i0, i1))
+            chunk_neighb_ids = neighb_ids[i0:i1]
+            order, indptr, _ = sort_to_csr(chunk_neighb_ids, n_neighbs)
+            indptr_list = indptr.tolist()
+            for ni, (cand, centers) in neighb_centers.items():
+                members = order[indptr_list[ni] : indptr_list[ni + 1]]
+                for bs in range(0, members.numel(), batch_size):
+                    bix = members[bs : bs + batch_size]
+                    xb = x_chunk[bix.to(x_chunk.device)].to(device)
+                    wx, _ = _whiten_and_noise_score_batch(
+                        x=xb,
+                        neighb_ids=chunk_neighb_ids[bix],
+                        neighb_cov=neighb_cov,
+                    )
+                    xsq = wx.view(bix.shape[0], self.feat_rank, max_nc_obs)
+                    xsq = xsq.square().sum(dim=1)
+                    d = self.center_dists(wx, xsq, centers)
+                    full_labels[i0 + bix] = cand[d.argmin(dim=1)]
+            del x_chunk
 
         n_unlabeled = (full_labels < 0).sum().item()
         if n_unlabeled:

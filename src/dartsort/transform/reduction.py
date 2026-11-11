@@ -263,6 +263,7 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         pilot: torch.Tensor | None = None,
         motion: MotionInfo | None = None,
     ):
+        assert shrinkage > 0 and smoothness >= 0
         super().__init__(geom=geom, channel_index=channel_index, name=[])
         self.shape = []
         self.dtype = []
@@ -416,7 +417,6 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
 
         # prior on srgeom, and fit nodes
         prior = prior.to(device=device, dtype=torch.float)
-        assert prior.isfinite().all()
         srgeom = self.srgeom_erp.b.rgeom
         prior = self.rgeom_erp.interp_to(srgeom, prior)
         centers = self.rgeom_erp.b.rgeom[main_channels.to(device)]
@@ -432,24 +432,28 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
 
         # sum over spikes of erp^T erp and erp_fit^T erp F0_out, by chunk
         n_nodes = len(self.srgeom)
-        gram = prior.new_zeros((self.n_units, fit_nodes.shape[1], fit_nodes.shape[1]))
-        cross = prior.new_zeros((self.n_units, fit_nodes.shape[1], self.feature_dim))
+        n_fit_max = fit_nodes.shape[1]
+        gram = prior.new_zeros((self.n_units, n_fit_max, n_fit_max))
+        cross = prior.new_zeros((self.n_units, self.feature_dim, n_fit_max))
         node_counts = prior.new_zeros((self.n_units, n_nodes))
         for t_s in sorted(chunk_weights):
             (units,) = chunk_weights[t_s].nonzero(as_tuple=True)
             n = chunk_weights[t_s][units][:, None, None]
             kernel = self.srgeom_erp.interpolation_kernel_at_time(t_s)
-            kernel_fit = kernel[:, fit_nodes[units]].permute(1, 0, 2)
-            kernel_fit.mul_(valid[units][:, None, :])
-            gram[units] += n * torch.bmm(kernel_fit.mT, kernel_fit)
-            model_out = prior_out[units] @ kernel.T
-            cross[units] += n * torch.bmm(kernel_fit.mT, model_out.mT)
+            kTk = kernel.T @ kernel
+            fit = fit_nodes[units]
+            gram.index_add_(0, units, kTk[fit[:, :, None], fit[:, None, :]].mul_(n))
+            fit_ix = fit[:, None, :].expand(-1, self.feature_dim, -1)
+            model_out = (prior_out[units] @ kTk).gather(2, fit_ix)
+            cross.index_add_(0, units, model_out.mul_(n))
             node_counts[units] += chunk_counts[t_s][units][:, None] * kernel.ne(0).any(dim=0)
-            del kernel, kernel_fit, model_out
+            del kernel, kTk, model_out
 
         # solve in batches of units
         laplacian = bending_laplacian(self.srgeom)
         laplacian = torch.asarray(laplacian, device=device)
+        lap_sq = laplacian @ laplacian
+        del laplacian
         features = prior.clone()
         for i0 in range(0, self.n_units, unit_batch_size):
             ix = slice(i0, min(i0 + unit_batch_size, self.n_units))
@@ -457,26 +461,23 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
             ok = valid[ix].double()
             node_ix = nodes[:, None, :].expand(-1, self.feature_dim, -1)
 
-            lap_fit = laplacian[:, nodes].permute(1, 0, 2).mul_(ok[:, None, :])
-            r0 = laplacian @ prior_out[ix].double().mT
-            P = torch.bmm(lap_fit.mT, lap_fit)
-            q = torch.bmm(lap_fit.mT, r0)
-            del lap_fit, r0
+            P = lap_sq[nodes[:, :, None], nodes[:, None, :]]
+            q = (prior_out[ix].double() @ lap_sq).gather(2, node_ix)
 
-            prior_fit = prior[ix].gather(2, node_ix).mT.double()
-            data_fit = mean[ix].gather(2, node_ix).mT.double() * count[ix, :, None]
+            prior_fit = prior[ix].gather(2, node_ix).double()
+            data_fit = mean[ix].gather(2, node_ix).double() * count[ix, :, None]
             shrinkage = self.shrinkage * count[ix, :, None].double().clamp(min=1.0)
             system = (
-                gram[ix].double()
+                (gram[ix].double() + self.smoothness * P) * (ok[:, :, None] * ok[:, None, :])
                 + shrinkage * torch.diag_embed(ok)
-                + self.smoothness * P
                 + torch.diag_embed(1.0 - ok)
             )
             rhs = data_fit - cross[ix].double() + shrinkage * prior_fit
-            rhs = rhs.sub_(self.smoothness * q).mul_(ok[:, :, None])
-            fit = torch.linalg.solve(system, rhs)
-            fit = torch.where(ok[:, :, None] > 0, fit, prior_fit)
-            features[ix] = features[ix].scatter(2, node_ix, fit.mT.float())
+            rhs = rhs.sub_(self.smoothness * q).mul_(ok[:, None, :])
+            chol, _ = torch.linalg.cholesky_ex(system)
+            fit = torch.cholesky_solve(rhs.mT, chol).mT
+            fit = torch.where(ok[:, None, :] > 0, fit, prior_fit)
+            features[ix] = features[ix].scatter(2, node_ix, fit.float())
             del P, q, system, rhs, fit, prior_fit, data_fit
 
         return node_counts.numpy(force=True), features.numpy(force=True)

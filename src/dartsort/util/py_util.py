@@ -152,6 +152,17 @@ def ensure_path(
     return p
 
 
+def relative_to_walk_up(path: Path, start: Path) -> Path:
+    """pathlib Path.relative_to(start, walk_up=True) shim"""
+    try:
+        return path.relative_to(start, walk_up=True)
+    except TypeError:
+        try:
+            return path.relative_to(start)
+        except ValueError:
+            return Path(os.path.relpath(path, start=start))
+
+
 def dartcopy2(icfg, src, dest):
     if icfg.workdir_copier == "shutil":
         try:

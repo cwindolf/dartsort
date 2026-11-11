@@ -949,6 +949,7 @@ class ComputationConfig:
     executor: str = "threading_unless_multigpu"
     device: str | None = argfield(default=None, arg_type=str)
     tmpdir_parent: str | None = None
+    low_memory: bool = False
 
     @classmethod
     def from_n_jobs(cls, n_jobs, n_jobs_small=8):
@@ -1057,6 +1058,7 @@ class DARTsortInternalConfig:
     motion_computation_cfg: ComputationConfig = default_motion_computation_cfg
 
     # high level behavior
+    fit_motion_models_only: bool = False
     dredge_only: bool = False
     fit_matching_models_only: bool = False
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
@@ -1098,7 +1100,7 @@ class DARTsortInternalConfig:
         if self.tmpdir_parent is not None:
             return ensure_path(self.tmpdir_parent, strict=True)
         if self.computation_cfg.tmpdir_parent is not None:
-            return ensure_path(self.tmpdir_parent, strict=True)
+            return ensure_path(self.computation_cfg.tmpdir_parent, strict=True)
         return None
 
     @property
@@ -1240,6 +1242,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         already_preprocessed=cfg.already_preprocessed,
         preprocessing_dtype=cfg.preprocessing_dtype,
         detection_type=cfg.detection_type,
+        fit_motion_models_only=cfg.fit_motion_models_only,
         dredge_only=cfg.dredge_only,
         fit_matching_models_only=cfg.fit_matching_models_only,
         matching_iterations=cfg.matching_iterations,
@@ -1725,6 +1728,7 @@ def _computation_cfg(cfg: "DeveloperConfig") -> ComputationConfig:
         device=cfg.device,
         executor=cfg.executor,
         tmpdir_parent=cfg.tmpdir_parent,
+        low_memory=cfg.low_memory,
     )
 
 

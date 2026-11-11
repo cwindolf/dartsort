@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from dartsort.clustering import mixture
 from dartsort.util.internal_config import (
     ClusteringFeaturesConfig,
+    ComputationConfig,
     FitSamplingConfig,
     KmeansppConfig,
     RefinementConfig,
@@ -800,6 +801,30 @@ def test_truncated_kmeanspp(mini_simulations, sim_name, stopping):
     # good prec, good coverage
     assert (precs * sizes).sum() / sizes.sum() > 0.85
     assert np.unique(match).size >= 0.9 * np.unique(gt[gt >= 0]).size
+
+
+def test_tmm_low_memory(mini_simulations, tmp_path):
+    sim = mini_simulations["drifty_szmini"]
+    sorting = sim["sorting"]
+    unlabeled = sorting.ephemeral_replace(labels=np.full_like(sorting.labels, -1))
+    refinement_cfg = RefinementConfig(signal_rank=0, n_total_iters=0)
+
+    labels = []
+    for low_memory in (False, True):
+        res = mixture.tmm_demix(
+            sorting=unlabeled,
+            motion=sim["motion"],
+            refinement_cfg=refinement_cfg,
+            clustering_features_cfg=ClusteringFeaturesConfig(),
+            computation_cfg=ComputationConfig(
+                tmpdir_parent=str(tmp_path), low_memory=low_memory
+            ),
+            seed=0,
+        )
+        labels.append(res.labels)
+
+    assert (labels[0] >= 0).any()
+    assert np.array_equal(*labels)
 
 
 def test_bucket_sampling():

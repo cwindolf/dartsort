@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 from itertools import pairwise
 
 from .job_util import ensure_computation_config
-from .py_util import ensure_path, panic
+from .py_util import ensure_path, panic, relative_to_walk_up
 from .waveform_util import make_channel_index
 
 logger = get_logger(__name__)
@@ -761,16 +761,7 @@ class DARTsortSorting:
         if do_hdf5:
             # path needs to be relative to npz path's parent in case user moves stuff
             h5p = ensure_path(self.parent_h5_path, strict=True)
-            try:
-                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)
-            except TypeError:
-                try:
-                    h5p = h5p.relative_to(sorting_npz.parent)
-                except ValueError:
-                    # for old python versions
-                    from os.path import relpath
-
-                    h5p = relpath(h5p, start=sorting_npz.parent)
+            h5p = relative_to_walk_up(h5p, sorting_npz.parent)
             data["parent_h5_path"] = np.array(str(h5p))
 
         data.update(self._ephemeral_features)
@@ -1035,9 +1026,17 @@ class DARTsortSorting:
     def _is_unit_related(k) -> bool:
         return k.startswith("unit")
 
+    @staticmethod
+    def _is_recording_related(k) -> bool:
+        return k == "sampling_frequency"
+
     @classmethod
     def _no_check_needed(cls, k) -> bool:
-        return cls._is_geom_related(k) or cls._is_unit_related(k)
+        return (
+            cls._is_geom_related(k)
+            or cls._is_unit_related(k)
+            or cls._is_recording_related(k)
+        )
 
     def _check_shape(self, feature_name: str, feature: np.ndarray):
         if feature.shape[0] != self.n_spikes:
@@ -1436,13 +1435,17 @@ def sorting_from_spikeinterface(
 
 
 def concatenate_sortings(
-    sortings: Sequence[DARTsortSorting], sort_times: bool = True
+    sortings: Sequence[DARTsortSorting],
+    sort_times: bool = True
 ) -> DARTsortSorting:
     """Concatenate sortings and check that the result is sorted
 
-    Another approach here would be to use HDF5 virtual datasets. If one
-    hooked together a bunch of .h5 files that way, it should be loadable
-    with from_peeling_hdf5.
+    Another approach here would be to use HDF5 virtual datasets. That is
+    implemented by virtual_concatenate_sorting_h5s below. You can dartsort.load()
+    the target h5 there to get the virtually-backed sorting.
+
+    This function concatenates only the loaded features in memory, so it is
+    complementary to the virtual version.
 
     This returns an hdf5-less sorting object. Its features are "ephemeral".
     You probably will want to .save() it to a .npz file.
@@ -1495,6 +1498,67 @@ def concatenate_sortings(
         persistent_features=None,
         ephemeral_features=out,
     )
+
+
+def virtual_concatenate_sorting_h5s(
+    h5_paths_to_concatenate: Sequence[Path],
+    output_h5_path: Path,
+):
+    """Virtually concatenate finished peeling hdf5 files
+
+    Per-spike datasets are concatenated virtually along the n_spikes dimension,
+    with source paths stored relative to the output's folder. Datasets that don't
+    have an n_spikes dimension (per _no_check_needed) are copied from the first
+    file. chunk_starts_samples is concatenated, and other datasets (e.g. residual
+    snippets) are not carried over.
+    """
+    h5_paths_to_concatenate = [ensure_path(p) for p in h5_paths_to_concatenate]
+    output_h5_path = ensure_path(output_h5_path)
+    assert not output_h5_path.exists()
+
+    # per-spike dataset shapes and dtypes, and fixed datasets, from the first file
+    specs: dict[str, tuple[tuple[int, ...], np.dtype]] = {}
+    fixed = {}
+    with h5py.File(h5_paths_to_concatenate[0], "r", locking=False) as h5:
+        n_spikes = cast(h5py.Dataset, h5["times_samples"]).shape[0]
+        for name, dset in h5.items():
+            assert isinstance(dset, h5py.Dataset)
+            if DARTsortSorting._no_check_needed(name):
+                fixed[name] = dset[()]
+            elif name == "chunk_starts_samples":
+                continue
+            elif dset.ndim >= 1 and dset.shape[0] == n_spikes:
+                specs[name] = (dset.shape[1:], dset.dtype)
+
+    spike_counts = []
+    chunk_starts = []
+    for path in h5_paths_to_concatenate:
+        with h5py.File(path, "r", locking=False) as h5:
+            spike_counts.append(cast(h5py.Dataset, h5["times_samples"]).shape[0])
+            chunk_starts.append(cast(h5py.Dataset, h5["chunk_starts_samples"])[:])
+            last_chunk_index = cast(h5py.Dataset, h5["last_chunk_index"])[()]
+            assert last_chunk_index == chunk_starts[-1].size - 1, f"{path} unfinished."
+    chunk_starts = np.concatenate(chunk_starts)
+    n_spikes_total = sum(spike_counts)
+
+    output_dir = output_h5_path.parent.resolve()
+    with h5py.File(output_h5_path, "w", libver="latest") as output_h5:
+        for name, (shape_per_spike, dtype) in specs.items():
+            layout = h5py.VirtualLayout((n_spikes_total, *shape_per_spike), dtype)
+            i0 = 0
+            for path, n in zip(h5_paths_to_concatenate, spike_counts, strict=True):
+                if not n:
+                    continue
+                rel_path = relative_to_walk_up(path.resolve(), output_dir)
+                shape = (n, *shape_per_spike)
+                layout[i0 : i0 + n] = h5py.VirtualSource(rel_path, name, shape)
+                i0 += n
+            output_h5.create_virtual_dataset(name, layout)
+        for name, value in fixed.items():
+            output_h5.create_dataset(name, data=value)
+        output_h5.create_dataset("chunk_starts_samples", data=chunk_starts)
+        output_h5["last_chunk_start"] = np.int64(chunk_starts[-1])
+        output_h5["last_chunk_index"] = np.int64(chunk_starts.size - 1)
 
 
 def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:
