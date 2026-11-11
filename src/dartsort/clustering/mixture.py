@@ -1753,7 +1753,12 @@ class TruncatedSpikeData(BatchedSpikeData):
         assert self.storage_device in (device, torch.device("cpu"))
         for f in (xt, whitenedx, CmoCooinvx, noise_logliks):
             assert f is None or f.device == self.storage_device
-            assert self.storage_device == device or f is None or f.is_pinned()
+            assert (
+                self.storage_device == device
+                or f is None
+                or not f.numel()
+                or f.is_pinned()
+            )
 
         self.score_only = xt is None
         assert self.score_only == (CmoCooinvx is None)
