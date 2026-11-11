@@ -40,7 +40,6 @@ from dandi.dandiapi import DandiAPIClient
 
 import dartsort
 import dartsort.vis as dartvis
-from dartsort.util.main_util import motion_needs_peaks
 
 dartvis.set_plt_style()
 
@@ -151,7 +150,7 @@ dartsort.dartsort(rec, ds_dir, cfg=dataclasses.replace(cfg, fit_motion_models_on
 
 # %%
 subtraction_sorting = dartsort.load(ds_dir / "subtraction.h5")
-need_motion_peaks = cfg.do_motion_estimation and motion_needs_peaks(
+need_motion_peaks = cfg.do_motion_estimation and dartsort.motion_needs_peaks(
     internal_cfg, rec, subtraction_sorting
 )
 

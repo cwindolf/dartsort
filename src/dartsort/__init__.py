@@ -81,6 +81,7 @@ from .util.logging_util import (
     get_logger,
     set_log_level,
 )
+from .util.main_util import motion_needs_peaks
 from .util.motion import (
     MotionInfo,
     detect_for_motion,
