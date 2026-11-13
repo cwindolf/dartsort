@@ -894,7 +894,6 @@ class TMMParams:
     criterion_clip_level: float | None
     demolition_min_resp_ratio: float
     demolish_during_selection: bool
-    refit_in_demolition: bool
     kmeans_tries: int
     kmeans_beta: float
     kmeanspp_tries: int
@@ -943,7 +942,6 @@ class TMMParams:
             criterion_clip_level=refinement_cfg.criterion_clip_level,
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
             demolish_during_selection=refinement_cfg.demolish_during_selection,
-            refit_in_demolition=refinement_cfg.refit_in_demolition,
             whiten_split=refinement_cfg.whiten_split,
             masked_mean_impute=refinement_cfg.masked_mean_impute,
             split_kmeanspp_metric=refinement_cfg.split_kmeanspp_metric,
@@ -3827,13 +3825,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
         mean_val_resp = mean_responsibilities(
             scores=val_scores, n_units=self.n_units, weights=val_data.sample_weights
         )
-        val_row_crit = ecl(
-            resps=None,
-            log_liks=val_scores.log_liks.double(),
+        val_row_crit = proportion_adjusted_row_criterion(
+            log_liks=val_scores.log_liks,
+            candidates=val_scores.candidates,
+            orig_log_props=self.b.log_proportions,
+            new_log_props=demolition_log_proportions(
+                mean_train_resp, self.b.noise_log_prop, self.n_units
+            ),
             cl_alpha=self.p.demolish_cl_alpha,
-            reduce_mean=False,
         )
-        cur_crit = spike_mean(val_row_crit, val_data.sample_weights).item()
 
         # checking this invariant at the top
         assert self.b.log_proportions.isfinite().all()
@@ -3853,7 +3853,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 mean_eval_resp=mean_val_resp,
                 train_scores=train_scores,
                 eval_scores=val_scores,
-                cur_crit=cur_crit,
                 eval_row_crit=val_row_crit,
                 train_data=train_data,
                 eval_data=val_data,
@@ -6140,7 +6139,7 @@ def brute_merge(
         crit_full_scores=crit_full_scores,
         crit_subset_scores=crit_subset_scores,
         train_full_responsibilities=responsibilities,
-        train_subset_responsibilities=subset_resps,
+        train_full_log_liks=train_full_scores.log_liks,
         cl_alpha=alpha,
         can_demolish_mask=can_demolish_mask,
         debug=debug,
@@ -6390,7 +6389,7 @@ def _select_partition(
     cl_alpha: float,
     can_demolish_mask: Tensor | None,
     train_full_responsibilities: Tensor,
-    train_subset_responsibilities: Tensor,
+    train_full_log_liks: Tensor,
     debug: bool,
     clip_level: float | None = None,
     eval_weights: Tensor | None = None,
@@ -6440,12 +6439,11 @@ def _select_partition(
             crit_full_log_liks=crit_full_scores.log_liks,
             crit_subset_log_liks=crit_subset_scores.log_liks,
             train_full_responsibilities=train_full_responsibilities,
-            train_subset_responsibilities=train_subset_responsibilities,
+            train_full_log_liks=train_full_log_liks,
             single_ixs=single_ixs,
             subset_ids=subset_ids,
             single_demolish_ixs=single_demolish_ixs,
             cl_alpha=cl_alpha,
-            lp_min=TruncatedMixtureModel.LP_MIN,
             return_entropy=debug,
         )
         if per_spike:
@@ -6455,12 +6453,11 @@ def _select_partition(
                 crit_full_log_liks=crit_full_scores.log_liks,
                 crit_subset_log_liks=crit_subset_scores.log_liks,
                 train_full_responsibilities=train_full_responsibilities,
-                train_subset_responsibilities=train_subset_responsibilities,
+                train_full_log_liks=train_full_log_liks,
                 single_ixs=single_ixs,
                 subset_ids=subset_ids,
                 single_demolish_ixs=single_demolish_ixs,
                 cl_alpha=cl_alpha,
-                lp_min=TruncatedMixtureModel.LP_MIN,
                 return_entropy=False,
                 reduce_mean=False,
             )
@@ -6507,12 +6504,11 @@ def _determine_part_score(
     crit_full_log_liks: Tensor,
     crit_subset_log_liks: Tensor,
     train_full_responsibilities: Tensor,
-    train_subset_responsibilities: Tensor,
+    train_full_log_liks: Tensor,
     single_ixs: Tensor,
     subset_ids: Tensor,
     single_demolish_ixs: Tensor,
     cl_alpha: float,
-    lp_min: float,
     return_entropy: bool,
     reduce_mean: bool = True,
 ):
@@ -6521,17 +6517,16 @@ def _determine_part_score(
     part_logliks = torch.concatenate([rest_logliks, single_ll, subset_ll], dim=1)
     if single_demolish_ixs.numel():
         # determine and apply LP adjustment
-        train_single_resp = train_full_responsibilities[:, single_ixs]
-        train_subset_resp = train_subset_responsibilities[:, subset_ids]
-        train_resp = torch.concatenate([train_single_resp, train_subset_resp], dim=1)
-        mean_resp = train_resp.mean(0)
-        train_resp[:, single_demolish_ixs] = 0.0
-        train_resp = train_resp.log_().clamp_(min=lp_min).softmax(dim=1)
-        mean_resp_adj = train_resp.mean(0)
-        lp_adj = mean_resp_adj.log_() - mean_resp.log_()
-    else:
-        lp_adj = None
-    if lp_adj is not None:
+        assert not subset_ids.numel()
+        train_resp = train_full_responsibilities[:, single_ixs]
+        mean_resp_adj = demolished_proportions(
+            responsibilities=train_resp,
+            log_liks=train_full_log_liks[:, single_ixs],
+            demolish_ixs=single_demolish_ixs,
+        )
+        lp_adj = mean_resp_adj.log() - train_resp.mean(0).log()
+        lp_adj.nan_to_num_(nan=0.0)
+        lp_adj[single_demolish_ixs] = -torch.inf
         part_logliks[:, -lp_adj.numel() :] += lp_adj
     part_resps = part_logliks.softmax(dim=1)
     if return_entropy:
@@ -6539,6 +6534,26 @@ def _determine_part_score(
     else:
         h = None
     return ecl(part_resps, part_logliks, cl_alpha=cl_alpha, reduce_mean=reduce_mean), h
+
+
+def demolished_proportions(
+    *, responsibilities: Tensor, log_liks: Tensor, demolish_ixs: Tensor
+) -> Tensor:
+    n, k = responsibilities.shape
+    assert log_liks.shape == (n, k)
+    survivors = torch.ones(k, dtype=torch.bool, device=responsibilities.device)
+    survivors[demolish_ixs] = False
+
+    freed = responsibilities[:, demolish_ixs].sum(dim=1)
+    survivor_posterior = log_liks[:, survivors].softmax(dim=1).nan_to_num_()
+    new_resp = torch.zeros_like(responsibilities)
+    new_resp[:, survivors] = responsibilities[:, survivors].addcmul_(
+        freed[:, None], survivor_posterior
+    )
+
+    props = responsibilities.mean(0)
+    new_props = new_resp.mean(0)
+    return new_props.mul_(props.sum() / new_props.sum())
 
 
 def spike_mean(x: Tensor, weights: Tensor | None) -> Tensor:
@@ -6583,10 +6598,16 @@ def _extract_partition(
         bases = None
 
     # fraction
-    prop = spike_mean(responsibilities, train_weights)
-    single_prop = prop[part.single_ixs]
     if part.single_demolish_ixs:
-        single_prop[part.single_demolish_ixs] = 0.0
+        assert not part.subset_ids
+        assert train_weights is None
+        single_prop = demolished_proportions(
+            responsibilities=responsibilities[:, part.single_ixs],
+            log_liks=train_full_scores.log_liks[:, part.single_ixs],
+            demolish_ixs=torch.tensor(part.single_demolish_ixs),
+        )
+    else:
+        single_prop = spike_mean(responsibilities, train_weights)[part.single_ixs]
     sub_props = [
         spike_mean(subset_resps[:, sid], train_weights)[None] for sid in part.subset_ids
     ]
@@ -6692,7 +6713,6 @@ def evaluate_group_demolitions(
     eval_data: TruncatedSpikeData,
     mean_train_resp: Tensor | None,
     mean_eval_resp: Tensor | None,
-    cur_crit: float | None,
     train_scores: Scores,
     eval_scores: Scores,
     eval_row_crit: Tensor | None = None,
@@ -6719,72 +6739,34 @@ def evaluate_group_demolitions(
     # criterion:
     # loop over possible demolitions, evaluate their improvements, track best
     alpha = mm.p.demolish_cl_alpha
-    if cur_crit is None:
-        eval_rows = ecl(
-            resps=eval_scores.responsibilities,
+    if eval_row_crit is None:
+        eval_row_crit = proportion_adjusted_row_criterion(
             log_liks=eval_scores.log_liks,
+            candidates=eval_scores.candidates,
+            orig_log_props=mm.b.log_proportions,
+            new_log_props=demolition_log_proportions(
+                mean_train_resp, mm.b.noise_log_prop, mm.n_units
+            ),
             cl_alpha=alpha,
-            reduce_mean=False,
         )
-        cur_crit = spike_mean(eval_rows, eval_weights).item()
-        del eval_rows
-    assert isinstance(cur_crit, float)
     best_demo = GroupDemolition(
         unit_ids=group, improvement=0.0, demolished=torch.zeros_like(can_demolish)
     )
     best_imp = 0.0
 
-    if mm.p.refit_in_demolition:
-        assert train_weights is None and eval_weights is None, "refit demolition is unweighted"
-        group = group.to(device=train_scores.candidates.device)
-        (train_ixs,) = (
-            torch.isin(train_scores.candidates, group).any(dim=1).nonzero(as_tuple=True)
-        )
-        group_train_data = train_data.dense_slice(train_ixs)
-        assert group_train_data is not None
-        group_train_scores = train_scores.slice(group_train_data.indices)
-
-        (eval_ixs,) = (
-            torch.isin(eval_scores.candidates, group).any(dim=1).nonzero(as_tuple=True)
-        )
-        group_eval_data = eval_data.dense_slice(eval_ixs)
-        assert group_eval_data is not None
-        group_eval_scores = eval_scores.slice(group_eval_data.indices)
-        nongroup_eval_scores = remove_units_from_scores(group_eval_scores, group)
-    elif eval_row_crit is None:
-        eval_row_crit = ecl(
-            resps=None,
-            log_liks=eval_scores.log_liks.double(),
-            cl_alpha=alpha,
-            reduce_mean=False,
-        )
-
     for demo_mask in submasks(can_demolish, skip_full=True):
-        if mm.p.refit_in_demolition:
-            crit = _evaluate_single_refit_demolition(
-                group=group,
-                demolish_mask=demo_mask,
-                group_train_scores=group_train_scores,  # ty: ignore[possibly-unresolved-reference]
-                nongroup_eval_scores=nongroup_eval_scores,  # ty: ignore[possibly-unresolved-reference]
-                group_eval_scores=group_eval_scores,  # ty: ignore[possibly-unresolved-reference]
-                group_eval_data=group_eval_data,  # ty: ignore[possibly-unresolved-reference]
-                group_train_data=group_train_data,  # ty: ignore[possibly-unresolved-reference]
-                mm=mm,
-            )
-            imp = crit - cur_crit
-        else:
-            imp = _evaluate_single_demolition(
-                orig_log_props=mm.b.log_proportions,
-                noise_log_prop=mm.b.noise_log_prop,
-                cl_alpha=alpha,
-                group=group_,
-                demolish_mask=demo_mask,
-                train_scores=train_scores,
-                eval_scores=eval_scores,
-                eval_row_crit=eval_row_crit,
-                train_weights=train_weights,
-                eval_weights=eval_weights,
-            )
+        imp = _evaluate_single_demolition(
+            orig_log_props=mm.b.log_proportions,
+            noise_log_prop=mm.b.noise_log_prop,
+            cl_alpha=alpha,
+            group=group_,
+            demolish_mask=demo_mask,
+            train_scores=train_scores,
+            eval_scores=eval_scores,
+            eval_row_crit=eval_row_crit,
+            train_weights=train_weights,
+            eval_weights=eval_weights,
+        )
         if imp > best_imp:
             best_demo = GroupDemolition(
                 unit_ids=group, improvement=imp, demolished=demo_mask
@@ -6802,7 +6784,7 @@ def _evaluate_single_demolition(
     demolish_mask: Tensor,
     train_scores: Scores,
     eval_scores: Scores,
-    eval_row_crit: Tensor | None = None,
+    eval_row_crit: Tensor,
     train_weights: Tensor | None = None,
     eval_weights: Tensor | None = None,
 ) -> float:
@@ -6822,10 +6804,7 @@ def _evaluate_single_demolition(
     assert adj_train_resp.shape == (n_units + 1,)
 
     # determine what adjustment of proportions would result
-    adj_train_resp = adj_train_resp[:n_units]
-    adj_train_resp = adj_train_resp / adj_train_resp.sum()
-    non_noise_lp = torch.log1p(-noise_log_prop.exp())
-    new_log_props = adj_train_resp.log() + non_noise_lp
+    new_log_props = demolition_log_proportions(adj_train_resp, noise_log_prop, n_units)
 
     # evaluate effect on heldout set
     return proportion_adjust_criterion_change(
@@ -6838,72 +6817,12 @@ def _evaluate_single_demolition(
     )
 
 
-def _evaluate_single_refit_demolition(
-    group: Tensor,
-    demolish_mask: Tensor,
-    group_train_scores: Scores,
-    nongroup_eval_scores: Scores,
-    group_eval_scores: Scores,
-    group_eval_data: DenseSpikeData,
-    group_train_data: DenseSpikeData,
-    mm: TruncatedMixtureModel,
-) -> float:
-    assert demolish_mask.shape == group.shape
-
-    # determine mean responsibility after demolition on train set
-    demolish_mask = demolish_mask.cpu()
-    chopping_block = group[demolish_mask]
-    nchop = chopping_block.numel()
-    if not nchop:
-        return ecl(
-            resps=group_eval_scores.responsibilities,
-            log_liks=group_eval_scores.log_liks,
-            cl_alpha=mm.p.cl_alpha,
-        ).item()
-    group_remain = group[demolish_mask.logical_not()]
-    n_remain = group.numel() - nchop
-    train_scores_adj = remove_units_from_scores(group_train_scores, chopping_block)
-    assert mm.erp is not None
-    assert mm.noise is not None
-
-    # responsibilities for re-fitting rest of group
-    resp0 = train_scores_adj.responsibilities
-    assert resp0 is not None
-    cand0 = train_scores_adj.candidates
-    chopped_responsibilities = mm.b.log_proportions.new_zeros(
-        (resp0.shape[0], n_remain)
-    )
-    for j, cand in enumerate(group_remain):
-        cii, cjj = (cand0 == cand).nonzero(as_tuple=True)
-        chopped_responsibilities[cii, j] = resp0[cii, cjj]
-    chopped_responsibilities.clamp_(min=1e-8)
-
-    # re-fit model to train_scores_adj
-    chopped_model, _s0valid, _, _s0discard, _s0mask, _, _ = (
-        TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
-            data=group_train_data,
-            responsibilities=chopped_responsibilities,
-            signal_rank=mm.signal_rank,
-            erp=mm.erp,
-            noise=mm.noise,
-            neighb_cov=mm.neighb_cov,
-            total_log_proportion=mm.non_noise_log_proportion(),
-            p=mm.p,
-            min_channel_count=0,
-        )
-    )
-
-    # re-score eval data and combine with bystander units
-    chopped_score = chopped_model.score(data=group_eval_data, skip_responsibility=False)
-    assert chopped_score.responsibilities is not None
-    final_score = concatenate_scores([chopped_score, nongroup_eval_scores], dim=1)
-    assert final_score.responsibilities is not None
-
-    return ecl(
-        resps=final_score.responsibilities,
-        log_liks=final_score.log_liks,
-        cl_alpha=mm.p.cl_alpha,
-    ).item()
+def demolition_log_proportions(
+    mean_resp: Tensor, noise_log_prop: Tensor, n_units: int
+) -> Tensor:
+    unit_resp = mean_resp[:n_units]
+    non_noise_lp = torch.log1p(-noise_log_prop.exp())
+    return (unit_resp / unit_resp.sum()).log() + non_noise_lp
 
 
 def submasks(mask: Tensor, *, skip_empty=True, skip_full=False):
@@ -8106,34 +8025,29 @@ def proportion_adjust_criterion_change(
     orig_log_props: Tensor,
     new_log_props: Tensor,
     cl_alpha: float,
-    orig_row_criterion: Tensor | None = None,
+    orig_row_criterion: Tensor,
     batch_size: int = 2**18,
     weights: Tensor | None = None,
 ) -> float:
     """How much would ecl change if the log props were these, not those?"""
-    diff = (new_log_props.double() - orig_log_props.double()).nan_to_num_()
-    diff = F.pad(diff, (0, 1))
-
     cand, log_liks = scores.candidates, scores.log_liks
-    n, ncand = cand.shape
-    assert orig_row_criterion is None or orig_row_criterion.shape == (n,)
+    n = cand.shape[0]
+    assert orig_row_criterion.shape == (n,)
     assert weights is None or weights.shape == (n,)
 
-    mean = diff.new_zeros(())
+    mean = orig_row_criterion.new_zeros((), dtype=torch.double)
     for i0 in range(0, n, batch_size):
         i1 = min(n, i0 + batch_size)
         nbatch = i1 - i0
 
-        bdiff = diff[cand[i0:i1]]
-
-        bll = log_liks[i0:i1].double()
-        if orig_row_criterion is None:
-            borig = ecl(resps=None, log_liks=bll, cl_alpha=cl_alpha, reduce_mean=False)
-        else:
-            borig = orig_row_criterion[i0:i1]
-
-        bll[:, :ncand] += bdiff
-        badj = ecl(resps=None, log_liks=bll, cl_alpha=cl_alpha, reduce_mean=False)
+        borig = orig_row_criterion[i0:i1]
+        badj = proportion_adjusted_row_criterion(
+            log_liks=log_liks[i0:i1],
+            candidates=cand[i0:i1],
+            orig_log_props=orig_log_props,
+            new_log_props=new_log_props,
+            cl_alpha=cl_alpha,
+        )
 
         if weights is None:
             bmean = badj.sub_(borig).mean()
@@ -8144,6 +8058,22 @@ def proportion_adjust_criterion_change(
     if weights is not None:
         mean /= weights.double().sum()
     return mean.item()
+
+
+def proportion_adjusted_row_criterion(
+    *,
+    log_liks: Tensor,
+    candidates: Tensor,
+    orig_log_props: Tensor,
+    new_log_props: Tensor,
+    cl_alpha: float,
+) -> Tensor:
+    diff = (new_log_props.double() - orig_log_props.double()).nan_to_num_()
+    diff = F.pad(diff, (0, 1))
+    ncand = candidates.shape[1]
+    log_liks = log_liks.to(dtype=torch.double, copy=True)
+    log_liks[:, :ncand] += diff[candidates]
+    return ecl(resps=None, log_liks=log_liks, cl_alpha=cl_alpha, reduce_mean=False)
 
 
 def stack_tmms(tmms: list[TruncatedMixtureModel]) -> BaseMixtureModel:

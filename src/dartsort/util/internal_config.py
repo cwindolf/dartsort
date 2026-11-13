@@ -593,7 +593,6 @@ class RefinementConfig:
     criterion_clip_level: float | None = 1.0
     demolition_min_resp_ratio: float = 0.0
     demolish_during_selection: bool = False
-    refit_in_demolition: bool = False
     em_after_demolish: bool = True
     whiten_split: bool = True
     split_kmeanspp_metric: SplitKmeansppMetric = "euc"
