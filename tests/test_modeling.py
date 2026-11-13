@@ -537,7 +537,6 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
         neighborhood_ids=neighborhood_ids,
         n_candidates=n_candidates,
         candidate_count=int((candidates >= 0).sum().item()),
-        duties=None,
     )
     N = true_labels.shape[0]
     assert scores.candidates.shape == (N, n_candidates)

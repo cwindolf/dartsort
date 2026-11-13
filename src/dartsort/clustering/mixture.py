@@ -110,7 +110,7 @@ from ..util.spiketorch import (
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage, torch_compiler
 from .cluster_util import decrumb, linkage, maximal_leaf_groups, violation_statistics
 from .clustering_features import StableWaveformFeatures, _read_ix_maybe_mmap
-from .kmeans import _one_gumbel_nolog, batched_kmeans, kmeans
+from .kmeans import _one_gumbel_nolog, batched_kmeans
 
 if TYPE_CHECKING:
     from ..transform.temporal_pca import BaseTemporalPCA
@@ -283,7 +283,7 @@ def tmm_demix(
 # -- shared objects holding precomputed neighborhood-related data
 
 
-RobustnessStrategy = Literal["none", "fixed", "huber"]
+RobustnessStrategy = Literal["none", "huber"]
 
 
 class MixtureModelAndDatasets(NamedTuple):
@@ -1111,7 +1111,6 @@ class SpikeDataBatch:
     noise_logliks: Tensor
     CmoCooinvx: Tensor | None
     candidate_count: int | None
-    duties: Tensor | None
     sample_weights: Tensor | None
 
 
@@ -1125,7 +1124,6 @@ class DenseSpikeData:
     whitenedx: Tensor
     CmoCooinvx: Tensor | None
     noise_logliks: Tensor
-    duties: Tensor | None
     sample_weights: Tensor | None
     batch_size: int
 
@@ -1171,7 +1169,6 @@ class DenseSpikeData:
                 noise_logliks=self.noise_logliks[sl],
                 CmoCooinvx=None if self.CmoCooinvx is None else self.CmoCooinvx[sl],
                 candidates=candidates[sl],
-                duties=None if self.duties is None else self.duties[sl],
                 sample_weights=None
                 if self.sample_weights is None
                 else self.sample_weights[sl],
@@ -1195,10 +1192,6 @@ class DenseSpikeData:
         return self.slice(covered_inds), covered_inds
 
     def slice(self, indices: Tensor):
-        if self.duties is None:
-            duties = None
-        else:
-            duties = self.duties[indices]
         if self.sample_weights is None:
             sample_weights = None
         else:
@@ -1219,7 +1212,6 @@ class DenseSpikeData:
             whitenedx=self.whitenedx[indices],
             CmoCooinvx=CmoCooinvx,
             noise_logliks=self.noise_logliks[indices],
-            duties=duties,
             sample_weights=sample_weights,
             batch_size=self.batch_size,
         )
@@ -1275,7 +1267,6 @@ class BatchedSpikeData:
         max_n_explore: int | None,
         neighborhoods: SpikeNeighborhoods,
         device: torch.device,
-        duties: Tensor | None,
         sample_weights: Tensor | None,
         candidates: Tensor | None = None,
         neighb_adj: Tensor | None = None,
@@ -1303,7 +1294,6 @@ class BatchedSpikeData:
 
         # per-sample approximate posterior data
         self.candidates = candidates
-        self.duties = duties
         if sample_weights is not None:
             assert sample_weights.shape == (N,)
         self.sample_weights = sample_weights
@@ -1569,7 +1559,6 @@ class StreamingSpikeData(BatchedSpikeData):
         n_candidates: int,
         max_n_candidates: int,
         x: Tensor | np.ndarray,
-        duties: Tensor | None,
         neighborhoods: SpikeNeighborhoods,
         device: torch.device,
         neighb_cov: NeighborhoodCovariance,
@@ -1580,7 +1569,6 @@ class StreamingSpikeData(BatchedSpikeData):
         # assignment given a fixed adjacency, so it doesn't.
         super().__init__(
             N=x.shape[0],
-            duties=duties,
             sample_weights=None,
             n_candidates=n_candidates,
             n_search=0,
@@ -1656,10 +1644,6 @@ class StreamingSpikeData(BatchedSpikeData):
         neighb_ids = self.neighborhood_ids[spike_indices]
         assert self.proposals is not None
         candidates = self.proposals[neighb_ids]
-        if self.duties is None:
-            duties = None
-        else:
-            duties = self.duties[spike_indices].to(self.device)
         x = _read_ix_maybe_mmap(self.x, spike_indices).to(self.device)
         wx, noise_loglik = _whiten_and_noise_score_batch(
             x=x, neighb_ids=neighb_ids, neighb_cov=self.neighb_cov
@@ -1675,7 +1659,6 @@ class StreamingSpikeData(BatchedSpikeData):
             neighborhood_ids=neighb_ids,
             whitenedx=wx,
             noise_logliks=noise_loglik,
-            duties=duties,
             sample_weights=None,
             CmoCooinvx=None,
             candidate_count=None,
@@ -1702,7 +1685,6 @@ class TruncatedSpikeData(BatchedSpikeData):
         CmoCooinvx: Tensor | None,
         noise_logliks: Tensor,
         neighborhoods: SpikeNeighborhoods,
-        duties: Tensor | None,
         sample_weights: Tensor | None,
         search_adj: Literal["top", "explore"] = "top",
         seed: int | np.random.Generator = 0,
@@ -1736,7 +1718,6 @@ class TruncatedSpikeData(BatchedSpikeData):
             neighb_overlap=neighb_overlap,
             seed=seed,
             device=device,
-            duties=duties,
             sample_weights=sample_weights,
         )
         assert self.max_n_explore is not None
@@ -1799,7 +1780,6 @@ class TruncatedSpikeData(BatchedSpikeData):
         dense_slice_size_per_unit: int,
         labels: Tensor,
         x: Tensor,
-        duties: Tensor | None,
         sample_weights: Tensor | None,
         neighborhoods: SpikeNeighborhoods,
         neighb_cov: NeighborhoodCovariance,
@@ -1845,7 +1825,6 @@ class TruncatedSpikeData(BatchedSpikeData):
             CmoCooinvx=CmoCooinvx,
             noise_logliks=noise_logliks,
             neighborhoods=neighborhoods,
-            duties=duties,
             sample_weights=sample_weights,
             seed=seed,
             batch_size=batch_size,
@@ -1956,10 +1935,6 @@ class TruncatedSpikeData(BatchedSpikeData):
     ) -> SpikeDataBatch:
         assert self.candidates is not None
         candidates = self.candidates[spike_indices]
-        if self.duties is None:
-            duties = None
-        else:
-            duties = self.duties[spike_indices]
         if self.sample_weights is None:
             sample_weights = None
         else:
@@ -1973,7 +1948,6 @@ class TruncatedSpikeData(BatchedSpikeData):
             CmoCooinvx=CmoCooinvx,
             whitenedx=whitenedx,
             noise_logliks=noise_logliks,
-            duties=duties,
             sample_weights=sample_weights,
             candidate_count=int(self.batch_candidate_counts[batch_index]),
         )
@@ -2008,10 +1982,6 @@ class TruncatedSpikeData(BatchedSpikeData):
         )
 
     def dense_slice(self, spike_indices: Tensor) -> DenseSpikeData:
-        if self.duties is None:
-            duties = None
-        else:
-            duties = self.duties[spike_indices]
         if self.sample_weights is None:
             sample_weights = None
         else:
@@ -2026,7 +1996,6 @@ class TruncatedSpikeData(BatchedSpikeData):
             whitenedx=whitenedx,
             CmoCooinvx=CmoCooinvx,
             noise_logliks=noise_logliks,
-            duties=duties,
             sample_weights=sample_weights,
             batch_size=self.batch_size,
         )
@@ -2213,7 +2182,6 @@ class FullProposalDataView(BatchedSpikeData):
             explore_neighb_steps=0,
             neighb_overlap=0.0,
             proposal_is_complete=True,
-            duties=data.duties,
             sample_weights=data.sample_weights,
         )
         self.proposals = proposals.to(self.device)
@@ -2253,10 +2221,6 @@ class FullProposalDataView(BatchedSpikeData):
     ) -> SpikeDataBatch:
         neighb_ids = self.neighborhood_ids[spike_indices]
         candidates = self.proposals[neighb_ids]
-        if self.duties is None:
-            duties = None
-        else:
-            duties = self.duties[spike_indices]
         if self.sample_weights is None:
             sample_weights = None
         else:
@@ -2270,7 +2234,6 @@ class FullProposalDataView(BatchedSpikeData):
             CmoCooinvx=CmoCooinvx,
             whitenedx=whitenedx,
             noise_logliks=noise_logliks,
-            duties=duties,
             sample_weights=sample_weights,
             candidate_count=None,
         )
@@ -2902,7 +2865,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             )
         if self.p.robust_strategy == "huber":
             mstep_weights_need_scores = True
-        elif self.p.robust_strategy in ("none", "fixed"):
+        elif self.p.robust_strategy == "none":
             mstep_weights_need_scores = False
         else:
             panic(self.p.robust_strategy)
@@ -2939,9 +2902,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                         log_liks=bresp,  # unused, just to fill the field.
                         responsibilities=bresp,
                         candidates=batch.candidates,
-                        duties=None
-                        if batch.duties is None
-                        else batch.duties[:, None].expand_as(batch.candidates),
+                        duties=None,
                     )
                 batch_stats = self.estep_stats_batch(
                     batch=batch,
@@ -3026,7 +2987,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
         neighborhood_ids: Tensor,
         n_candidates: int,
         candidate_count: int | None,
-        duties: Tensor | None,
     ) -> tuple[Tensor, Scores]:
         x = features.view(len(features), -1)
         wx, noise_logliks = _whiten_and_noise_score_batch(
@@ -3039,7 +2999,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             candidates=candidates,
             whitenedx=wx,
             noise_logliks=noise_logliks,
-            duties=duties,
             sample_weights=None,
             CmoCooinvx=None,
             candidate_count=candidate_count,
@@ -3079,7 +3038,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             lut=self.lut,
             fixed_responsibilities=fixed_responsibilities,
             skip_responsibility=skip_responsibility,
-            duties=batch.duties,
             robust_strategy=self.p.robust_strategy,
             spike_ixs=spike_ixs,
             candidate_ixs=candidate_ixs,
@@ -3125,7 +3083,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if self.p.robust_strategy == "huber":
             assert scores.duties is not None
             mstep_weights = scores.duties
-        elif self.p.robust_strategy in ("none", "fixed"):
+        elif self.p.robust_strategy == "none":
             mstep_weights = None
         else:
             panic(self.p.robust_strategy)
@@ -3189,7 +3147,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             dev = data.candidates.device
         if self.p.robust_strategy == "none":
             duties = None
-        elif self.p.robust_strategy in ("fixed", "huber"):
+        elif self.p.robust_strategy == "huber":
             duties = torch.full((data.N, data.n_candidates), torch.nan, device=dev)
         else:
             panic(self.p.robust_strategy)
@@ -3327,7 +3285,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             kmeans_beta=self.p.kmeans_beta,
             n_kmeanspp_tries=self.p.kmeanspp_tries,
             bail_at=int(single),
-            weights=split_data.duties,
             debug=debug,
             whiten=self.p.whiten_split,
             force_labels=split_data_labels,
@@ -4567,20 +4524,6 @@ def get_truncated_datasets(
     feature_rank, full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom, train_weights, val_weights = data  # fmt: skip
     del stable_features
 
-    if refinement_cfg.robust_strategy == "fixed":
-        duties = getattr(sorting, refinement_cfg.robust_fixed_std_dataset)
-        assert isinstance(duties, np.ndarray)
-        duties = torch.asarray(duties)
-        duties = refinement_cfg.robust_df + duties**refinement_cfg.robust_fixed_power
-        duties = (refinement_cfg.robust_df + 1.0) / duties
-        _abs_log_mean = duties.mean().log().abs().item()
-        if _abs_log_mean > 0.3:
-            logger.warning(f"Mean duty {duties.mean().item():.4f} is not near 1.")
-    elif refinement_cfg.robust_strategy in ("none", "huber"):
-        duties = None
-    else:
-        panic(refinement_cfg.robust_strategy)
-
     if noise is None:
         noise = EmbeddedNoise.estimate_from_hdf5(
             sorting.parent_h5_path,
@@ -4663,10 +4606,6 @@ def get_truncated_datasets(
     n_candidates, n_search, n_explore, max_candidates, max_search, max_explore = (
         _pick_search_size(n_units=sorting.n_units, refinement_cfg=refinement_cfg)
     )
-    if duties is None:
-        train_duties = None
-    else:
-        train_duties = duties[train_ixs].to(device=device)
 
     assert full_neighbs.neighborhood_ids.shape == (full_features.shape[0],)
     full_data = StreamingSpikeData(
@@ -4676,7 +4615,6 @@ def get_truncated_datasets(
         neighborhoods=full_neighbs,
         device=device,
         batch_size=refinement_cfg.eval_batch_size,
-        duties=duties,
         neighb_cov=neighb_cov,
     )
     train_data = TruncatedSpikeData.initialize_from_labels(
@@ -4690,7 +4628,6 @@ def get_truncated_datasets(
         dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
         labels=labels[train_ixs].to(device=device),
         x=train_x,
-        duties=train_duties,
         sample_weights=None if train_weights is None else train_weights.to(device=device),
         neighborhoods=train_neighbs,
         neighb_cov=neighb_cov,
@@ -4716,11 +4653,7 @@ def get_truncated_datasets(
     if refinement_cfg.hold_out_criterion:
         assert val_ixs is not None
         assert val_neighbs is not None
-        if duties is None:
-            val_duties = None
-        else:
-            val_duties = duties[val_ixs].to(device=device)
-        val_x = _read_ix_maybe_mmap(full_features, val_ixs)
+        val_x =_read_ix_maybe_mmap(full_features, val_ixs)
         if refinement_cfg.spike_storage == "device":
             val_x = val_x.to(device=device)
         elif refinement_cfg.spike_storage == "cpu":
@@ -4739,7 +4672,6 @@ def get_truncated_datasets(
             explore_neighb_steps=0,
             x=val_x,
             neighborhoods=val_neighbs,
-            duties=val_duties,
             sample_weights=None if val_weights is None else val_weights.to(device=device),
             neighb_cov=neighb_cov,
             seed=rg,
@@ -6629,13 +6561,9 @@ def try_kmeans(
     min_channel_count: int,
     feature_rank: int,
     n_iter: int = 100,
-    with_proportions: bool = True,
-    drop_prop: float = 0.0,
-    kmeanspp_initial="random",
     n_kmeans_tries: int = 25,
     kmeans_beta: float = 1.0,
     n_kmeanspp_tries: int = 25,
-    weights: Tensor | None = None,
     debug: bool = False,
     whiten: bool = False,
     bail_at: int = 1,
@@ -6659,47 +6587,22 @@ def try_kmeans(
         # debugging vis path.
         _, labels = force_labels.to(x.device).unique(return_inverse=True)
         e = F.one_hot(labels).to(x)
-        if weights is not None:
-            e = e * weights.to(x)[:, None]
         log_props = e.sum(0).div(e.sum()).log_()
         centroids = (e / e.sum(0)).T @ x
         dists = torch.cdist(x, centroids).square_()
         resps = log_props.sub(dists, alpha=0.5 * kmeans_beta).softmax(dim=1)
     else:
-        # kmeans
-        _can_batch = (
-            weights is None
-            and with_proportions
-            and not drop_prop
-            and kmeanspp_initial == "random"
+        kres = batched_kmeans(
+            x,
+            k,
+            seed=gen,
+            n_iter=n_iter,
+            kmeanspp_seeds_per_try=n_kmeanspp_tries,
+            n_tries=n_kmeans_tries,
+            beta=kmeans_beta,
+            kmeanspp_metric=kmeanspp_metric,
+            scale_dist_args=scale_dist_args,
         )
-        if _can_batch:
-            kres = batched_kmeans(
-                x,
-                k,
-                seed=gen,
-                n_iter=n_iter,
-                kmeanspp_seeds_per_try=n_kmeanspp_tries,
-                n_tries=n_kmeans_tries,
-                beta=kmeans_beta,
-                kmeanspp_metric=kmeanspp_metric,
-                scale_dist_args=scale_dist_args,
-            )
-        else:
-            assert kmeans_beta == 1.0
-            assert kmeanspp_metric == "euc"
-            kres = kmeans(
-                x,
-                n_components=k,
-                random_state=gen,
-                n_iter=n_iter,
-                with_proportions=with_proportions,
-                drop_prop=drop_prop,
-                kmeanspp_initial=kmeanspp_initial,
-                n_kmeans_tries=n_kmeans_tries,
-                n_kmeanspp_tries=n_kmeanspp_tries,
-                weights=weights.to(x) if weights is not None else None,
-            )
         resps = kres.responsibilities
     if resps is None:
         return None, x_ret, channels
@@ -6806,7 +6709,6 @@ def evaluate_group_demolitions(
                 orig_log_props=mm.b.log_proportions,
                 noise_log_prop=mm.b.noise_log_prop,
                 cl_alpha=alpha,
-                robust_strategy=mm.p.robust_strategy,
                 group=group_,
                 demolish_mask=demo_mask,
                 train_scores=train_scores,
@@ -6828,7 +6730,6 @@ def _evaluate_single_demolition(
     orig_log_props: Tensor,
     noise_log_prop: Tensor,
     cl_alpha: float,
-    robust_strategy: RobustnessStrategy,
     group: Tensor,
     demolish_mask: Tensor,
     train_scores: Scores,
@@ -6864,7 +6765,6 @@ def _evaluate_single_demolition(
         orig_log_props=orig_log_props,
         new_log_props=new_log_props,
         cl_alpha=cl_alpha,
-        robust_strategy=robust_strategy,
         orig_row_criterion=eval_row_crit,
         weights=eval_weights,
     )
@@ -7869,7 +7769,6 @@ def proportion_adjust_scores(
     batch_size: int = 2**16,
 ) -> Scores:
     """What would the scores be if the log props were these, not those?"""
-    assert scores.duties is None
     diff = new_log_props - orig_log_props
     diff.nan_to_num_()
     diff = F.pad(diff, (0, 1))
@@ -8131,7 +8030,6 @@ def proportion_adjust_criterion_change(
     orig_log_props: Tensor,
     new_log_props: Tensor,
     cl_alpha: float,
-    robust_strategy: RobustnessStrategy,
     orig_row_criterion: Tensor | None = None,
     batch_size: int = 2**18,
     weights: Tensor | None = None,
@@ -8145,22 +8043,12 @@ def proportion_adjust_criterion_change(
     assert orig_row_criterion is None or orig_row_criterion.shape == (n,)
     assert weights is None or weights.shape == (n,)
 
-    if robust_strategy == "fixed":
-        assert scores.duties is not None
-        tempering = scores.duties
-    elif robust_strategy in ("none", "huber"):
-        tempering = None
-    else:
-        panic(robust_strategy)
-
     mean = diff.new_zeros(())
     for i0 in range(0, n, batch_size):
         i1 = min(n, i0 + batch_size)
         nbatch = i1 - i0
 
         bdiff = diff[cand[i0:i1]]
-        if tempering is not None:
-            bdiff *= tempering[i0:i1]
 
         bll = log_liks[i0:i1].double()
         if orig_row_criterion is None:
@@ -8200,7 +8088,7 @@ def huber_quantile_if_huber(
 ) -> float | None:
     if robust_strategy == "huber":
         return huber_quantile
-    elif robust_strategy in ("none", "fixed"):
+    elif robust_strategy == "none":
         return None
     else:
         panic(robust_strategy)
@@ -8387,7 +8275,6 @@ def _score_batch(
     lut_params: LUTParams,
     lut: NeighborhoodLUT,
     robust_strategy: RobustnessStrategy,
-    duties: Tensor | None,
     spike_ixs: Tensor | None = None,
     candidate_ixs: Tensor | None = None,
     unit_ixs: Tensor | None = None,
@@ -8479,19 +8366,11 @@ def _score_batch(
         toplls = lls
     del lls
 
-    if robust_strategy == "fixed":
-        assert duties is not None
-        assert duties.shape == (n,)
-        assert huber_weights is None
-        toplls *= duties[:, None]
-        candidate_duties = duties[:, None].expand_as(candidates)
-    elif robust_strategy == "huber":
-        assert duties is None
+    if robust_strategy == "huber":
         assert huber_weights is not None
         assert huber_weights.shape == candidates.shape
         candidate_duties = huber_weights
     elif robust_strategy == "none":
-        assert duties is None
         assert huber_weights is None
         candidate_duties = None
     else:

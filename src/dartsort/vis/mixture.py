@@ -1191,11 +1191,8 @@ class SplitView(MixtureComponentPlot):
 
         if debug_info.split_data is not None:
             split_inds = debug_info.split_data.indices.cpu()
-            tw = debug_info.split_data.duties
-            if tw is not None:
-                tw = tw.numpy(force=True)
         else:
-            tw = split_inds = None
+            split_inds = None
 
         return (
             txt,
@@ -1208,7 +1205,6 @@ class SplitView(MixtureComponentPlot):
             mean_chans,
             chans_by_km,
             split_inds,
-            tw,
         )
 
     def draw(
@@ -1232,7 +1228,6 @@ class SplitView(MixtureComponentPlot):
             mean_chans,
             chans_by_km,
             _split_inds,
-            tw,
         ) = c
 
         # layout
@@ -1289,14 +1284,7 @@ class SplitView(MixtureComponentPlot):
         )
 
         # pc scatter
-        if loadings is not None and tw is not None:
-            s = ax_pc.scatter(*loadings.T, c=tw, s=5, lw=0, alpha=1)
-            plt.colorbar(s, ax=ax_pc, shrink=0.3)
-            ax_pc.scatter(
-                *loadings.T, edgecolors=colors, s=10, lw=0.5, facecolor="none", alpha=1
-            )
-            ax_pc.grid()
-        elif loadings is not None and tw is None:
+        if loadings is not None:
             ax_pc.scatter(*loadings.T, c=colors, s=5, alpha=0.5)
             ax_pc.grid()
         else:

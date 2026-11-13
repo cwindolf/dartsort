@@ -387,7 +387,6 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             neighborhood_ids=neighborhood_ids,
             n_candidates=self.n_candidates,
             candidate_count=int(cand_count.item()),
-            duties=None,
         )
 
         res = {
