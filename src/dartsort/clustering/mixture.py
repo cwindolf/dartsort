@@ -88,7 +88,7 @@ from ..util.logging_util import (
 )
 from ..util.main_util import ds_save_intermediate_labels, ds_save_intermediate_sorting
 from ..util.motion import MotionInfo
-from ..util.noise_util import EmbeddedNoise
+from ..util.noise_util import KroneckerNoise
 from ..util.py_util import databag, panic
 from ..util.spiketorch import (
     _nonzero_static,
@@ -403,7 +403,7 @@ class NeighborhoodCovariance(BModule):
     def from_noise_and_neighborhoods(
         cls,
         prgeom: Tensor,
-        noise: EmbeddedNoise,
+        noise: KroneckerNoise,
         neighborhoods: SpikeNeighborhoods,
         neighb_overlap: float,
         huber_quantile: float | None,
@@ -417,10 +417,7 @@ class NeighborhoodCovariance(BModule):
             prgeom=prgeom,
         )
         logdet, CooinvCom, Linv = _noise_factors(
-            noise=noise,
-            obs_ix=obs_ix,
-            miss_near_ix=miss_near_ix,
-            cache_prefix=neighborhoods.name,
+            noise=noise, obs_ix=obs_ix, miss_near_ix=miss_near_ix
         )
         assert obs_ix.shape[0] == neighborhoods.n_neighborhoods
         assert obs_ix.shape[0] == miss_near_ix.shape[0] == miss_full_mask.shape[0]
@@ -447,7 +444,7 @@ class NeighborhoodCovariance(BModule):
             logdet=logdet,
             CooinvCom=CooinvCom,
             Linv=Linv,
-            full_Linv=noise.whitener(),
+            full_Linv=torch.kron(noise.b.temporal_whitener, noise.b.spatial_whitener),
             huber_k=huber_k,
             huber_2logzratio=huber_2logzratio,
         )
@@ -2248,7 +2245,7 @@ class BaseMixtureModel(BModule):
         unit_ids: Tensor,
         signal_rank: int,
         neighb_cov: NeighborhoodCovariance,
-        noise: EmbeddedNoise | None,
+        noise: KroneckerNoise | None,
         erp: NeighborhoodFiller | None,
         p: TMMParams,
     ):
@@ -2259,7 +2256,7 @@ class BaseMixtureModel(BModule):
         self.signal_rank = signal_rank
         self.erp: NeighborhoodFiller | None = erp
         self.neighb_cov = neighb_cov
-        self.noise: EmbeddedNoise | None = noise
+        self.noise: KroneckerNoise | None = noise
 
     # -- subclasses implement
 
@@ -2335,7 +2332,9 @@ class BaseMixtureModel(BModule):
 
         if self.p.whiten_dist:
             assert self.noise is not None
-            x = self.noise.whiten_full(self.centroids)
+            x = self.centroids
+            x = x.view(len(x), self.noise.rank, self.noise.n_channels)
+            x = self.noise.whiten(x).reshape(len(x), -1)
         else:
             x = self.centroids
 
@@ -2366,7 +2365,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         bases: Tensor | None,
         noise_log_prop: Tensor | None,
         neighb_cov: NeighborhoodCovariance,
-        noise: EmbeddedNoise,
+        noise: KroneckerNoise,
         erp: NeighborhoodFiller | None,
         lut_puff: float = 1.5,
         known_lut: NeighborhoodLUT | None = None,
@@ -2425,23 +2424,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
         neighborhoods: SpikeNeighborhoods,
         refinement_cfg: RefinementConfig,
     ):
-        noise_dict = {
-            k.removeprefix("noise."): v
-            for k, v in state_dict.items()
-            if k.startswith("noise.")
-        }
-        ca = noise_dict.pop("chans_arange")
-        assert ca.shape == motion.rgeom.shape[:1]
-        del noise_dict["channel_vt_zpad"]  # TODO: don't save?
-        del noise_dict["mean_full"]  # TODO: don't save?
-        cov_kind = refinement_cfg.cov_kind.removesuffix("noise")
-        noise = EmbeddedNoise(
-            rank=feature_rank,
-            n_channels=motion.rgeom.shape[0],
-            cov_kind=cov_kind,
+        noise = KroneckerNoise(
+            temporal_cov=state_dict["noise.temporal_cov"],
+            spatial_cov=state_dict["noise.spatial_cov"],
             zero_radius=refinement_cfg.cov_radius,
-            **noise_dict,
         )
+        assert noise.rank == feature_rank
+        assert noise.n_channels == motion.rgeom.shape[0]
         neighb_cov = NeighborhoodCovariance.from_noise_and_neighborhoods(
             prgeom=pad_geom(motion.rgeom),
             noise=noise,
@@ -2511,7 +2500,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         neighb_cov: NeighborhoodCovariance,
         signal_rank: int,
         data: TruncatedSpikeData,
-        noise: EmbeddedNoise,
+        noise: KroneckerNoise,
         erp: NeighborhoodFiller,
         seed: int | np.random.Generator,
         p: TMMParams,
@@ -2550,7 +2539,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
     def from_config(
         cls,
         *,
-        noise: EmbeddedNoise,
+        noise: KroneckerNoise,
         erp: NeighborhoodFiller,
         neighb_cov: NeighborhoodCovariance,
         train_data: TruncatedSpikeData,
@@ -2584,7 +2573,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         erp: NeighborhoodFiller,
         data: DenseSpikeData,
         responsibilities: Tensor,
-        noise: EmbeddedNoise,
+        noise: KroneckerNoise,
         neighb_cov: NeighborhoodCovariance,
         total_log_proportion: float,
         noise_log_prop: Tensor | float = -torch.inf,
@@ -4504,7 +4493,7 @@ def get_truncated_datasets(
     device: torch.device,
     rg: int | np.random.Generator,
     fit_indices: np.ndarray | None = None,
-    noise: EmbeddedNoise | None = None,
+    noise: KroneckerNoise | None = None,
     stable_features: StableWaveformFeatures | None = None,
     save_kwargs: dict | None = None,
     computation_cfg: ComputationConfig | None = None,
@@ -4525,14 +4514,13 @@ def get_truncated_datasets(
     del stable_features
 
     if noise is None:
-        noise = EmbeddedNoise.estimate_from_hdf5(
+        noise = KroneckerNoise.estimate_from_hdf5(
             sorting.parent_h5_path,
             motion=motion,
             tpca=tpca,
             rank=feature_rank,
             zero_radius=refinement_cfg.cov_radius,
             cov_kind=refinement_cfg.cov_kind,
-            glasso_alpha=refinement_cfg.glasso_alpha,
             interp_params=refinement_cfg.noise_interp_params,
             device=device,
             rgeom=prgeom[:-1],
@@ -4541,7 +4529,7 @@ def get_truncated_datasets(
     gc.collect()
     torch.cuda.empty_cache()
 
-    assert isinstance(noise, EmbeddedNoise)
+    assert isinstance(noise, KroneckerNoise)
     noise.to(device=device)
     assert noise.rank == feature_rank
     neighb_cov = NeighborhoodCovariance.from_noise_and_neighborhoods(
@@ -5714,7 +5702,7 @@ def initialize_parameters_by_unit(
     *,
     data: TruncatedSpikeData,
     signal_rank: int,
-    noise: EmbeddedNoise,
+    noise: KroneckerNoise,
     erp: NeighborhoodFiller,
     latent_prior_std: float,
     prior_pseudocount: float,
@@ -5847,7 +5835,7 @@ def initialize_params_from_dense_data(
     data: DenseSpikeData,
     rank: int,
     erp: NeighborhoodFiller,
-    noise: EmbeddedNoise,
+    noise: KroneckerNoise,
     prior_pseudocount: float,
     latent_prior_std: float,
     mean: Tensor | None = None,
@@ -6978,7 +6966,7 @@ def _neighb_relative_index(
     return rel_inds
 
 
-def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
+def _noise_factors(*, noise: KroneckerNoise, obs_ix: Tensor, miss_near_ix: Tensor):
     nneighb = obs_ix.shape[0]
     nc_obs = obs_ix.shape[1]
     nc_miss_near = miss_near_ix.shape[1]
@@ -6989,6 +6977,8 @@ def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
     logdet = torch.zeros((nneighb,), device=dev)
     CooinvCom = torch.zeros((nneighb, rank, nc_obs, rank, nc_miss_near), device=dev)
     Linv = torch.zeros((nneighb, rank, nc_obs, rank, nc_obs), device=dev)
+    spatial_infos = torch.zeros((nneighb,), dtype=torch.int, device=dev)
+    temporal_logdet = -2.0 * noise.b.temporal_whitener.diagonal().log().sum()
 
     for j, (joix, jmnix) in enumerate(zip(obs_ix, miss_near_ix, strict=True)):
         (joixvix,) = (joix < nc).nonzero(as_tuple=True)
@@ -7001,13 +6991,15 @@ def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
 
         # -- observed-only stuff
         # calculate observed-only stuff
-        jCoo = noise.marginal_covariance(
-            channels=joixv, cache_prefix=cache_prefix, cache_key=j
+        jspatial_cov = noise.b.spatial_cov[joixv][:, joixv]
+        jspatial_L, spatial_infos[j] = torch.linalg.cholesky_ex(jspatial_cov)
+        jspatial_Linv = torch.linalg.solve_triangular(
+            jspatial_L, torch.eye(ncoi).to(jspatial_L), upper=False
         )
-        jL = jCoo.cholesky(upper=False)  # C = LL'
-        jLinv = jL.inverse().to_dense()
+        jLinv = torch.kron(noise.b.temporal_whitener, jspatial_Linv)
         jCooinv = jLinv.T @ jLinv  # Cinv = Linv' Linv
-        jlogdet = 2.0 * jL.to_dense().diagonal(dim1=-2, dim2=-1).log().sum()
+        jspatial_logdet = 2.0 * jspatial_L.diagonal().log().sum()
+        jlogdet = ncoi * temporal_logdet + rank * jspatial_logdet
 
         # set observed-only stuff
         logdet[j] = jlogdet
@@ -7020,16 +7012,18 @@ def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
             # i am a lonely island
             # importantly, that means my Com is 0. so everything is 0 below.
             continue
-        jCom = noise.offdiag_covariance(
-            channels_left=joixv, channels_right=jmnixv, device=dev
-        )
-        jCom = jCom.to_dense().to(device=dev)
+        jCom = torch.kron(noise.b.temporal_cov, noise.b.spatial_cov[joixv][:, jmnixv])
         jCooinvCom = jCooinv @ jCom
         jCooinvCom = jCooinvCom.view(rank, ncoi, rank, ncmi)
         CooinvCom[j, :, joixvix[:, None], :, jmnixvix[None]] = jCooinvCom.permute(
             1, 3, 0, 2
         )
 
+    nbail = int(spatial_infos.count_nonzero())
+    if nbail:
+        raise ValueError(
+            f"Noise covariance not positive definite in {nbail} neighborhoods."
+        )
     obsdim = rank * nc_obs
     missdim = rank * nc_miss_near
     CooinvCom = CooinvCom.view(nneighb, obsdim, missdim)
@@ -7187,7 +7181,7 @@ def _whiten_and_noise_score_batch_k(
 def _initialize_single(
     x: Tensor,
     chans: Tensor,
-    noise: EmbeddedNoise,
+    noise: KroneckerNoise,
     *,
     rank: int,
     latent_prior_std: float = 1.0,
@@ -7242,8 +7236,8 @@ def _initialize_single(
         return mean, None
 
     # we want x(C^-0.5)=xU^-1 -- need to use upper factor.
-    noise_cov = noise.marginal_covariance(chans)
-    U = torch.linalg.cholesky(noise_cov, upper=True).to_dense()
+    noise_cov = torch.kron(noise.b.temporal_cov, noise.b.spatial_cov[chans][:, chans])
+    U = torch.linalg.cholesky(noise_cov, upper=True)
     x = x - mean
     x = torch.linalg.solve_triangular(U, x, upper=True, left=False, out=x)
 

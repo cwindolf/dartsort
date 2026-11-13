@@ -18,7 +18,6 @@ dependencies = [
   "dredge-ephys>=0.4.0",
   "h5py",
   "jaxtyping",
-  "linear_operator",
   "numba",
   "numpy>=1.20;python_version<'3.13'",
   "numpy>=2.0.0;python_version>='3.13'",

@@ -88,7 +88,7 @@ from .util.motion import (
     get_motion_info,
     try_load_motion_info,
 )
-from .util.noise_util import EmbeddedNoise
+from .util.noise_util import KroneckerNoise
 from .util.preprocess_util import preprocess
 from .util.py_util import databag, ensure_path
 from .util.waveform_util import full_channel_index, make_channel_index

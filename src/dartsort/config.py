@@ -11,6 +11,7 @@ from .util.internal_config import (
     KmeansppStopping,
     MixtureStep,
     MotionBatchingMode,
+    NoiseCovKind,
     PreprocessingStrategy,
     RealignStrategy,
     SpikeStorage,
@@ -434,7 +435,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_spike_storage: SpikeStorage = "cpu"
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
-    cov_kind: str = "factorizednoise"
+    cov_kind: NoiseCovKind = "kronecker"
     gmm_euclidean_threshold: float = 3.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0

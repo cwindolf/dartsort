@@ -8,7 +8,6 @@ dependencies:
     - ipykernel
     - ipython
     - ipywidgets
-    - linear_operator
     - matplotlib
     - numba
     - numpy>=2.0

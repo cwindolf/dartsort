@@ -506,6 +506,7 @@ class TemplateMergeConfig:
 
 
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
+NoiseCovKind = Literal["kronecker", "identity"]
 ComponentDistanceMetric = Literal["euc", "cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
 KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
@@ -544,8 +545,7 @@ class RefinementConfig:
 
     # -- gmm parameters
     # noise params
-    cov_kind: str = "factorizednoise"
-    glasso_alpha: float | int | None = None
+    cov_kind: NoiseCovKind = "kronecker"
 
     # model params
     neighb_overlap: float = 0.75

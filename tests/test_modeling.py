@@ -584,7 +584,7 @@ def test_component_initialization(
     mean = moppca_sim["mu"][0].numpy(force=True).ravel()
     basis = moppca_sim["W"][0].numpy(force=True)
     basis = basis.transpose(2, 0, 1).reshape(rank, -1)
-    ncov = moppca_sim["noise"].marginal_covariance().to_dense().numpy(force=True)
+    ncov = moppca_sim["cov"].numpy(force=True)
     subspace = basis.T @ basis
     true_cov = subspace + ncov
 

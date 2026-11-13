@@ -866,9 +866,10 @@ class CovarianceView(MixtureComponentPlot):
 
         # noise covariance
         assert mix_data.tmm.noise is not None
-        cov_noise = mix_data.tmm.noise.marginal_covariance(
-            channels=target_chans
-        ).to_dense()
+        noise = mix_data.tmm.noise
+        cov_noise = torch.kron(
+            noise.b.temporal_cov, noise.b.spatial_cov[target_chans][:, target_chans]
+        )
         assert cov_noise.shape == cov_interp.shape
 
         # signal covariance

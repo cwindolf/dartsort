@@ -2,11 +2,9 @@ import math
 import warnings
 from typing import overload
 
-import linear_operator
 import numpy as np
 import torch
 import torch.nn.functional as F
-from linear_operator.utils.cholesky import psd_safe_cholesky
 from packaging.version import Version
 from scipy.fftpack import next_fast_len
 from scipy.spatial.distance import squareform
@@ -26,7 +24,6 @@ if TORCH_IS_OLD and torch.cuda.is_available():
     )
 
 logger = get_logger(__name__)
-log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
 _0 = torch.tensor(0.0)
 
@@ -50,17 +47,6 @@ def spawn_torch_rg(
     generator = torch.Generator(device=device)
     generator.manual_seed(seed)
     return generator
-
-
-def ll_via_inv_quad(cov, y, inv_quad_only=False):
-    inv_quad, logdet = linear_operator.inv_quad_logdet(
-        cov, y.T, logdet=True, reduce_inv_quad=False
-    )
-    assert inv_quad is not None
-    if inv_quad_only:
-        return inv_quad
-    ll = inv_quad.add_(logdet + log2pi * y.shape[1]).mul_(-0.5)
-    return ll
 
 
 def fast_nanmedian(x, axis=-1):
@@ -1359,7 +1345,7 @@ def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_siz
     cap = UTU
     del UTU
     cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
-    capchol = psd_safe_cholesky(cap)
+    capchol = torch.linalg.cholesky(cap)
     # V is (n, d, M)
     V = torch.linalg.solve_triangular(capchol.mT, U, upper=True, left=False)
 
