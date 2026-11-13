@@ -91,6 +91,7 @@ def low_k_simulations():
     "robust_strategy,huber_noise", [("none", True), ("huber", True), ("huber", False)]
 )
 @pytest.mark.parametrize("split_kmeanspp_metric", ["euc", "scaled_normeuc"])
+@pytest.mark.parametrize("masked_mean_impute", [False, True])
 def test_truncated_mixture(
     moppca_simulations,
     t_mu,
@@ -102,6 +103,7 @@ def test_truncated_mixture(
     robust_strategy,
     huber_noise,
     split_kmeanspp_metric,
+    masked_mean_impute,
 ):
     mixture.pnoid = True
 
@@ -137,6 +139,7 @@ def test_truncated_mixture(
         robust_strategy=robust_strategy,
         huber_noise=huber_noise,
         split_kmeanspp_metric=split_kmeanspp_metric,
+        masked_mean_impute=masked_mean_impute,
     )
     no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
 
@@ -242,6 +245,7 @@ def test_truncated_mixture(
                     feature_rank=tmm.noise.rank,
                     min_count=tmm.p.min_count,
                     min_channel_count=tmm.p.min_channel_count,
+                    masked_mean_impute=tmm.p.masked_mean_impute,
                 )
                 assert kmeans_responsibliities is not None
                 split_model, _, _, any_discarded, _, _, _ = (

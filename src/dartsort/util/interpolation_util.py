@@ -1060,6 +1060,7 @@ class StableFeaturesInterpolator(BModule):
 
 class NeighborhoodFiller(BModule):
     batch_size: int
+    neighborhoods: SpikeNeighborhoods
 
     def interp_to_chans(
         self,
@@ -1067,28 +1068,40 @@ class NeighborhoodFiller(BModule):
         neighborhood_ids: torch.Tensor,
         target_channels: torch.Tensor | slice,
         out: torch.Tensor | None = None,
+        mean: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if waveforms.shape[0] <= self.batch_size and out is None:
-            return self._interp_to_chans(waveforms, neighborhood_ids, target_channels)
+        if mean is not None:
+            assert waveforms.ndim == 3
+            assert mean.shape == (waveforms.shape[1], self.neighborhoods.n_channels)
+            source_channels = self.neighborhoods.b.neighborhoods[neighborhood_ids]
+            source_mean = F.pad(mean, (0, 1))[:, source_channels].permute(1, 0, 2)
+            waveforms = waveforms - source_mean
+            del source_mean
 
-        if isinstance(target_channels, torch.Tensor):
-            assert target_channels.ndim == 1
-            ntarg = target_channels.shape[0]
+        if waveforms.shape[0] <= self.batch_size and out is None:
+            out = self._interp_to_chans(waveforms, neighborhood_ids, target_channels)
         else:
-            ntarg = len(range(*target_channels.indices(len(self.b.prgeom))))
-        out_shp = (*waveforms.shape[:2], ntarg)
-        if out is None:
-            out = waveforms.new_zeros(out_shp)
-        else:
-            assert out.shape == out_shp
-        n = out.shape[0]
-        for i0 in range(0, n, self.batch_size):
-            i1 = min(n, i0 + self.batch_size)
-            out[i0:i1] = self._interp_to_chans(
-                waveforms=waveforms[i0:i1],
-                neighborhood_ids=neighborhood_ids[i0:i1],
-                target_channels=target_channels,
-            )
+            if isinstance(target_channels, torch.Tensor):
+                assert target_channels.ndim == 1
+                ntarg = target_channels.shape[0]
+            else:
+                ntarg = len(range(*target_channels.indices(len(self.b.prgeom))))
+            out_shp = (*waveforms.shape[:2], ntarg)
+            if out is None:
+                out = waveforms.new_zeros(out_shp)
+            else:
+                assert out.shape == out_shp
+            n = out.shape[0]
+            for i0 in range(0, n, self.batch_size):
+                i1 = min(n, i0 + self.batch_size)
+                out[i0:i1] = self._interp_to_chans(
+                    waveforms=waveforms[i0:i1],
+                    neighborhood_ids=neighborhood_ids[i0:i1],
+                    target_channels=target_channels,
+                )
+
+        if mean is not None:
+            out += mean[:, target_channels]
         return out
 
     def _interp_to_chans(
@@ -1112,6 +1125,7 @@ class NeighborhoodInterpolator(NeighborhoodFiller):
         assert len(prgeom) == neighborhoods.n_channels + 1
         self.erp_params: InterpolationParams = params.normalize()
         self.batch_size = batch_size
+        self.neighborhoods = neighborhoods
         self.register_buffer("prgeom", prgeom.clone())
         self.b.prgeom[-1].fill_(torch.nan)
         neighb_data = interp_precompute(

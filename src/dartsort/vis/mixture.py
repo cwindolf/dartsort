@@ -1765,6 +1765,7 @@ def vis_split_interpolation(
         min_channel_count=mix_data.tmm.p.min_channel_count,
         debug=True,
         whiten=whiten,
+        masked_mean_impute=mix_data.tmm.p.masked_mean_impute,
     )
 
     n_spikes = split_data.N

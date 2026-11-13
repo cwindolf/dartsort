@@ -899,6 +899,7 @@ class TMMParams:
     kmeans_beta: float
     kmeanspp_tries: int
     whiten_split: bool
+    masked_mean_impute: bool
     split_kmeanspp_metric: SplitKmeansppMetric
     fix_responsibilities: bool
     scale_dist_args: tuple[float, float, float]
@@ -944,6 +945,7 @@ class TMMParams:
             demolish_during_selection=refinement_cfg.demolish_during_selection,
             refit_in_demolition=refinement_cfg.refit_in_demolition,
             whiten_split=refinement_cfg.whiten_split,
+            masked_mean_impute=refinement_cfg.masked_mean_impute,
             split_kmeanspp_metric=refinement_cfg.split_kmeanspp_metric,
             fix_responsibilities=refinement_cfg.fix_responsibilities_in_split,
             scale_dist_args=refinement_cfg.scale_dist_args,
@@ -1227,6 +1229,33 @@ class DenseSpikeData:
         else:
             (channels,) = counts.nonzero(as_tuple=True)
         return channels
+
+    def masked_observed_mean(
+        self, x: Tensor, weights: Tensor | None = None, pseudocount: float = 0.0
+    ) -> Tensor:
+        if weights is None:
+            weights = x.new_ones((self.N, 1))
+        assert weights.ndim == 2
+        assert weights.shape[0] == self.N
+        assert x.ndim == 3
+        assert x.shape[0] == self.N
+        n, rank, nco = x.shape
+        nc = self.neighborhoods.n_channels
+        channels = self.neighborhoods.b.neighborhoods[self.neighborhood_ids].view(-1)
+        assert channels.numel() == n * nco
+
+        counts = weights.T @ self.neighborhoods.b.indicators[:, self.neighborhood_ids].T
+        counts += pseudocount
+        counts = counts.where(counts > 0, 1.0)
+
+        x = x.permute(1, 0, 2)
+        means = x.new_zeros((weights.shape[1], rank, nc + 1))
+        for mean, weight in zip(means, weights.T):
+            wx = (x * weight[:, None]).reshape(rank, n * nco)
+            mean.index_add_(1, channels, wx)
+        means = means[:, :, :nc]
+        means /= counts[:, None, :]
+        return means
 
     def weighted_covered_channels(
         self, weights: Tensor, within: Tensor | None = None, min_count: int = 0
@@ -2484,6 +2513,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             latent_prior_std=self.p.latent_prior_std,
             prior_pseudocount=self.p.prior_pseudocount,
             rank0_model=self,
+            masked_mean_impute=self.p.masked_mean_impute,
         )
         assert _means is None
         assert bases is not None
@@ -2524,6 +2554,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             latent_prior_std=p.latent_prior_std * p.initial_basis_shrinkage,
             prior_pseudocount=p.prior_pseudocount,
             puff=p.split_k,
+            masked_mean_impute=p.masked_mean_impute,
         )
         assert means is not None
         if pnoid:
@@ -2606,6 +2637,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             weights=responsibilities,
             latent_prior_std=p.latent_prior_std,
             prior_pseudocount=p.prior_pseudocount,
+            masked_mean_impute=p.masked_mean_impute,
         )
         assert chan_coverage is not None
         valid = torch.tensor([r is not None for r in initialization], dtype=torch.bool)
@@ -3286,6 +3318,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             force_labels=split_data_labels,
             kmeanspp_metric=self.p.split_kmeanspp_metric,
             scale_dist_args=self.p.scale_dist_args,
+            masked_mean_impute=self.p.masked_mean_impute,
         )
         if debug or logger.isEnabledFor(DARTSORTVERBOSE):
             group_str = ",".join(map(str, group.tolist()))
@@ -5719,6 +5752,7 @@ def initialize_parameters_by_unit(
     rank0_model: TruncatedMixtureModel | None = None,
     K: int | None = None,
     puff=1.0,
+    masked_mean_impute: bool,
 ):
     if scores is None:
         assert data.candidates is not None
@@ -5786,6 +5820,7 @@ def initialize_parameters_by_unit(
             prior_pseudocount=prior_pseudocount,
             mean=rank0_model.b.means[k] if rank0_model is not None else None,
             single_weight=kweight,
+            masked_mean_impute=masked_mean_impute,
         )
         assert len(params) == 1
         params = params[0]
@@ -5849,6 +5884,8 @@ def initialize_params_from_dense_data(
     min_channel_count: int = 1,
     weights: Tensor | None = None,
     single_weight: Tensor | None = None,
+    *,
+    masked_mean_impute: bool,
 ) -> tuple[list[tuple[Tensor, Tensor, Tensor] | None], Tensor | None]:
     """Weighted mean and basis, possibly by multiple weight vectors at once.
 
@@ -5864,10 +5901,24 @@ def initialize_params_from_dense_data(
     x_erp = data.x()
     assert x_erp is not None
     x_erp = x_erp.view(data.N, noise.rank, -1)
-    x = erp.interp_to_chans(x_erp, data.neighborhood_ids, target_channels=covered_chans)
-    if mean is not None:
-        mean = mean.view(noise.rank, -1)[:, covered_chans]
     if weights is None:
+        if mean is not None:
+            mean = mean.view(noise.rank, -1)
+        elif masked_mean_impute and single_weight is None:
+            mean = data.masked_observed_mean(x_erp)[0]
+        elif masked_mean_impute:
+            assert single_weight is not None
+            mean = data.masked_observed_mean(
+                x_erp, weights=single_weight[:, None], pseudocount=prior_pseudocount
+            )[0]
+        x = erp.interp_to_chans(
+            x_erp,
+            data.neighborhood_ids,
+            target_channels=covered_chans,
+            mean=mean if masked_mean_impute else None,
+        )
+        if mean is not None:
+            mean = mean[:, covered_chans]
         mean, W = _initialize_single(
             x,
             covered_chans,
@@ -5885,20 +5936,40 @@ def initialize_params_from_dense_data(
     subsets, full_coverage = data.weighted_covered_channels(
         weights=weights, within=covered_chans, min_count=min_channel_count
     )
+    if masked_mean_impute:
+        x = None
+        means = data.masked_observed_mean(
+            x_erp, weights=weights, pseudocount=prior_pseudocount
+        )
+    else:
+        x = erp.interp_to_chans(
+            x_erp, data.neighborhood_ids, target_channels=covered_chans
+        )
+        means = None
     res = []
-    for subset, weight in zip(subsets, weights.T, strict=True):
+    for j, (subset, weight) in enumerate(zip(subsets, weights.T, strict=True)):
         schans = covered_chans[subset]
         if not schans.numel():
             res.append(None)
             continue
+        if means is None:
+            assert x is not None
+            sx = x[:, :, subset]
+            smean = None
+        else:
+            sx = erp.interp_to_chans(
+                x_erp, data.neighborhood_ids, target_channels=schans, mean=means[j]
+            )
+            smean = means[j][:, schans]
         m, w = _initialize_single(
-            x=x[:, :, subset],
+            x=sx,
             chans=schans,
             noise=noise,
             rank=rank,
             weight=weight,
             latent_prior_std=latent_prior_std,
             prior_pseudocount=prior_pseudocount,
+            mean=smean,
         )
         res.append((schans, m, w))
     return res, full_coverage
@@ -6565,6 +6636,7 @@ def try_kmeans(
     force_labels: Tensor | None = None,
     kmeanspp_metric: SplitKmeansppMetric = "euc",
     scale_dist_args: tuple[float, float, float] | None = None,
+    masked_mean_impute: bool,
 ) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
     # interpolate whitened data
     channels = data.covered_channels(min_channel_count)
@@ -6574,7 +6646,8 @@ def try_kmeans(
         erp_x = data.x()
         assert erp_x is not None
     erp_x = erp_x.view(data.N, feature_rank, -1)
-    x = erp.interp_to_chans(erp_x, data.neighborhood_ids, channels)
+    mean = data.masked_observed_mean(erp_x)[0] if masked_mean_impute else None
+    x = erp.interp_to_chans(erp_x, data.neighborhood_ids, channels, mean=mean)
     x = x.view(len(x), -1)
     x_ret = x if debug else None
 

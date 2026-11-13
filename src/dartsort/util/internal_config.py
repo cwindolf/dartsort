@@ -626,6 +626,7 @@ class RefinementConfig:
     cov_radius: float = 200.0
     val_proportion: float = 0.5
     impute_kind: Literal["interp", "impute"] = "impute"
+    masked_mean_impute: bool = False
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
     # bad unit filter params
