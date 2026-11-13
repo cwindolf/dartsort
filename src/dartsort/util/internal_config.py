@@ -336,6 +336,7 @@ class ClusteringConfig:
 
 WhiteningStrategy = Literal["none", "prewhiten", "prewhiten_postapply", "postwhiten"]
 WhiteningEstimator = Literal["fullzca", "localzca", "sparsechol"]
+NoiseSpatialCovEstimator = Literal["noisefill", "pairwise"]
 
 
 @cfg_dataclass
@@ -344,6 +345,7 @@ class WhiteningConfig:
 
     strategy: WhiteningStrategy = "none"
     estimator: WhiteningEstimator = "localzca"
+    noise_spatial_cov_estimator: NoiseSpatialCovEstimator = "noisefill"
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params
     radius: float = 200.0
     temporal_length: int | None = 3
@@ -546,6 +548,7 @@ class RefinementConfig:
     # -- gmm parameters
     # noise params
     cov_kind: NoiseCovKind = "kronecker"
+    noise_spatial_cov_estimator: NoiseSpatialCovEstimator = "noisefill"
 
     # model params
     neighb_overlap: float = 0.75

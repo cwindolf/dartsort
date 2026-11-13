@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast
 
@@ -20,6 +21,7 @@ from ..util.internal_config import (
     ComputationConfig,
     InterpolationParams,
     NoiseCovKind,
+    NoiseSpatialCovEstimator,
     WhiteningConfig,
     tps_interp_clampna_extrap_params,
 )
@@ -462,9 +464,11 @@ class KroneckerNoise(BModule):
         snippets: Tensor | np.ndarray,
         *,
         cov_kind: NoiseCovKind,
+        noise_spatial_cov_estimator: NoiseSpatialCovEstimator = "noisefill",
         zero_radius: float | None = None,
         rgeom: Tensor | np.ndarray | None = None,
         eps: float = 1e-4,
+        batch_size: int = 2**16,
     ) -> Self:
         n, rank, n_channels = snippets.shape
         x = torch.asarray(snippets)
@@ -510,26 +514,33 @@ class KroneckerNoise(BModule):
         x_spatial.mul_(correction.to(orig_device))
         x_spatial = x_spatial.reshape(n * rank, n_channels)
 
-        xx = x_spatial.numpy(force=True)
-        invalid = np.isnan(xx)
-        rg = np.random.default_rng(0)
-        xx[invalid] = rg.normal(size=invalid.sum()).astype(xx.dtype)
-        x_spatial = torch.from_numpy(xx).to(x_spatial)
-        del xx, invalid
-        cov = spiketorch.enforce_posdef(torch.cov(x_spatial.T.double()), eps=eps)
-        cov = cov.to(x_spatial)
-        if zero_radius:
-            assert rgeom is not None
-            assert rgeom.shape[0] == n_channels
-            rgeom_np = rgeom.numpy(force=True) if torch.is_tensor(rgeom) else rgeom
-            cov *= torch.asarray(squareform(pdist(rgeom_np)) < zero_radius).to(cov)
-        channel_eig, channel_v = torch.linalg.eigh(cov.double())
-        if zero_radius:
-            # the spatial mask is, i guess, not so plausible as a cov...
-            channel_eig[channel_eig < eps] = eps
-        assert channel_eig.isfinite().all()
-        channel_root = channel_v.float() * channel_eig.sqrt().float()
-        spatial_cov = channel_root @ channel_root.T
+        cov = spatial_covariance(
+            x_spatial.split(batch_size),
+            noise_spatial_cov_estimator=noise_spatial_cov_estimator,
+            generator=spawn_torch_rg(0, device=x_spatial.device),
+        )
+        if noise_spatial_cov_estimator == "noisefill":
+            cov = spiketorch.enforce_posdef(cov, eps=eps)
+            cov = cov.to(x_spatial)
+            if zero_radius:
+                assert rgeom is not None
+                assert rgeom.shape[0] == n_channels
+                rgeom_np = rgeom.numpy(force=True) if torch.is_tensor(rgeom) else rgeom
+                cov *= torch.asarray(squareform(pdist(rgeom_np)) < zero_radius).to(cov)
+            channel_eig, channel_v = torch.linalg.eigh(cov.double())
+            if zero_radius:
+                # the spatial mask is, i guess, not so plausible as a cov...
+                channel_eig[channel_eig < eps] = eps
+            assert channel_eig.isfinite().all()
+            channel_root = channel_v.float() * channel_eig.sqrt().float()
+            spatial_cov = channel_root @ channel_root.T
+        elif noise_spatial_cov_estimator == "pairwise":
+            min_eig = torch.linalg.eigvalsh(cov)[0]
+            if min_eig < eps:
+                cov.diagonal().add_(eps - min_eig)
+            spatial_cov = cov.to(x_spatial)
+        else:
+            panic(noise_spatial_cov_estimator)
 
         return cls(temporal_cov, spatial_cov, zero_radius=zero_radius)
 
@@ -539,6 +550,7 @@ class KroneckerNoise(BModule):
         hdf5_path: str | Path,
         *,
         cov_kind: NoiseCovKind,
+        noise_spatial_cov_estimator: NoiseSpatialCovEstimator = "noisefill",
         motion: MotionInfo | None = None,
         tpca: "PCA | BaseTemporalPCA | None" = None,
         interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
@@ -567,7 +579,11 @@ class KroneckerNoise(BModule):
             f"Estimate embedded noise with {cov_kind=} from {snippets.shape=}."
         )
         return cls.estimate(
-            snippets, cov_kind=cov_kind, zero_radius=zero_radius, rgeom=rgeom
+            snippets,
+            cov_kind=cov_kind,
+            noise_spatial_cov_estimator=noise_spatial_cov_estimator,
+            zero_radius=zero_radius,
+            rgeom=rgeom,
         )
 
 
@@ -722,6 +738,54 @@ def interpolate_residual_snippets(
     return snips_out
 
 
+def spatial_covariance(
+    batches: Iterable[Tensor],
+    *,
+    noise_spatial_cov_estimator: NoiseSpatialCovEstimator,
+    generator: torch.Generator,
+) -> Tensor:
+    n = 0
+    mean = cov = pair_counts = None
+    for xb in batches:
+        assert xb.ndim == 2
+        xb = xb.to(torch.promote_types(xb.dtype, torch.float))
+        if cov is None:
+            cov = xb.new_zeros((xb.shape[1], xb.shape[1]), dtype=torch.double)
+            mean = cov.new_zeros((xb.shape[1],))
+            pair_counts = torch.zeros_like(cov)
+        assert mean is not None and pair_counts is not None
+
+        if noise_spatial_cov_estimator == "noisefill":
+            rvs = torch.randn(
+                size=xb.shape, generator=generator, device=xb.device, dtype=xb.dtype
+            )
+            xb = xb.masked_scatter(xb.isnan(), rvs)
+            nb = xb.shape[0]
+            bmean = xb.mean(dim=0)
+            xb = xb - bmean
+            delta = bmean.double() - mean
+            n += nb
+            mean += delta * (nb / n)
+            cov += (xb.T @ xb).double()
+            cov += delta[:, None] * delta * ((n - nb) * nb / n)
+        elif noise_spatial_cov_estimator == "pairwise":
+            observed = xb.isfinite().to(xb)
+            xb = xb.nan_to_num()
+            cov += (xb.T @ xb).double()
+            pair_counts += (observed.T @ observed).double()
+        else:
+            panic(noise_spatial_cov_estimator)
+    assert cov is not None and pair_counts is not None
+
+    if noise_spatial_cov_estimator == "noisefill":
+        assert n > 1
+        return cov / (n - 1)
+    elif noise_spatial_cov_estimator == "pairwise":
+        return cov / pair_counts.clamp_(min=1.0)
+    else:
+        panic(noise_spatial_cov_estimator)
+
+
 def residual_covariance(
     sorting: DARTsortSorting,
     do_interpolation: bool,
@@ -730,6 +794,7 @@ def residual_covariance(
     device: torch.device | None = None,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
+    noise_spatial_cov_estimator: NoiseSpatialCovEstimator = "noisefill",
     seed: int = 0,
     batch_size=256,
 ) -> Tensor:
@@ -750,31 +815,16 @@ def residual_covariance(
     else:
         snipgen = sorting._yield_dataset(residual_dataset_name, batch_size=batch_size)
 
-    rg = spawn_torch_rg(seed=seed, device=device)
-    cov = None
-    N = 0
-    for snip in snipgen:
-        snip = torch.asarray(snip).to(device=device, non_blocking=True)
-        nc = snip.shape[2]
-        snip = snip.view(-1, nc)
-        if cov is None:
-            cov = snip.new_zeros((nc, nc))
-
-        isna = snip.isnan()
-        rvs = torch.randn(
-            size=snip.shape, generator=rg, device=device, dtype=snip.dtype
-        )
-        snip.masked_scatter_(isna, rvs)
-
-        scov = torch.cov(snip.T)
-        n = snip.shape[0]
-        N += n
-        w = n / N
-        cov += scov.sub_(cov).mul_(w)
-    assert N > 0
-    assert cov is not None
-
-    return cov
+    batches = (
+        torch.asarray(snip).to(device=device, non_blocking=True).view(-1, snip.shape[2])
+        for snip in snipgen
+    )
+    cov = spatial_covariance(
+        batches,
+        noise_spatial_cov_estimator=noise_spatial_cov_estimator,
+        generator=spawn_torch_rg(seed=seed, device=device),
+    )
+    return cov.float()
 
 
 def residual_welch_whitener(
@@ -967,6 +1017,7 @@ class Whitener(BModule):
             motion=motion,
             interp_params=whiten_cfg.interp_params,
             device=device,
+            noise_spatial_cov_estimator=whiten_cfg.noise_spatial_cov_estimator,
         )
         geom = getattr(sorting, "geom", None)
         assert geom is not None

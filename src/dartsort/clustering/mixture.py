@@ -4560,6 +4560,7 @@ def get_truncated_datasets(
             rank=feature_rank,
             zero_radius=refinement_cfg.cov_radius,
             cov_kind=refinement_cfg.cov_kind,
+            noise_spatial_cov_estimator=refinement_cfg.noise_spatial_cov_estimator,
             interp_params=refinement_cfg.noise_interp_params,
             device=device,
             rgeom=prgeom[:-1],
