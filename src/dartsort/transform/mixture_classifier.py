@@ -144,7 +144,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             return (
                 self.tmm.lut_params is None
                 or not hasattr(self, "neighb_candidates")
-                or self.tmm.neighb_cov.b.Linv.shape[0]
+                or self.tmm.neighb_cov.b.spatial_whitener.shape[0]
                 < self.b.neighb_candidates.shape[0]
             )
 

@@ -309,9 +309,10 @@ class NeighborhoodCovariance(BModule):
         miss_near_ix: Tensor,
         miss_full_mask: Tensor,
         logdet: Tensor,
-        CooinvCom: Tensor,
-        Linv: Tensor,
-        full_Linv: Tensor,
+        temporal_whitener: Tensor,
+        spatial_whitener: Tensor,
+        spatial_regression: Tensor,
+        full_spatial_whitener: Tensor,
         huber_k: Tensor | None,
         huber_2logzratio: Tensor | None,
     ):
@@ -342,11 +343,10 @@ class NeighborhoodCovariance(BModule):
             miss_ix_full not used
         logdet: Tensor
             log det of observed covariance
-        CooinvCom: Tensor
-            Com is observed to miss-near
-        Linv: Tensor
-            Coo = LL', and this is Linv. Cinv=Linv'Linv, so this multiplies from the left.
-        full_Linv: Tensor
+        temporal_whitener: Tensor
+        spatial_whitener: Tensor
+        spatial_regression: Tensor
+        full_spatial_whitener: Tensor
         huber_k: Tensor | None
             noise unit's Huber radius by neighborhood
         huber_2logzratio: Tensor | None
@@ -364,9 +364,12 @@ class NeighborhoodCovariance(BModule):
         self.register_buffer("miss_near_ix", miss_near_ix, persistent=False)
         self.register_buffer("miss_full_mask", miss_full_mask, persistent=False)
         self.register_buffer("logdet", logdet, persistent=False)
-        self.register_buffer("CooinvCom", CooinvCom, persistent=False)
-        self.register_buffer("Linv", Linv, persistent=False)
-        self.register_buffer("full_Linv", full_Linv, persistent=False)
+        self.register_buffer("temporal_whitener", temporal_whitener, persistent=False)
+        self.register_buffer("spatial_whitener", spatial_whitener, persistent=False)
+        self.register_buffer("spatial_regression", spatial_regression, persistent=False)
+        self.register_buffer(
+            "full_spatial_whitener", full_spatial_whitener, persistent=False
+        )
         lik_const = logdet + LOG_2PI * nobs
         assert (huber_k is None) == (huber_2logzratio is None)
         if huber_2logzratio is not None:
@@ -377,17 +380,19 @@ class NeighborhoodCovariance(BModule):
     def __post_init__(self):
         """Shape validation / documentation."""
         nneighb = self.b.nobs.shape[0]
-        obsdim = self.feat_rank * self.max_nc_obs
-        neardim = self.feat_rank * self.max_nc_miss_near
+        nco = self.max_nc_obs
         assert self.nobs.shape == (nneighb,)
-        assert self.obs_ix.shape == (nneighb, self.max_nc_obs)
+        assert self.obs_ix.shape == (nneighb, nco)
         assert self.miss_near_ix.shape == (nneighb, self.max_nc_miss_near)
         assert self.miss_full_mask.shape == (nneighb, self.n_channels)
         assert self.logdet.shape == (nneighb,)
-        assert self.CooinvCom.shape == (nneighb, obsdim, neardim)
+        assert self.temporal_whitener.shape == (self.feat_rank, self.feat_rank)
+        assert self.spatial_whitener.shape == (nneighb, nco, nco)
+        assert self.spatial_regression.shape == (nneighb, nco, self.max_nc_miss_near)
+        assert self.full_spatial_whitener.shape == (self.n_channels, self.n_channels)
 
     def pad_for_noise_score_(self, new_n_neighbs: int):
-        noise_score_keys = ["Linv", "logdet", "nobs", "lik_const"]
+        noise_score_keys = ["spatial_whitener", "logdet", "nobs", "lik_const"]
         if self.huber_k is not None:
             noise_score_keys.append("huber_k")
         for k in noise_score_keys:
@@ -416,13 +421,14 @@ class NeighborhoodCovariance(BModule):
             zero_radius=noise.zero_radius,
             prgeom=prgeom,
         )
-        logdet, CooinvCom, Linv = _noise_factors(
+        logdet, spatial_whitener, spatial_regression = _noise_factors(
             noise=noise, obs_ix=obs_ix, miss_near_ix=miss_near_ix
         )
         assert obs_ix.shape[0] == neighborhoods.n_neighborhoods
         assert obs_ix.shape[0] == miss_near_ix.shape[0] == miss_full_mask.shape[0]
         assert obs_ix.shape[0] == logdet.shape[0]
-        assert obs_ix.shape[0] == CooinvCom.shape[0] == Linv.shape[0]
+        assert obs_ix.shape[0] == spatial_whitener.shape[0]
+        assert obs_ix.shape[0] == spatial_regression.shape[0]
         nobs = noise.rank * nc_obs
         if huber_quantile is None:
             huber_k = huber_2logzratio = None
@@ -442,9 +448,10 @@ class NeighborhoodCovariance(BModule):
             miss_near_ix=miss_near_ix,
             miss_full_mask=miss_full_mask,
             logdet=logdet,
-            CooinvCom=CooinvCom,
-            Linv=Linv,
-            full_Linv=torch.kron(noise.b.temporal_whitener, noise.b.spatial_whitener),
+            temporal_whitener=noise.b.temporal_whitener,
+            spatial_whitener=spatial_whitener,
+            spatial_regression=spatial_regression,
+            full_spatial_whitener=noise.b.spatial_whitener,
             huber_k=huber_k,
             huber_2logzratio=huber_2logzratio,
         )
@@ -600,7 +607,7 @@ class LUTParams(BModule):
         bases: Tensor | None,
         neighb_cov: NeighborhoodCovariance,
         lut: NeighborhoodLUT,
-        batch_size=64,
+        batch_size=1024,
     ):
         self._resize_(lut.b.unit_ids.shape[0])
         for i0 in range(0, self.n_lut, batch_size):
@@ -6975,8 +6982,8 @@ def _noise_factors(*, noise: KroneckerNoise, obs_ix: Tensor, miss_near_ix: Tenso
     dev = obs_ix.device
 
     logdet = torch.zeros((nneighb,), device=dev)
-    CooinvCom = torch.zeros((nneighb, rank, nc_obs, rank, nc_miss_near), device=dev)
-    Linv = torch.zeros((nneighb, rank, nc_obs, rank, nc_obs), device=dev)
+    spatial_whitener = torch.zeros((nneighb, nc_obs, nc_obs), device=dev)
+    spatial_regression = torch.zeros((nneighb, nc_obs, nc_miss_near), device=dev)
     spatial_infos = torch.zeros((nneighb,), dtype=torch.int, device=dev)
     temporal_logdet = -2.0 * noise.b.temporal_whitener.diagonal().log().sum()
 
@@ -6996,39 +7003,28 @@ def _noise_factors(*, noise: KroneckerNoise, obs_ix: Tensor, miss_near_ix: Tenso
         jspatial_Linv = torch.linalg.solve_triangular(
             jspatial_L, torch.eye(ncoi).to(jspatial_L), upper=False
         )
-        jLinv = torch.kron(noise.b.temporal_whitener, jspatial_Linv)
-        jCooinv = jLinv.T @ jLinv  # Cinv = Linv' Linv
         jspatial_logdet = 2.0 * jspatial_L.diagonal().log().sum()
         jlogdet = ncoi * temporal_logdet + rank * jspatial_logdet
 
         # set observed-only stuff
         logdet[j] = jlogdet
-        # fancy inds to front! love that.
-        jLinv_out = jLinv.view(rank, ncoi, rank, ncoi).permute(1, 3, 0, 2)
-        Linv[j, :, joixvix[:, None], :, joixvix[None]] = jLinv_out
+        spatial_whitener[j, joixvix[:, None], joixvix[None]] = jspatial_Linv
 
         # -- observed-missing stuff
         if ncmi == 0:
             # i am a lonely island
             # importantly, that means my Com is 0. so everything is 0 below.
             continue
-        jCom = torch.kron(noise.b.temporal_cov, noise.b.spatial_cov[joixv][:, jmnixv])
-        jCooinvCom = jCooinv @ jCom
-        jCooinvCom = jCooinvCom.view(rank, ncoi, rank, ncmi)
-        CooinvCom[j, :, joixvix[:, None], :, jmnixvix[None]] = jCooinvCom.permute(
-            1, 3, 0, 2
-        )
+        jspatial_Com = noise.b.spatial_cov[joixv][:, jmnixv]
+        jspatial_CooinvCom = jspatial_Linv.T @ (jspatial_Linv @ jspatial_Com)
+        spatial_regression[j, joixvix[:, None], jmnixvix[None]] = jspatial_CooinvCom
 
     nbail = int(spatial_infos.count_nonzero())
     if nbail:
         raise ValueError(
             f"Noise covariance not positive definite in {nbail} neighborhoods."
         )
-    obsdim = rank * nc_obs
-    missdim = rank * nc_miss_near
-    CooinvCom = CooinvCom.view(nneighb, obsdim, missdim)
-    Linv = Linv.view(nneighb, obsdim, obsdim)
-    return logdet, CooinvCom, Linv
+    return logdet, spatial_whitener, spatial_regression
 
 
 def _huber_twicerho_and_weight(sqdist: Tensor, k: Tensor) -> tuple[Tensor, Tensor]:
@@ -7056,19 +7052,24 @@ def _whiten_and_noise_score(
         wx = torch.empty(x.shape, dtype=x.dtype, pin_memory=True)
         noise_loglik = torch.zeros((len(x),), dtype=x.dtype, pin_memory=True)
     assert neighborhoods.n_neighborhoods == neighb_cov.b.obs_ix.shape[0]
+    rank = neighb_cov.feat_rank
+    nco = neighb_cov.max_nc_obs
+    temporal_whitener = neighb_cov.b.temporal_whitener
 
     for ni in range(neighborhoods.n_neighborhoods):
         inni = neighborhoods.neighborhood_members(ni)
         if not on_device:
             inni = inni.cpu()
 
-        right_factor = neighb_cov.b.Linv[ni].T
+        spatial_right_factor = neighb_cov.b.spatial_whitener[ni].T
         nll_const = neighb_cov.b.lik_const[ni]
         huber_k = None if neighb_cov.huber_k is None else neighb_cov.b.huber_k[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
-            wxb = x[binni].to(dev) @ right_factor  # ty: ignore[no-matching-overload]
+            xb = x[binni].to(dev).view(binni.numel(), rank, nco)
+            wxb = temporal_whitener @ xb @ spatial_right_factor
+            wxb = wxb.view(binni.numel(), rank * nco)
 
             wx[binni] = wxb.to(wx.device)
 
@@ -7103,29 +7104,30 @@ def _whiten_impute_and_noise_score(
         noise_loglik = torch.zeros((len(x),), dtype=x.dtype, pin_memory=True)
         CmoCooinvx = torch.empty(cmo_shape, dtype=x.dtype, pin_memory=True)
     assert neighborhoods.n_neighborhoods == neighb_cov.b.obs_ix.shape[0]
+    rank = neighb_cov.feat_rank
+    nco = neighb_cov.max_nc_obs
+    temporal_whitener = neighb_cov.b.temporal_whitener
 
     for ni in range(neighborhoods.n_neighborhoods):
         inni = neighborhoods.neighborhood_members(ni)
         if not on_device:
             inni = inni.cpu()
 
-        right_factor = neighb_cov.b.Linv[ni].T
-        neighb_CooinvCom = neighb_cov.b.CooinvCom[ni]
+        spatial_right_factor = neighb_cov.b.spatial_whitener[ni].T
+        spatial_regression = neighb_cov.b.spatial_regression[ni]
 
         nll_const = neighb_cov.b.lik_const[ni]
         huber_k = None if neighb_cov.huber_k is None else neighb_cov.b.huber_k[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
-            xb = x[binni].to(dev)
-            wxb = xb @ right_factor
+            xb = x[binni].to(dev).view(binni.numel(), rank, nco)
+            wxb = temporal_whitener @ xb @ spatial_right_factor
+            wxb = wxb.view(binni.numel(), rank * nco)
 
             wx[binni] = wxb.to(wx.device)
 
-            CmoCooinvx_batch = xb @ neighb_CooinvCom
-            CmoCooinvx_batch = CmoCooinvx_batch.view(
-                binni.numel(), neighb_cov.feat_rank, neighb_cov.max_nc_miss_near
-            )
+            CmoCooinvx_batch = xb @ spatial_regression
             CmoCooinvx[binni] = CmoCooinvx_batch.mT.to(CmoCooinvx.device)
 
             nll = wxb.square_().sum(dim=1)
@@ -7155,7 +7157,12 @@ def _whiten_and_noise_score_batch(
     *, x: Tensor, neighb_ids: Tensor, neighb_cov: NeighborhoodCovariance
 ):
     return _whiten_and_noise_score_batch_k(
-        x, neighb_ids, neighb_cov.b.Linv, neighb_cov.b.lik_const, neighb_cov.huber_k
+        x,
+        neighb_ids,
+        neighb_cov.b.temporal_whitener,
+        neighb_cov.b.spatial_whitener,
+        neighb_cov.b.lik_const,
+        neighb_cov.huber_k,
     )
 
 
@@ -7163,12 +7170,14 @@ def _whiten_and_noise_score_batch(
 def _whiten_and_noise_score_batch_k(
     x: Tensor,
     neighb_ids: Tensor,
-    Linv: Tensor,
+    temporal_whitener: Tensor,
+    spatial_whitener: Tensor,
     lik_const: Tensor,
     huber_k: Tensor | None,
 ):
-    batch_whitener = Linv[neighb_ids]
-    wx = torch.bmm(batch_whitener, x[:, :, None])[:, :, 0]
+    n = x.shape[0]
+    x_rc = x.reshape(n, temporal_whitener.shape[0], spatial_whitener.shape[1])
+    wx = (temporal_whitener @ x_rc).bmm(spatial_whitener[neighb_ids].mT).view(n, -1)
     nll = torch.linalg.vector_norm(wx, dim=1).square_()
     if huber_k is not None:
         nll, _ = _huber_twicerho_and_weight(nll, huber_k[neighb_ids])
@@ -8162,17 +8171,13 @@ def _update_lut_mean_batch(
         lut_params.n_lut, neighb_cov.feat_rank, neighb_cov.max_nc_obs
     )
     muo = torch.take_along_dim(mpad, obs_ix, dim=2, out=mu_obs_out[i0:i1])
-    muo = muo.view(n, neighb_cov.feat_rank * neighb_cov.max_nc_obs)
 
     # Linvmuo, CmoCooinvmuo
-    torch.bmm(
-        neighb_cov.b.Linv[nn], muo[:, :, None], out=lut_params.b.Linvmuo[i0:i1, :, None]
-    )
-    torch.bmm(
-        muo[:, None],
-        neighb_cov.b.CooinvCom[nn],
-        out=lut_params.b.CmoCooinvmuo[i0:i1, None],
-    )
+    Linvmuo = neighb_cov.b.temporal_whitener @ muo
+    Linvmuo = Linvmuo.bmm(neighb_cov.b.spatial_whitener[nn].mT)
+    lut_params.b.Linvmuo[i0:i1] = Linvmuo.view(n, -1)
+    CmoCooinvmuo = muo.bmm(neighb_cov.b.spatial_regression[nn])
+    lut_params.b.CmoCooinvmuo[i0:i1] = CmoCooinvmuo.view(n, -1)
 
     # constplogdet. add in the signal-rank-0-only terms.
     lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)  # type: ignore  # ty: ignore[x]
@@ -8213,11 +8218,12 @@ def _update_lut_ppca_batch(
         value=0.0,
     )
     Wo = bpad.take_along_dim(indices=neighb_cov.b.obs_ix[nn][:, None, None, :], dim=3)
-    Wo = Wo.view(n, M, neighb_cov.feat_rank * neighb_cov.max_nc_obs)
 
     # next, the capaciatance is I + Wo Cooinv Wo'. always pos def.
-    WoCooinvsqrt = Wo.bmm(neighb_cov.b.Linv[nn].mT)
-    cap = WoCooinvsqrt.bmm(WoCooinvsqrt.mT)
+    WoCooinvsqrt = neighb_cov.b.temporal_whitener @ Wo
+    WoCooinvsqrt = WoCooinvsqrt @ neighb_cov.b.spatial_whitener[nn, None].mT
+    WoCooinvsqrt = WoCooinvsqrt.view(n, M, neighb_cov.feat_rank * neighb_cov.max_nc_obs)
+    cap =WoCooinvsqrt.bmm(WoCooinvsqrt.mT)
     cap.diagonal(dim1=-2, dim2=-1).add_(latent_prior_std**-2)
     if pnoid:
         assert cap.isfinite().all()
@@ -8864,7 +8870,7 @@ def _finalize_e_stats(
     lut_params: LUTParams,
     neighb_cov: NeighborhoodCovariance,
     prior_pseudocount: float = 0.0,
-    batch_size=64,
+    batch_size=1024,
 ):
     """Finish the calculation of R in place."""
 
@@ -8881,10 +8887,13 @@ def _finalize_e_stats(
     assert means.ndim == 2
 
     if prior_pseudocount:
-        term = means @ neighb_cov.b.full_Linv.T
+        temporal_whitener = neighb_cov.b.temporal_whitener
+        spatial_right_factor = neighb_cov.b.full_spatial_whitener.T
+        term = temporal_whitener @ means.view(n_units, frank, nc) @ spatial_right_factor
         term = term.square_().sum()
         if bases is not None:
-            bterm = bases.reshape(-1, bases.shape[-1]) @ neighb_cov.b.full_Linv.T
+            bterm = bases.reshape(-1, frank, nc)
+            bterm = temporal_whitener @ bterm @ spatial_right_factor
             term = term + bterm.square_().sum()
         term *= -0.5 * prior_pseudocount / max(stats.count, 1.0)
         stats.elbo += term
@@ -8920,9 +8929,8 @@ def _finalize_e_stats(
 
         obs_ix = neighb_cov.b.obs_ix[nn][:, None, None, :]
         Whatobs = What.take_along_dim(dim=3, indices=obs_ix)
-        Whatobs = Whatobs.view(i1 - i0, hat_dim, frank * neighb_cov.max_nc_obs)
-        WoCooinvCom = Whatobs.bmm(neighb_cov.b.CooinvCom[nn])
-        WoCooinvCom = WoCooinvCom.view(i1 - i0, hat_dim, frank, ncm)
+        WoCooinvCom = Whatobs @ neighb_cov.b.spatial_regression[nn, None]
+        assert WoCooinvCom.shape == (i1 - i0, hat_dim, frank, ncm)
 
         w_wcc = What  # first make Wmiss in place
         ix = neighb_cov.b.miss_near_ix[nn, None, None].broadcast_to(WoCooinvCom.shape)

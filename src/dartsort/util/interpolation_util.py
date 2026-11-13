@@ -1155,9 +1155,9 @@ class NeighborhoodImputer(NeighborhoodFiller):
         batch_size: int = 1024,
     ):
         super().__init__()
-        prec = all_neighb_precisions(noise, neighborhoods)
-        self.register_buffer("prec", prec)
-        chans_arange = torch.arange(noise.n_channels, device=prec.device)
+        spatial_prec = all_neighb_precisions(noise, neighborhoods)
+        self.register_buffer("spatial_prec", spatial_prec)
+        chans_arange = torch.arange(noise.n_channels, device=spatial_prec.device)
         self.register_buffer("chans_arange", chans_arange)
         self.register_buffer("spatial_cov_zpad", F.pad(noise.b.spatial_cov, (0, 1, 0, 1)))
         self.neighborhoods = neighborhoods
@@ -1174,9 +1174,8 @@ class NeighborhoodImputer(NeighborhoodFiller):
             target_channels = self.b.chans_arange[target_channels]
         source_channels = self.neighborhoods.b.neighborhoods[neighborhood_ids]
 
-        waveforms = waveforms.view(waveforms.shape[0], 1, -1)
-        waveforms = waveforms.bmm(self.b.prec[neighborhood_ids])
         waveforms = waveforms.view(waveforms.shape[0], self.noise.rank, -1)
+        waveforms = waveforms.bmm(self.b.spatial_prec[neighborhood_ids])
 
         if target_channels.ndim == 1:
             target_channels = target_channels[None].expand(len(waveforms), -1)
@@ -1184,7 +1183,7 @@ class NeighborhoodImputer(NeighborhoodFiller):
         spatial_cov = self.b.spatial_cov_zpad[
             source_channels[:, :, None], target_channels[:, None, :]
         ]
-        return (self.noise.b.temporal_cov @ waveforms).bmm(spatial_cov)
+        return waveforms.bmm(spatial_cov)
 
 
 class ToFullProbeInterpolator(BModule):
@@ -1340,11 +1339,10 @@ def all_neighb_precisions(noise: KroneckerNoise, neighborhoods: SpikeNeighborhoo
     channel_index = neighborhoods.b.neighborhoods
     nneighb = channel_index.shape[0]
     nc_obs = channel_index.shape[1]
-    rank = noise.rank
     nc = noise.n_channels
     dev = channel_index.device
 
-    Cooinv = torch.zeros((nneighb, rank, nc_obs, rank, nc_obs), device=dev)
+    spatial_prec = torch.zeros((nneighb, nc_obs, nc_obs), device=dev)
     spatial_infos = torch.zeros((nneighb,), dtype=torch.int, device=dev)
 
     for j, joix in enumerate(channel_index):
@@ -1357,18 +1355,12 @@ def all_neighb_precisions(noise: KroneckerNoise, neighborhoods: SpikeNeighborhoo
         jspatial_Linv = torch.linalg.solve_triangular(
             jspatial_L, torch.eye(ncoi).to(jspatial_L), upper=False
         )
-        jLinv = torch.kron(noise.b.temporal_whitener, jspatial_Linv)
-        jCooinv = jLinv.T @ jLinv  # Cinv = Linv' Linv
-
-        # fancy inds to front! love that.
-        jCooinv = jCooinv.view(rank, ncoi, rank, ncoi)
-        Cooinv[j, :, joixvix[:, None], :, joixvix[None]] = jCooinv.permute(1, 3, 0, 2)
+        jspatial_prec = jspatial_Linv.T @ jspatial_Linv  # Cinv = Linv' Linv
+        spatial_prec[j, joixvix[:, None], joixvix[None]] = jspatial_prec
 
     nbail = int(spatial_infos.count_nonzero())
     if nbail:
         raise ValueError(
             f"Noise covariance not positive definite in {nbail} neighborhoods."
         )
-    obsdim = rank * nc_obs
-    Cooinv = Cooinv.view(nneighb, obsdim, obsdim)
-    return Cooinv
+    return spatial_prec
