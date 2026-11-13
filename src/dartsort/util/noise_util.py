@@ -551,7 +551,7 @@ class EmbeddedNoise(BModule):
         if self._full_whitener is None:
             self._full_whitener = self.whitener()
         data = data.reshape(len(data), -1)
-        return data @ self._full_whitener
+        return data @ self._full_whitener.T
 
     def full_dense_cov(self, device=None):
         if self._full_cov is None:
