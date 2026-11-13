@@ -341,7 +341,6 @@ class MotionInfo:
         times_s: np.ndarray | None = None,
         depths_um: np.ndarray | None = None,
         reg_depths_um: np.ndarray | None = None,
-        shift_mode: Literal["round", "floor"] = "round",
         motion_depth_mode: Literal["channel", "localization"] = "channel",
         localizations_dset="point_source_localizations",
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -377,14 +376,7 @@ class MotionInfo:
             probe_disp = reg_depths_um - depths_um
         assert np.isfinite(probe_disp).all()
         probe_disp = probe_disp.astype(depths_um.dtype)
-
-        if shift_mode == "floor":
-            n_pitches_shift = (probe_disp / self.pitch).astype(np.int32)
-        elif shift_mode == "round":
-            n_pitches_shift = np.round(probe_disp / self.pitch).astype(np.int32)
-        else:
-            panic(shift_mode)
-
+        n_pitches_shift = np.round(probe_disp / self.pitch).astype(np.int32)
         return probe_disp, n_pitches_shift
 
     @classmethod
