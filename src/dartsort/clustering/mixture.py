@@ -28,13 +28,6 @@ Notes for readers on this implementation.
    coincide very sparsely, so we don't want to compute every subset for all neighborhoods for all
    units. The LUT sparsely stores which ones actually happen / are allowed to happen in different
    situations. Keep it small!
-
-TODO items:
- - Use the usual Kronecker structure of the noise covariance better. We can save a lot of flops
-   here by not making CmoCooinv et al dense. A refactor would probably want to maintain the
-   dense functionality though, since it's useful for testing and who knows. So, maybe the way
-   to go is to add a method to the NeighborhoodCovariance or LUTParams objects to case over
-   this. (I think probably best not to store linear_operator.LinearOperators, right?)
 """
 
 import gc
@@ -898,7 +891,6 @@ class TMMParams:
     kmeans_beta: float
     kmeanspp_tries: int
     whiten_split: bool
-    masked_mean_impute: bool
     split_kmeanspp_metric: SplitKmeansppMetric
     fix_responsibilities: bool
     scale_dist_args: tuple[float, float, float]
@@ -943,7 +935,6 @@ class TMMParams:
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
             demolish_during_selection=refinement_cfg.demolish_during_selection,
             whiten_split=refinement_cfg.whiten_split,
-            masked_mean_impute=refinement_cfg.masked_mean_impute,
             split_kmeanspp_metric=refinement_cfg.split_kmeanspp_metric,
             fix_responsibilities=refinement_cfg.fix_responsibilities_in_split,
             scale_dist_args=refinement_cfg.scale_dist_args,
@@ -2511,7 +2502,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             latent_prior_std=self.p.latent_prior_std,
             prior_pseudocount=self.p.prior_pseudocount,
             rank0_model=self,
-            masked_mean_impute=self.p.masked_mean_impute,
         )
         assert _means is None
         assert bases is not None
@@ -2552,7 +2542,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             latent_prior_std=p.latent_prior_std * p.initial_basis_shrinkage,
             prior_pseudocount=p.prior_pseudocount,
             puff=p.split_k,
-            masked_mean_impute=p.masked_mean_impute,
         )
         assert means is not None
         if pnoid:
@@ -2635,7 +2624,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             weights=responsibilities,
             latent_prior_std=p.latent_prior_std,
             prior_pseudocount=p.prior_pseudocount,
-            masked_mean_impute=p.masked_mean_impute,
         )
         assert chan_coverage is not None
         valid = torch.tensor([r is not None for r in initialization], dtype=torch.bool)
@@ -3316,7 +3304,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             force_labels=split_data_labels,
             kmeanspp_metric=self.p.split_kmeanspp_metric,
             scale_dist_args=self.p.scale_dist_args,
-            masked_mean_impute=self.p.masked_mean_impute,
         )
         if debug or logger.isEnabledFor(DARTSORTVERBOSE):
             group_str = ",".join(map(str, group.tolist()))
@@ -4560,10 +4547,8 @@ def get_truncated_datasets(
             rank=feature_rank,
             zero_radius=refinement_cfg.cov_radius,
             cov_kind=refinement_cfg.cov_kind,
-            noise_spatial_cov_estimator=refinement_cfg.noise_spatial_cov_estimator,
             interp_params=refinement_cfg.noise_interp_params,
             device=device,
-            rgeom=prgeom[:-1],
         )
 
     gc.collect()
@@ -5752,7 +5737,6 @@ def initialize_parameters_by_unit(
     rank0_model: TruncatedMixtureModel | None = None,
     K: int | None = None,
     puff=1.0,
-    masked_mean_impute: bool,
 ):
     if scores is None:
         assert data.candidates is not None
@@ -5820,7 +5804,6 @@ def initialize_parameters_by_unit(
             prior_pseudocount=prior_pseudocount,
             mean=rank0_model.b.means[k] if rank0_model is not None else None,
             single_weight=kweight,
-            masked_mean_impute=masked_mean_impute,
         )
         assert len(params) == 1
         params = params[0]
@@ -5884,8 +5867,6 @@ def initialize_params_from_dense_data(
     min_channel_count: int = 1,
     weights: Tensor | None = None,
     single_weight: Tensor | None = None,
-    *,
-    masked_mean_impute: bool,
 ) -> tuple[list[tuple[Tensor, Tensor, Tensor] | None], Tensor | None]:
     """Weighted mean and basis, possibly by multiple weight vectors at once.
 
@@ -5904,29 +5885,24 @@ def initialize_params_from_dense_data(
     if weights is None:
         if mean is not None:
             mean = mean.view(noise.rank, -1)
-        elif masked_mean_impute and single_weight is None:
+        elif single_weight is None:
             mean = data.masked_observed_mean(x_erp)[0]
-        elif masked_mean_impute:
-            assert single_weight is not None
+        else:
             mean = data.masked_observed_mean(
                 x_erp, weights=single_weight[:, None], pseudocount=prior_pseudocount
             )[0]
         x = erp.interp_to_chans(
-            x_erp,
-            data.neighborhood_ids,
-            target_channels=covered_chans,
-            mean=mean if masked_mean_impute else None,
+            x_erp, data.neighborhood_ids, target_channels=covered_chans, mean=mean
         )
-        if mean is not None:
-            mean = mean[:, covered_chans]
-        mean, W = _initialize_single(
+        mean = mean[:, covered_chans]
+        W = _initialize_single(
             x,
             covered_chans,
             noise,
+            mean=mean,
             rank=rank,
             prior_pseudocount=prior_pseudocount,
             latent_prior_std=latent_prior_std,
-            mean=mean,
             weight=single_weight,
         )
         return [(covered_chans, mean, W)], None
@@ -5936,42 +5912,30 @@ def initialize_params_from_dense_data(
     subsets, full_coverage = data.weighted_covered_channels(
         weights=weights, within=covered_chans, min_count=min_channel_count
     )
-    if masked_mean_impute:
-        x = None
-        means = data.masked_observed_mean(
-            x_erp, weights=weights, pseudocount=prior_pseudocount
-        )
-    else:
-        x = erp.interp_to_chans(
-            x_erp, data.neighborhood_ids, target_channels=covered_chans
-        )
-        means = None
+    means = data.masked_observed_mean(
+        x_erp, weights=weights, pseudocount=prior_pseudocount
+    )
     res = []
-    for j, (subset, weight) in enumerate(zip(subsets, weights.T, strict=True)):
+    for subset, weight, mean in zip(subsets, weights.T, means, strict=True):
         schans = covered_chans[subset]
         if not schans.numel():
             res.append(None)
             continue
-        if means is None:
-            assert x is not None
-            sx = x[:, :, subset]
-            smean = None
-        else:
-            sx = erp.interp_to_chans(
-                x_erp, data.neighborhood_ids, target_channels=schans, mean=means[j]
-            )
-            smean = means[j][:, schans]
-        m, w = _initialize_single(
+        sx = erp.interp_to_chans(
+            x_erp, data.neighborhood_ids, target_channels=schans, mean=mean
+        )
+        smean = mean[:, schans]
+        w = _initialize_single(
             x=sx,
             chans=schans,
             noise=noise,
+            mean=smean,
             rank=rank,
             weight=weight,
             latent_prior_std=latent_prior_std,
             prior_pseudocount=prior_pseudocount,
-            mean=smean,
         )
-        res.append((schans, m, w))
+        res.append((schans, smean, w))
     return res, full_coverage
 
 
@@ -6658,7 +6622,6 @@ def try_kmeans(
     force_labels: Tensor | None = None,
     kmeanspp_metric: SplitKmeansppMetric = "euc",
     scale_dist_args: tuple[float, float, float] | None = None,
-    masked_mean_impute: bool,
 ) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
     # interpolate whitened data
     channels = data.covered_channels(min_channel_count)
@@ -6668,7 +6631,7 @@ def try_kmeans(
         erp_x = data.x()
         assert erp_x is not None
     erp_x = erp_x.view(data.N, feature_rank, -1)
-    mean = data.masked_observed_mean(erp_x)[0] if masked_mean_impute else None
+    mean = data.masked_observed_mean(erp_x)[0]
     x = erp.interp_to_chans(erp_x, data.neighborhood_ids, channels, mean=mean)
     x = x.view(len(x), -1)
     x_ret = x if debug else None
@@ -7185,20 +7148,19 @@ def _initialize_single(
     chans: Tensor,
     noise: KroneckerNoise,
     *,
+    mean: Tensor,
     rank: int,
     latent_prior_std: float = 1.0,
     prior_pseudocount: float = 0.0,
     weight: Tensor | None = None,
     eps: float = 1e-5,
-    mean: Tensor | None = None,
     n_oversamples: int = 10,
     niter: int = 21,
     full_svd: bool = False,
 ):
-    """
-    Replaces ppcalib initialize_mean and the branch where SVD was done in ppcalib.
+    """Initialize a component's basis
 
-    Also initializes the basis. In the unweighted case, the algorithm is:
+    Initializes the basis. In the unweighted case, the algorithm is:
      - Estimate imputed centered data (properly this should be done by imputing
        under the noise covariance model's conditional distribution for missing
        data and subtracting the missing-data mean; here we can try also using
@@ -7215,36 +7177,18 @@ def _initialize_single(
     numerically with random data...
     """
     n, d, c = x.shape
-    x = x.view(n, d * c)
-
-    if weight is None:
-        nw = None
-        if mean is None:
-            mean = x.mean(dim=0)
-        else:
-            mean = mean.view(d * c)
-        wsum = x.new_tensor(float(n))
-    else:
-        wsum = weight.sum()
-        nw = weight / (wsum + prior_pseudocount)
-        if mean is None:
-            mean = (nw[:, None] * x).sum(0)
-        else:
-            mean = mean.view(d * c)
-    assert mean is not None
-
     if not rank:
-        mean = mean.view(d, c)
-        return mean, None
+        return None
 
     # we want x(C^-0.5)=xU^-1 -- need to use upper factor.
     noise_cov = torch.kron(noise.b.temporal_cov, noise.b.spatial_cov[chans][:, chans])
     U = torch.linalg.cholesky(noise_cov, upper=True)
-    x = x - mean
+    x = x.view(n, d * c) - mean.view(d * c)
     x = torch.linalg.solve_triangular(U, x, upper=True, left=False, out=x)
 
     # weighting the svd -- needs sqrt!
     if weight is not None:
+        wsum = weight.sum()
         if prior_pseudocount:
             weight = weight * (wsum / (wsum + prior_pseudocount))
         x *= weight.sqrt()[:, None]
@@ -7277,16 +7221,13 @@ def _initialize_single(
     W = V.mul_(ev.mul_(flip))
     W = U.T @ W
 
-    mean = mean.view(d, c)
     # TODO build this the other way
     assert W.shape[1] <= rank
     assert W.shape[0] == d * c
     if W.shape[1] < rank:
         W = F.pad(W, (0, rank - W.shape[1]))
     assert W.shape[1] == rank
-    W = W.T.reshape(rank, d, c)
-
-    return mean, W
+    return W.T.reshape(rank, d, c)
 
 
 # -- candidate set helpers

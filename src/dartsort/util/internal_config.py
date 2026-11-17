@@ -336,7 +336,6 @@ class ClusteringConfig:
 
 WhiteningStrategy = Literal["none", "prewhiten", "prewhiten_postapply", "postwhiten"]
 WhiteningEstimator = Literal["fullzca", "localzca", "sparsechol"]
-NoiseSpatialCovEstimator = Literal["noisefill", "pairwise"]
 
 
 @cfg_dataclass
@@ -345,7 +344,6 @@ class WhiteningConfig:
 
     strategy: WhiteningStrategy = "none"
     estimator: WhiteningEstimator = "localzca"
-    noise_spatial_cov_estimator: NoiseSpatialCovEstimator = "noisefill"
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params
     radius: float = 200.0
     temporal_length: int | None = 3
@@ -548,7 +546,6 @@ class RefinementConfig:
     # -- gmm parameters
     # noise params
     cov_kind: NoiseCovKind = "kronecker"
-    noise_spatial_cov_estimator: NoiseSpatialCovEstimator = "noisefill"
 
     # model params
     neighb_overlap: float = 0.75
@@ -628,7 +625,6 @@ class RefinementConfig:
     cov_radius: float = 200.0
     val_proportion: float = 0.5
     impute_kind: Literal["interp", "impute"] = "impute"
-    masked_mean_impute: bool = False
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
     # bad unit filter params
@@ -1320,7 +1316,6 @@ def _whitening_cfg(cfg: "DeveloperConfig") -> WhiteningConfig:
     return WhiteningConfig(
         strategy=cfg.whiten_strategy,
         estimator=cfg.whiten_estimator,
-        noise_spatial_cov_estimator=cfg.noise_spatial_cov_estimator,
         radius=cfg.subtraction_radius_um,
         interp_params=_interp_params(cfg.template_interp_kind),
         temporal_length=cfg.whiten_temporal_length,
@@ -1425,8 +1420,6 @@ def _refinement_cfg(
         prior_pseudocount=cfg.prior_pseudocount,
         initial_basis_shrinkage=cfg.initial_basis_shrinkage,
         cov_kind=cfg.cov_kind,
-        noise_spatial_cov_estimator=cfg.noise_spatial_cov_estimator,
-        masked_mean_impute=cfg.masked_mean_impute,
         mixture_steps=cfg.later_steps,
         kmeansk=cfg.kmeansk,
         cl_alpha=cfg.gmm_cl_alpha,

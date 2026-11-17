@@ -91,7 +91,6 @@ def low_k_simulations():
     "robust_strategy,huber_noise", [("none", True), ("huber", True), ("huber", False)]
 )
 @pytest.mark.parametrize("split_kmeanspp_metric", ["euc", "scaled_normeuc"])
-@pytest.mark.parametrize("masked_mean_impute", [False, True])
 def test_truncated_mixture(
     moppca_simulations,
     t_mu,
@@ -103,7 +102,6 @@ def test_truncated_mixture(
     robust_strategy,
     huber_noise,
     split_kmeanspp_metric,
-    masked_mean_impute,
 ):
     mixture.pnoid = True
 
@@ -139,7 +137,6 @@ def test_truncated_mixture(
         robust_strategy=robust_strategy,
         huber_noise=huber_noise,
         split_kmeanspp_metric=split_kmeanspp_metric,
-        masked_mean_impute=masked_mean_impute,
     )
     no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
 
@@ -245,7 +242,6 @@ def test_truncated_mixture(
                     feature_rank=tmm.noise.rank,
                     min_count=tmm.p.min_count,
                     min_channel_count=tmm.p.min_channel_count,
-                    masked_mean_impute=tmm.p.masked_mean_impute,
                 )
                 assert kmeans_responsibliities is not None
                 split_model, _, _, any_discarded, _, _, _ = (
@@ -585,7 +581,6 @@ def test_component_initialization(
         device=device,
     )
     n = moppca_sim["x"].shape[0]
-    mean = moppca_sim["mu"][0].numpy(force=True).ravel()
     basis = moppca_sim["W"][0].numpy(force=True)
     basis = basis.transpose(2, 0, 1).reshape(rank, -1)
     ncov = moppca_sim["cov"].numpy(force=True)
@@ -596,16 +591,19 @@ def test_component_initialization(
     emp_cov = emp_cov.numpy(force=True)
     emp_subspace = emp_cov - ncov
 
-    mean_, basis_ = mixture._initialize_single(
+    if true_mean:
+        mean_ = moppca_sim["mu"][0].view(-1).to(device)
+    else:
+        mean_ = moppca_sim["x"].view(n, -1).mean(0)
+    basis_ = mixture._initialize_single(
         x=moppca_sim["x"],
         chans=torch.arange(n_chans, device=device),
         noise=moppca_sim["noise"],
+        mean=mean_,
         rank=rank,
-        mean=moppca_sim["mu"][0].view(-1).to(device) if true_mean else None,
         full_svd=full_svd,
     )
     assert basis_ is not None
-    mean_ = mean_.numpy(force=True).ravel()
     basis_ = basis_.numpy(force=True).reshape(rank, -1)
     subspace_ = basis_.T @ basis_
 
@@ -613,11 +611,6 @@ def test_component_initialization(
     mean_atol = 8 * se
     subspace_atol = np.abs(emp_cov - true_cov).max() + mean_atol
 
-    if not true_mean:
-        np.testing.assert_allclose(
-            mean_, moppca_sim["x"].view(n, -1).mean(0).numpy(force=True)
-        )
-    np.testing.assert_allclose(mean_, mean, atol=mean_atol)
     np.testing.assert_allclose(subspace_, emp_subspace, atol=mean_atol)
     np.testing.assert_allclose(subspace_, subspace, atol=subspace_atol)
 

@@ -12,7 +12,6 @@ from .util.internal_config import (
     MixtureStep,
     MotionBatchingMode,
     NoiseCovKind,
-    NoiseSpatialCovEstimator,
     PreprocessingStrategy,
     RealignStrategy,
     SpikeStorage,
@@ -437,8 +436,6 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     cov_kind: NoiseCovKind = "kronecker"
-    noise_spatial_cov_estimator: NoiseSpatialCovEstimator = "noisefill"
-    masked_mean_impute: bool = False
     gmm_euclidean_threshold: float = 3.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0

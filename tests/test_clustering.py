@@ -77,11 +77,6 @@ eval_initial_refinement_kwargs = [
 ]
 eval_refinement_kwargs = [
     dict(refinement_strategy="tmm", demolish_during_selection=False),
-    dict(
-        refinement_strategy="tmm",
-        demolish_during_selection=False,
-        noise_spatial_cov_estimator="pairwise",
-    ),
 ]
 eval_post_refinement_kwargs = [
     pytest.param(

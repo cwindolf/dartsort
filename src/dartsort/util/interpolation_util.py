@@ -1067,16 +1067,16 @@ class NeighborhoodFiller(BModule):
         waveforms: torch.Tensor,
         neighborhood_ids: torch.Tensor,
         target_channels: torch.Tensor | slice,
+        *,
+        mean: torch.Tensor,
         out: torch.Tensor | None = None,
-        mean: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if mean is not None:
-            assert waveforms.ndim == 3
-            assert mean.shape == (waveforms.shape[1], self.neighborhoods.n_channels)
-            source_channels = self.neighborhoods.b.neighborhoods[neighborhood_ids]
-            source_mean = F.pad(mean, (0, 1))[:, source_channels].permute(1, 0, 2)
-            waveforms = waveforms - source_mean
-            del source_mean
+        assert waveforms.ndim == 3
+        assert mean.shape == (waveforms.shape[1], self.neighborhoods.n_channels)
+        source_channels = self.neighborhoods.b.neighborhoods[neighborhood_ids]
+        source_mean = F.pad(mean, (0, 1))[:, source_channels].permute(1, 0, 2)
+        waveforms = waveforms - source_mean
+        del source_mean
 
         if waveforms.shape[0] <= self.batch_size and out is None:
             out = self._interp_to_chans(waveforms, neighborhood_ids, target_channels)
@@ -1100,8 +1100,7 @@ class NeighborhoodFiller(BModule):
                     target_channels=target_channels,
                 )
 
-        if mean is not None:
-            out += mean[:, target_channels]
+        out += mean[:, target_channels]
         return out
 
     def _interp_to_chans(

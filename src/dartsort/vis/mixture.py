@@ -852,6 +852,7 @@ class CovarianceView(MixtureComponentPlot):
             waveforms=features.to(mix_data.tmm.b.means),
             neighborhood_ids=mix_data.train_data.neighborhood_ids[inu_train],
             target_channels=target_chans,
+            mean=mix_data.tmm.b.means[unit_id],
         )
         feat_interp = feat_interp.view(feat_interp.shape[0], -1)
 
@@ -1764,7 +1765,6 @@ def vis_split_interpolation(
         min_channel_count=mix_data.tmm.p.min_channel_count,
         debug=True,
         whiten=whiten,
-        masked_mean_impute=mix_data.tmm.p.masked_mean_impute,
     )
 
     n_spikes = split_data.N
