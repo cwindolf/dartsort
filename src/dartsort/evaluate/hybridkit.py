@@ -122,6 +122,7 @@ def make_hybrid_recording(
     amplitude_jitter: float = 0.05,
     amp_jitter_family: Literal["gamma", "uniform", "normal"] = "normal",
     temporal_jitter: int = 8,
+    save_collidedness: bool = False,
     save_chunk_len_s: float = 0.5,
     template_simulator_kwargs: dict | None = None,
     metadata: dict[str, Any] | None = None,
@@ -218,9 +219,9 @@ def make_hybrid_recording(
         amplitude_jitter=amplitude_jitter,
         amp_jitter_family=amp_jitter_family,
         temporal_jitter=temporal_jitter,
-        extract_radius=0.0,
+        extract_radius=150.0 if save_collidedness else 0.0,
         random_seed=rg,
-        compute_collision_waveforms=False,
+        compute_collision_waveforms=save_collidedness,
     )
 
     hybrid_recording.save_simulation(
@@ -234,7 +235,7 @@ def make_hybrid_recording(
         save_noise_waveforms=False,
         save_collision_waveforms=False,
         save_collisioncleaned_waveforms=False,
-        save_collidedness=False,
+        save_collidedness=save_collidedness,
         extra_unit_information=extra_unit_information,
         n_residual_snips=0,
         pool_engine=pool_engine,
@@ -254,6 +255,7 @@ def make_hybrid_recording(
         amplitude_jitter=amplitude_jitter,
         amp_jitter_family=amp_jitter_family,
         temporal_jitter=temporal_jitter,
+        save_collidedness=save_collidedness,
     )
     with (ensure_path(folder) / "metadata.json").open("w") as jsonf:
         json.dump(metadata, jsonf)

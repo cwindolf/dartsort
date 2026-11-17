@@ -503,7 +503,12 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 loc=1.0, scale=amplitude_jitter, size=self.n_spikes
             )
             # make sure things are positive...
-            np.maximum(self.scalings, 0.0, out=self.scalings)
+            np.clip(
+                self.scalings,
+                max(0.0, 1.0 - 3.0 * amplitude_jitter),
+                1.0 + 3.0 * amplitude_jitter,
+                out=self.scalings,
+            )
         else:
             assert not amplitude_jitter
             self.scalings = np.ones(1, dtype=features_dtype)
