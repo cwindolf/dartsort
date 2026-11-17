@@ -14,7 +14,6 @@ TODO:
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
-from math import fabs
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,6 +23,7 @@ import torch.nn.functional as F
 from spikeinterface.core import BaseRecording
 
 from ..util.data_util import DARTsortSorting
+from ..util.drift_util import get_stable_channels
 from ..util.internal_config import (
     ClusteringConfig,
     ClusteringFeaturesConfig,
@@ -120,7 +120,6 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         if save_neighborhood_ids:
             self.shape += [()]
             self.dtype += [torch.int32]
-        self.channel_index_np = self.b.channel_index.numpy(force=True)
         self.workers = 1
 
     def get_extra_state(self):
@@ -144,6 +143,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             return (
                 self.tmm.lut_params is None
                 or not hasattr(self, "neighb_candidates")
+                or not hasattr(self, "neighborhood_ids_by_shift")
                 or self.tmm.neighb_cov.b.spatial_whitener.shape[0]
                 < self.b.neighb_candidates.shape[0]
             )
@@ -155,31 +155,51 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         self.update_proposals()
         # special handling of unmatched neighborhoods
         self.tmm.neighb_cov.pad_for_noise_score_(self.b.neighb_candidates.shape[0])
-        assert self.motion is not None
-        geomp = np.pad(self.motion.geom, [(0, 1), (0, 0)], constant_values=np.nan)
-        self.static_neighbs = geomp[self.channel_index_np]
-        cii, cjj = np.nonzero(self.channel_index_np < len(self.channel_index_np))
-        self.channel_index_valid_inds = cii, cjj
+        self._precompute_neighborhoods_by_shift()
 
+    def _precompute_neighborhoods_by_shift(self):
+        assert self.motion is not None
+        n_channels = self.b.channel_index.shape[0]
         if self.motion.drifting:
-            nid_map = None
+            time_bins_s = self.motion.time_bins_s
+            _, n_pitches_shift = self.motion.pitch_shifts(
+                times_s=np.repeat(time_bins_s, n_channels),
+                depths_um=np.tile(self.motion.geom[:, 1], len(time_bins_s)),
+            )
+            # margin for localization depths
+            min_shift = int(n_pitches_shift.min()) - 1
+            max_shift = int(n_pitches_shift.max()) + 1
         else:
-            # in this case, channel index is a superset of neighborhoods and
-            # we prebake the mapping from chans to neighb ids
-            ci_eq_neighb = _outer_all_equal(
-                self.b.channel_index, self.tmm.neighb_cov.obs_ix
-            )
-            # some neighborhood entries are identical, but they all get covered
-            assert torch.all(ci_eq_neighb.sum(0) >= 1)
-            # each channel index maps to at most one neighb id
-            assert torch.all(ci_eq_neighb.sum(1) <= 1)
-            _chans, _chan_nids = ci_eq_neighb.nonzero(as_tuple=True)
-            nid_map = _chans.new_full(
-                (self.b.channel_index.shape[0],),
-                self.tmm.neighb_cov.b.obs_ix.shape[0] + 1,
-            )
-            nid_map[_chans] = _chan_nids
-        self.register_buffer_or_none("neighborhood_ids_map", nid_map)
+            min_shift = max_shift = 0
+        n_shifts = max_shift - min_shift + 1
+
+        # channel sets like in StableWaveformFeatures for each chan, shift
+        target_channels, *_ = get_stable_channels(
+            motion=self.motion,
+            channels=np.tile(np.arange(n_channels), n_shifts),
+            channel_index=self.b.channel_index.numpy(force=True),
+            n_pitches_shift=np.repeat(np.arange(min_shift, max_shift + 1), n_channels),
+            workers=self.workers,
+        )
+        neighborhoods = self.b.neighborhoods
+        target_channels = torch.asarray(target_channels, device=neighborhoods.device)
+        rows, nids = _outer_all_equal(target_channels, neighborhoods).nonzero(
+            as_tuple=True
+        )
+        neighborhood_ids = rows.new_full((len(target_channels),), len(neighborhoods))
+        neighborhood_ids[rows] = nids
+
+        self.min_n_pitches_shift = min_shift
+        self.register_buffer(
+            "target_channels_by_shift",
+            target_channels.view(n_shifts, n_channels, -1).transpose(0, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "neighborhood_ids_by_shift",
+            neighborhood_ids.view(n_shifts, n_channels).T,
+            persistent=False,
+        )
 
     def fit_from_disk(
         self,
@@ -292,12 +312,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
 
         # reconstruct non-__init__ modules...
         stripped_dict = {k.removeprefix(prefix): v for k, v in state_dict.items()}
-        for k in (
-            "neighb_candidates",
-            "neighb_candidate_counts",
-            "neighborhood_ids_map",
-            "neighborhoods",
-        ):
+        for k in ("neighb_candidates", "neighb_candidate_counts", "neighborhoods"):
             if k in stripped_dict:
                 self.register_buffer(k, stripped_dict[k])
         neighborhoods = SpikeNeighborhoods(
@@ -327,56 +342,34 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         self.tmm.lut_params = None
 
     def transform(self, waveforms, *, channels, **spike_data):
-        t_s = spike_data["times_seconds"]
-        chunk_center_s = spike_data["chunk_center_s"]
-        if self.motion_depth_mode == "localization":
-            z = spike_data[self.loc_ds][:, 2].numpy(force=True)
-        elif self.motion_depth_mode == "channel":
-            z = self.b.geom[channels, 1].numpy(force=True)
-        else:
-            panic(self.motion_depth_mode)
-
-        # drifting channel mapping
         assert self.motion is not None
-        if self.motion.drifting:
-            time_bins_s = self.motion.time_bins_s
-            t_bin_s = time_bins_s[find_nearest(time_bins_s, chunk_center_s)]
-            depths_um = self.motion.geom[:, 1]
-            _, n_pitches_shift = self.motion.pitch_shifts(
-                times_s=np.full_like(depths_um, t_bin_s), depths_um=depths_um
-            )
-            target_channels_map, neighborhood_ids_map = neighborhood_mapping_at_shift(
-                self.motion,
-                n_pitches_shift=n_pitches_shift,
-                channel_index=self.channel_index_np,
-                neighborhoods=self.b.neighborhoods,
-                static_neighbs=self.static_neighbs,
-                channel_index_valid_inds=self.channel_index_valid_inds,
-                workers=self.workers,
-            )
-        else:
-            target_channels_map = self.b.channel_index
-            neighborhood_ids_map = self.b.neighborhood_ids_map
-
-        # interpolate features
         features = spike_data[self.pca_ds]
-        neighborhood_ids = neighborhood_ids_map[channels]
         if self.motion.drifting:
+            if self.motion_depth_mode == "localization":
+                z = spike_data[self.loc_ds][:, 2].numpy(force=True)
+            elif self.motion_depth_mode == "channel":
+                z = self.b.geom[channels, 1].numpy(force=True)
+            else:
+                panic(self.motion_depth_mode)
             # TODO motion on gpu
-            source_shifts = self.motion.disp_at_s(
-                times_s=t_s.numpy(force=True), depths_um=z
+            shifts, n_pitches_shift = self.motion.pitch_shifts(
+                times_s=spike_data["times_seconds"].numpy(force=True), depths_um=z
             )
-            source_shifts = -torch.asarray(source_shifts, device=waveforms.device)
-            target_channels = target_channels_map[channels]
+            shift_ix = n_pitches_shift - self.min_n_pitches_shift
+            assert shift_ix.min() >= 0
+            assert shift_ix.max() < self.b.neighborhood_ids_by_shift.shape[1]
+            shift_ix = torch.asarray(shift_ix, device=channels.device)
             features = self.erp.interp(
                 features=features,
                 source_main_channels=channels,
-                target_channels=target_channels,
-                source_shifts=source_shifts,
+                target_channels=self.b.target_channels_by_shift[channels, shift_ix],
+                source_shifts=torch.asarray(shifts, device=waveforms.device),
             )
             features = features.nan_to_num_()
         else:
+            shift_ix = 0
             features = features.nan_to_num()
+        neighborhood_ids = self.b.neighborhood_ids_by_shift[channels, shift_ix]
 
         # soft assignment
         cand_count = self.b.neighb_candidate_counts[neighborhood_ids].sum()
@@ -400,39 +393,6 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         return res
 
 
-def neighborhood_mapping_at_shift(
-    motion: MotionInfo,
-    *,
-    n_pitches_shift: np.ndarray,
-    channel_index: np.ndarray,
-    neighborhoods: torch.Tensor,
-    static_neighbs: np.ndarray,
-    channel_index_valid_inds: tuple[np.ndarray, np.ndarray],
-    workers: int = 4,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Map channels to registered target channels and neighborhood ids"""
-    shifted_neighbs = static_neighbs.copy()
-    shifted_neighbs[:, :, 1] += n_pitches_shift[:, None] * motion.pitch
-    _, umatch = motion.rgeom_kdt.query(
-        shifted_neighbs[channel_index_valid_inds],
-        distance_upper_bound=motion.min_dist,
-        workers=workers,
-    )
-    index = np.full(channel_index.shape, motion.rgeom.shape[0])
-    index[channel_index_valid_inds] = umatch
-    index = torch.asarray(index, device=neighborhoods.device)
-    assert index.shape[1] == neighborhoods.shape[1]
-
-    mapping = _outer_all_equal(index, neighborhoods)
-    _chans, _chan_nids = mapping.nonzero(as_tuple=True)
-    nids = torch.full(
-        (channel_index.shape[0],), neighborhoods.shape[0], device=neighborhoods.device
-    )
-    nids[_chans] = _chan_nids
-
-    return index, nids
-
-
 @torch_compile
 def _outer_all_equal(x: torch.Tensor, y: torch.Tensor):
     dim = x.shape[1]
@@ -450,11 +410,3 @@ def _outer_all_equal(x: torch.Tensor, y: torch.Tensor):
         out.logical_and_(torch.eq(x[:, :, j], y[:, :, j], out=msk))
 
     return out
-
-
-def find_nearest(x, v):
-    idx = np.searchsorted(x, v, side="left")
-    if idx > 0 and (idx == len(x) or fabs(v - x[idx - 1]) < fabs(v - x[idx])):
-        return idx - 1
-    else:
-        return idx
