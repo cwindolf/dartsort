@@ -314,7 +314,7 @@ class DARTsortGroundTruthComparison:
         matched_c = c.copy()
         missed_c = c.copy()
 
-        collidedness = getattr(self.gt_analysis.sorting, "collidedness", None)
+        collidedness = getattr(self.gt_analysis.sorting, "total_collidedness", None)
         if collidedness is None:
             return c, matched_c, missed_c
 

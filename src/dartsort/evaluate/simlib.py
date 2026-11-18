@@ -1,9 +1,9 @@
 import gc
-import sys
 import warnings
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import h5py
 import numpy as np
@@ -17,7 +17,6 @@ from spikeinterface.core import (
     NumpySorting,
     load,
 )
-from spikeinterface.core.recording_tools import get_chunk_with_margin
 from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessor,
     BasePreprocessorSegment,
@@ -45,14 +44,14 @@ from ..util.data_util import (
 from ..util.internal_config import FeaturizationConfig, WaveformConfig
 from ..util.logging_util import get_logger, progbar
 from ..util.motion import MotionInfo
-from ..util.multiprocessing_util import get_pool, handle_negative_jobs
+from ..util.multiprocessing_util import buffered_map, get_pool, handle_negative_jobs
+from ..util.py_util import databag
 from ..util.spiketorch import ptp
 from ..util.waveform_util import make_channel_index
 
 if TYPE_CHECKING:
     from .sim_template_tools import TemplateSimulator
 
-_can_buffer = sys.version_info >= (3, 14)
 logger = get_logger(__name__)
 
 default_temporal_kernel_npy = files("dartsort.pretrained")
@@ -399,6 +398,32 @@ def simulate_twostate_switching(
 
 # -- injecting simulated spikes into a recording
 
+WaveformKind = Literal["injected", "noise", "collision", "collisioncleaned"]
+
+
+@databag
+class ChunkSpikes:
+    i0: int
+    i1: int
+    times_samples: np.ndarray
+    time_shifts: np.ndarray
+    positions: np.ndarray
+    displacements: np.ndarray
+    templates: np.ndarray
+
+
+@databag
+class ChunkFeatures:
+    spikes: ChunkSpikes
+    ptp_amplitudes: np.ndarray
+    channels: np.ndarray
+    bg_collidedness: np.ndarray
+    gt_collidedness: np.ndarray | None
+    total_collidedness: np.ndarray | None
+    waveforms: dict[WaveformKind, np.ndarray]
+    residual: np.ndarray
+    residual_times_seconds: np.ndarray
+
 
 class InjectSpikesPreprocessor(BasePreprocessor):
     """Inject simulated spikes into a background recording
@@ -429,7 +454,6 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         extract_radius: float = 150.0,
         random_seed: np.random.Generator | int = 0,
         features_dtype="float32",
-        compute_collision_waveforms=False,
         extra_data_to_save: dict[str, np.ndarray] | None = None,
     ):
         super().__init__(recording)
@@ -450,22 +474,19 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         self.temporal_jitter_family = temporal_jitter_family
         self.features_dtype = features_dtype
         self.random_seed = random_seed
-        self.compute_collision_waveforms = compute_collision_waveforms
         self.fs = self.sampling_frequency
         self.extra_data_to_save = extra_data_to_save
 
         # shapes
         self.n_units = template_simulator.n_units
         self.n_channels = self.get_num_channels()
-        self.chans_arange = np.arange(self.n_channels)
         self.spike_length_samples = template_simulator.spike_length_samples()
         self.trough_offset_samples = template_simulator.trough_offset_samples()
         self.snippet_time_ix = np.arange(
             -self.trough_offset_samples,
             self.spike_length_samples - self.trough_offset_samples,
         )
-        self.spike_safe_pad = self.spike_length_samples
-        self.margin = 2 * self.spike_safe_pad
+        self.margin = self.spike_length_samples
         self.extract_channel_index = make_channel_index(
             template_simulator.geom, extract_radius
         )
@@ -616,214 +637,186 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
     # -- injection and ground truth feature extraction
 
-    def get_spikes(
-        self,
-        noise_with_margin,
-        start_frame,
-        end_frame,
-        *,
-        in_chunk_only=True,
-        extract=False,
-        n_residual_snips=0,
-        get_injected=True,
-    ):
-        if in_chunk_only:
-            search_start = start_frame
-            search_end = end_frame
-        else:
-            search_start = start_frame - self.spike_safe_pad
-            search_end = end_frame + self.spike_safe_pad
-        i0 = np.searchsorted(self.times_samples, search_start)
-        i1 = np.searchsorted(self.times_samples, search_end)
-        t = self.times_samples[i0:i1]
-        ll = self.labels[i0:i1]
-        s = self.scalings[i0:i1]
-        u = self.jitter_ix[i0:i1]
-
-        # temporal indices of snippets relative to chunk
-        t_rel = t - (start_frame - self.margin)
-        tix = t_rel[:, None] + self.snippet_time_ix
-        tc = (start_frame + end_frame) / 2
-        drift = self.drift(tc)
-        pos, temps, offsets = self.templates(drift=drift, up=True, padded=extract)
-        temps = temps[ll, u]
-        temps *= s[:, None, None]
-        temps_unpad = temps[..., :-1] if extract else temps
-        offsets = offsets[ll, u]
-
-        spikes = dict(
+    def chunk_spikes(
+        self, start_frame: int, end_frame: int, *, margin: int, drift_frame: float
+    ) -> ChunkSpikes:
+        i0 = int(np.searchsorted(self.times_samples, start_frame - margin))
+        i1 = int(np.searchsorted(self.times_samples, end_frame + margin))
+        labels = self.labels[i0:i1]
+        jitter_ix = self.jitter_ix[i0:i1]
+        drift = self.drift(drift_frame)
+        pos, templates, offsets = self.templates(drift=drift, up=True, padded=True)
+        templates = templates[labels, jitter_ix]
+        templates *= self.scalings[i0:i1, None, None]
+        drift = np.broadcast_to(drift, (self.n_units,))
+        return ChunkSpikes(
             i0=i0,
             i1=i1,
-            times_samples=t + offsets,
-            time_shifts=offsets.astype(np.int16),
-            labels=ll,
-            scalings=s,
-            jitter_ix=u,
-            tix=tix,
-            waveforms=temps_unpad,
-            n_residual_snips=n_residual_snips,
+            times_samples=self.times_samples[i0:i1],
+            time_shifts=offsets[labels, jitter_ix].astype(np.int16),
+            positions=pos[labels],
+            displacements=drift[labels].astype(self.features_dtype),
+            templates=templates,
         )
-        if not extract:
-            return spikes
 
-        spikes["localizations"] = pos[ll]
-        drift = np.broadcast_to(drift, (self.n_units,))[ll]
-        spikes["displacements"] = drift.astype(self.features_dtype)
-        ptp_vectors = ptp(temps_unpad, dim=1)
-        c = ptp_vectors.argmax(axis=1)
-        spikes["channels"] = c
-        spikes["ptp_amplitudes"] = ptp_vectors.max(axis=1)
-        if n_residual_snips:
-            rsnips, rtimes = extract_random_snips(
-                rg=self.random_seed,
-                chunk=noise_with_margin[
-                    self.margin : len(noise_with_margin) - self.margin
-                ],
-                n=n_residual_snips,
-                sniplen=self.spike_length_samples,
-            )
-            if torch.is_tensor(rsnips):
-                rsnips = rsnips.numpy(force=True)
-            spikes["residual"] = rsnips
-            rtimes += start_frame
-            rtimes = self.sample_index_to_time(rtimes)
-            spikes["residual_times"] = rtimes
-            spikes["n_residual_snips"] = rtimes.shape[0]
+    def inject(self, traces: np.ndarray, spikes: ChunkSpikes, *, origin: int):
+        waveforms = spikes.templates[..., :-1].astype(traces.dtype, copy=False)
+        snippet_starts = spikes.times_samples - self.trough_offset_samples - origin
+        n_samples = len(traces)
+        for t0, waveform in zip(snippet_starts, waveforms, strict=True):
+            lo = max(t0, 0)
+            hi = min(t0 + self.spike_length_samples, n_samples)
+            if lo >= hi:
+                continue
+            traces[lo:hi] += waveform[lo - t0 : hi - t0]
 
-        # extract the background noise which waveforms will be added into
-        noise_padded = np.pad(
-            noise_with_margin, [(0, 0), (0, 1)], constant_values=np.nan
-        )
-        echans = self.extract_channel_index[c]
-        if torch.is_tensor(echans):
-            echans = echans.numpy(force=True)
-        noise_waveforms = noise_padded[tix[:, :, None], echans[:, None, :]]
-        noise_waveforms = noise_waveforms.astype(np.float32, copy=False)
-        spikes["collidedness"] = np.sqrt(
-            np.nanmean(np.square(noise_waveforms).mean(1), 1)
-        )
-        # the actual injected waveforms...
-        if get_injected:
-            injected_waveforms = np.take_along_axis(temps, echans[:, None, :], axis=2)
-            collisioncleaned_waveforms = noise_waveforms + injected_waveforms
-            spikes["noise_waveforms"] = noise_waveforms
-            spikes["injected_waveforms"] = injected_waveforms
-            spikes["collisioncleaned_waveforms"] = collisioncleaned_waveforms
-            spikes["echans"] = echans
-
-        return spikes
-
-    def get_traces_and_inject_spikes(
-        self,
-        start_frame,
-        end_frame,
-        channel_indices=None,
-        *,
-        extract=False,
-        inject=False,
-        n_residual_snips=0,
-        get_injected=False,
-    ):
-        traces, lm, rm = get_chunk_with_margin(
-            self.parent_segment,
-            start_frame=start_frame,
-            end_frame=end_frame,
-            channel_indices=None,
-            margin=self.margin,
-            add_zeros=True,
-        )
-        assert lm == rm == self.margin
-        assert traces.shape[1] == self.n_channels
-        assert extract != inject
-        spikes = self.get_spikes(
-            traces,
+    def injected_traces(self, start_frame, end_frame, channel_indices=None):
+        traces = self.parent_segment.get_traces(start_frame, end_frame, slice(None))
+        traces = traces.copy()
+        assert traces.shape == (end_frame - start_frame, self.n_channels)
+        spikes = self.chunk_spikes(
             start_frame,
             end_frame,
-            in_chunk_only=not inject,
-            extract=extract,
-            n_residual_snips=n_residual_snips,
-            get_injected=get_injected,
+            margin=self.margin,
+            drift_frame=(start_frame + end_frame) / 2,
         )
-
-        if not inject and not self.compute_collision_waveforms:
-            del traces
-            return None, spikes
-
-        injected = spikes
-        if not inject:
-            injected = self.get_spikes(
-                traces, start_frame, end_frame, in_chunk_only=False
-            )
-        if inject:
-            traces = traces.copy()
-        else:
-            traces = traces.astype(np.float32)
-        waveforms = cast(np.ndarray, injected["waveforms"])
-        injected_tix = cast(np.ndarray, injected["tix"])
-        waveforms = waveforms.astype(traces.dtype, copy=False)
-        np.add.at(
-            traces,
-            (injected_tix[:, :, None], self.chans_arange[None, None]),
-            waveforms,
-        )
-        del injected, waveforms, injected_tix
-
-        if self.compute_collision_waveforms and not inject:
-            tix = cast(np.ndarray, spikes["tix"])
-            echans = cast(np.ndarray, spikes["echans"])
-            traces_pad = np.pad(traces, [(0, 0), (0, 1)], constant_values=np.nan)
-            total_wfs = traces_pad[tix[:, :, None], echans[:, None, :]]
-            del traces_pad
-            total_wfs -= spikes["injected_waveforms"]
-            cwfs = total_wfs - spikes["noise_waveforms"]
-            spikes["collision_waveforms"] = cwfs
-            # collidedness is what's relevant to the features, which are perfectly
-            # decollided. gt_collidedness is worst case (no cc).
-            spikes["gt_collidedness"] = np.sqrt(np.nanmean(np.square(cwfs).mean(1), 1))
-            spikes["total_collidedness"] = np.sqrt(
-                np.nanmean(np.square(total_wfs).mean(1), 1)
-            )
-
-        traces = traces[self.margin : len(traces) - self.margin]
+        self.inject(traces, spikes, origin=start_frame)
         if channel_indices is not None:
             traces = traces[:, channel_indices]
+        return traces
 
-        return traces, spikes
+    def extract_chunk_features(
+        self,
+        recording: BaseRecording,
+        start_frame: int,
+        end_frame: int,
+        n_residual_snips: int,
+        *,
+        chunk_size: int,
+        waveform_kinds: frozenset[WaveformKind],
+        save_collidedness: bool,
+    ) -> ChunkFeatures:
+        nt = self.get_num_frames()
+        assert start_frame % chunk_size == 0
+        assert end_frame == min(start_frame + chunk_size, nt)
+        window_start = start_frame - self.margin
+        window_end = end_frame + self.margin
+        read_start = max(window_start, 0)
+        read_end = min(window_end, nt)
+        padded_window_shape = (window_end - window_start, self.n_channels + 1)
 
-    def _get_traces_and_inject_spikes_job(self, args_kwargs):
-        args, kwargs = args_kwargs
-        return self.get_traces_and_inject_spikes(*args, **kwargs)
+        recorded = np.zeros(padded_window_shape, dtype=np.float32)
+        recorded[:, -1] = np.nan
+        recorded[read_start - window_start : read_end - window_start, :-1] = (
+            recording.get_traces(start_frame=read_start, end_frame=read_end)
+        )
+        written_injection = np.zeros(padded_window_shape, dtype=np.float32)
+        first_write_start = read_start - read_start % chunk_size
+        for write_start in range(first_write_start, read_end, chunk_size):
+            write_end = min(write_start + chunk_size, nt)
+            lo = max(write_start, window_start)
+            hi = min(write_end, window_end)
+            write_spikes = self.chunk_spikes(
+                lo, hi, margin=self.margin, drift_frame=(write_start + write_end) / 2
+            )
+            self.inject(
+                written_injection[lo - window_start : hi - window_start, :-1],
+                write_spikes,
+                origin=lo,
+            )
+        background = recorded - written_injection
+        del written_injection
+
+        spikes = self.chunk_spikes(
+            start_frame,
+            end_frame,
+            margin=0,
+            drift_frame=(start_frame + end_frame) / 2,
+        )
+        ptp_vectors = ptp(spikes.templates[..., :-1], dim=1)
+        channels = ptp_vectors.argmax(axis=1)
+        echans = self.extract_channel_index[channels]
+        if torch.is_tensor(echans):
+            echans = echans.numpy(force=True)
+        time_ix = spikes.times_samples[:, None] - window_start + self.snippet_time_ix
+        time_ix = time_ix[:, :, None]
+        chan_ix = echans[:, None, :]
+
+        noise_waveforms = background[time_ix, chan_ix]
+        injected_waveforms = np.take_along_axis(spikes.templates, chan_ix, axis=2)
+
+        if save_collidedness or "collision" in waveform_kinds:
+            total_waveforms = recorded[time_ix, chan_ix] - injected_waveforms
+            collision_waveforms = total_waveforms - noise_waveforms
+        else:
+            total_waveforms = collision_waveforms = None
+        del recorded
+
+        if save_collidedness:
+            assert total_waveforms is not None
+            assert collision_waveforms is not None
+            gt_collidedness = np.sqrt(np.nanmean(np.square(collision_waveforms), (1, 2)))
+            total_collidedness = np.sqrt(np.nanmean(np.square(total_waveforms), (1, 2)))
+        else:
+            gt_collidedness = total_collidedness = None
+
+        waveforms: dict[WaveformKind, np.ndarray] = {}
+        if "injected" in waveform_kinds:
+            waveforms["injected"] = injected_waveforms
+        if "noise" in waveform_kinds:
+            waveforms["noise"] = noise_waveforms
+        if "collision" in waveform_kinds:
+            assert collision_waveforms is not None
+            waveforms["collision"] = collision_waveforms
+        if "collisioncleaned" in waveform_kinds:
+            waveforms["collisioncleaned"] = noise_waveforms + injected_waveforms
+
+        residual, residual_times = extract_random_snips(
+            rg=self.random_seed,
+            chunk=background[self.margin : len(background) - self.margin, :-1],
+            n=n_residual_snips,
+            sniplen=self.spike_length_samples,
+        )
+        if torch.is_tensor(residual):
+            residual = residual.numpy(force=True)
+        residual_times = self.sample_index_to_time(residual_times + start_frame)
+
+        return ChunkFeatures(
+            spikes=spikes,
+            ptp_amplitudes=ptp_vectors.max(axis=1),
+            channels=channels,
+            bg_collidedness=np.sqrt(np.nanmean(np.square(noise_waveforms), (1, 2))),
+            gt_collidedness=gt_collidedness,
+            total_collidedness=total_collidedness,
+            waveforms=waveforms,
+            residual=residual,
+            residual_times_seconds=residual_times,
+        )
 
     # -- saving
 
     def save_features_to_hdf5(
         self,
-        hdf5_path,
+        hdf5_path: Path,
+        recording: BaseRecording,
         *,
-        overwrite=False,
-        n_jobs=1,
-        show_progress=True,
-        n_residual_snips=4096,
-        save_injected_waveforms=False,
-        save_noise_waveforms=False,
-        save_collision_waveforms=False,
-        save_collisioncleaned_waveforms=True,
-        save_collidedness=False,
-        chunk_len_s=0.5,
-        buffersize=32,
+        chunk_len_s: float,
+        waveform_kinds: frozenset[WaveformKind] = frozenset(),
+        save_collidedness: bool = False,
+        n_residual_snips: int = 4096,
+        overwrite: bool = False,
+        n_jobs: int = 1,
+        show_progress: bool = True,
+        buffersize: int = 32,
     ):
         if overwrite:
             if hdf5_path.exists():
                 hdf5_path.unlink()
         else:
             assert not hdf5_path.exists()
-
-        get_injected = (
-            save_injected_waveforms
-            or save_collision_waveforms
-            or save_collisioncleaned_waveforms
-            or self.compute_collision_waveforms
-        )
+        assert recording.get_num_segments() == 1
+        assert recording.get_num_frames() == self.get_num_frames()
+        assert recording.get_num_channels() == self.n_channels
 
         n_jobs, Executor, context = get_pool(n_jobs, cls="ThreadPoolExecutor")
         with h5py.File(hdf5_path, "w", locking=False) as h5:
@@ -856,32 +849,29 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
             # arrays discovered in batches below
             f_dt = self.features_dtype
-            inj_wf_shape: tuple[int, int] = (
+            localizations = h5.create_dataset("localizations", (n, 3), dtype=f_dt)
+            displacements = h5.create_dataset("displacements", (n,), dtype=f_dt)
+            ptp_amplitudes = h5.create_dataset("ptp_amplitudes", (n,), dtype=f_dt)
+            channels = h5.create_dataset("channels", (n,), dtype=np.int32)
+            time_shifts = h5.create_dataset("time_shifts", (n,), dtype=np.int16)
+            bg_collidedness = h5.create_dataset("bg_collidedness", (n,), dtype=f_dt)
+            if save_collidedness:
+                gt_collidedness = h5.create_dataset("gt_collidedness", (n,), dtype=f_dt)
+                total_collidedness = h5.create_dataset(
+                    "total_collidedness", (n,), dtype=f_dt
+                )
+            else:
+                gt_collidedness = total_collidedness = None
+            waveforms_shape = (
+                n,
                 self.spike_length_samples,
                 self.extract_channel_index.shape[1],
             )
-            dataset_shapes: dict[str, tuple[tuple[int, ...], Any]] = {
-                "localizations": ((3,), f_dt),
-                "displacements": ((), f_dt),
-                "ptp_amplitudes": ((), f_dt),
-                "channels": ((), np.int32),
-                "time_shifts": ((), np.int16),
-                "collidedness": ((), f_dt),
-            }
-            if save_collisioncleaned_waveforms:
-                dataset_shapes["collisioncleaned_waveforms"] = (inj_wf_shape, f_dt)
-            if save_injected_waveforms:
-                dataset_shapes["injected_waveforms"] = (inj_wf_shape, f_dt)
-            if save_noise_waveforms:
-                dataset_shapes["noise_waveforms"] = (inj_wf_shape, f_dt)
-            if save_collision_waveforms:
-                dataset_shapes["collision_waveforms"] = (inj_wf_shape, f_dt)
-            if save_collidedness:
-                dataset_shapes["gt_collidedness"] = ((), f_dt)
-                dataset_shapes["total_collidedness"] = ((), f_dt)
-            datasets = {
-                k: h5.create_dataset(k, dtype=dt, shape=(n, *sh))
-                for k, (sh, dt) in dataset_shapes.items()
+            waveform_datasets = {
+                kind: h5.create_dataset(
+                    f"{kind}_waveforms", waveforms_shape, dtype=f_dt
+                )
+                for kind in waveform_kinds
             }
 
             nt = self.get_num_frames()
@@ -915,27 +905,22 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 residual_snips_per_chunk = divide_randomly(
                     n_residual_snips, len(chunk_starts), self.random_seed
                 )
-                jobs = (
-                    (
-                        (t, min(t + bs, nt)),
-                        dict(
-                            extract=True,
-                            n_residual_snips=nrs,
-                            get_injected=get_injected,
-                        ),
-                    )
-                    for t, nrs in zip(
-                        chunk_starts, residual_snips_per_chunk, strict=True
-                    )
+                chunk_ends = [min(t + bs, nt) for t in chunk_starts]
+                job = partial(
+                    self.extract_chunk_features,
+                    recording,
+                    chunk_size=bs,
+                    waveform_kinds=waveform_kinds,
+                    save_collidedness=save_collidedness,
                 )
-                if _can_buffer:
-                    results = pool.map(
-                        self._get_traces_and_inject_spikes_job,
-                        jobs,
-                        buffersize=buffersize,
-                    )
-                else:
-                    results = pool.map(self._get_traces_and_inject_spikes_job, jobs)
+                results = buffered_map(
+                    pool,
+                    job,
+                    chunk_starts,
+                    chunk_ends,
+                    residual_snips_per_chunk,
+                    buffersize=buffersize,
+                )
                 if show_progress:
                     results = progbar(
                         results,
@@ -947,30 +932,37 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 i1_prev = 0
                 n_injected = 0
                 resid_ix = 0
-                for res in results:
-                    assert res is not None
-                    _, s = res
-                    del res, _
-                    i0 = cast(int, s["i0"])
-                    i1 = cast(int, s["i1"])
-                    assert i0 == i1_prev
-                    i1_prev = i1
-                    n_injected += i1 - i0
+                for features in results:
+                    assert features.spikes.i0 == i1_prev
+                    i1_prev = features.spikes.i1
+                    n_injected += features.spikes.i1 - features.spikes.i0
 
-                    for k, ds in datasets.items():
-                        ds[i0:i1] = s[k]
+                    sl = slice(features.spikes.i0, features.spikes.i1)
+                    localizations[sl] = features.spikes.positions
+                    displacements[sl] = features.spikes.displacements
+                    time_shifts[sl] = features.spikes.time_shifts
+                    ptp_amplitudes[sl] = features.ptp_amplitudes
+                    channels[sl] = features.channels
+                    bg_collidedness[sl] = features.bg_collidedness
+                    if save_collidedness:
+                        assert gt_collidedness is not None
+                        assert total_collidedness is not None
+                        gt_collidedness[sl] = features.gt_collidedness
+                        total_collidedness[sl] = features.total_collidedness
+                    for kind, ds in waveform_datasets.items():
+                        ds[sl] = features.waveforms[kind]
 
-                    nrs = s["n_residual_snips"]
+                    nrs = len(features.residual)
+                    assert nrs == len(features.residual_times_seconds)
                     if not nrs:
                         continue
-                    assert nrs == cast(np.ndarray, s["residual"]).shape[0]
-                    assert nrs == cast(np.ndarray, s["residual_times"]).shape[0]
                     assert residual is not None
                     assert nrs_dset is not None
                     assert residual_times is not None
-                    assert resid_ix is not None
-                    residual[resid_ix : resid_ix + nrs] = s["residual"]
-                    residual_times[resid_ix : resid_ix + nrs] = s["residual_times"]
+                    residual[resid_ix : resid_ix + nrs] = features.residual
+                    residual_times[resid_ix : resid_ix + nrs] = (
+                        features.residual_times_seconds
+                    )
                     nrs_dset[()] = resid_ix + nrs
                     resid_ix += nrs
                 if residual is not None and resid_ix != n_residual_snips:
@@ -1025,7 +1017,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
         if recording_dir.exists():
             try:
-                recording = load(recording_dir)
+                recording = cast(BaseRecording, load(recording_dir))
                 logger.info("Loaded %s", recording_dir)
             except Exception:
                 recording = None
@@ -1042,6 +1034,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     chunk_duration=chunk_len_s,
                     mp_context=mp_context,
                 )
+                recording = cast(BaseRecording, recording)
                 for w in ws:
                     msg = str(w.message)
                     if msg.startswith("The extractor is not serializable "):
@@ -1049,18 +1042,26 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     if msg.startswith("auto_cast_uint"):
                         continue
                     raise w.category(w.message)
+        assert recording is not None
         n_residual_snips = 0 if featurization_cfg is None else n_residual_snips
+        waveform_kinds: set[WaveformKind] = set()
+        if save_injected_waveforms:
+            waveform_kinds.add("injected")
+        if save_noise_waveforms:
+            waveform_kinds.add("noise")
+        if save_collision_waveforms:
+            waveform_kinds.add("collision")
+        if save_collisioncleaned_waveforms:
+            waveform_kinds.add("collisioncleaned")
         self.save_features_to_hdf5(
             sorting_h5,
+            recording,
+            chunk_len_s=chunk_len_s,
+            waveform_kinds=frozenset(waveform_kinds),
+            save_collidedness=save_collidedness,
+            n_residual_snips=n_residual_snips,
             n_jobs=n_jobs,
             overwrite=overwrite,
-            n_residual_snips=n_residual_snips,
-            save_injected_waveforms=save_injected_waveforms,
-            save_noise_waveforms=save_noise_waveforms,
-            save_collision_waveforms=save_collision_waveforms,
-            save_collisioncleaned_waveforms=save_collisioncleaned_waveforms,
-            save_collidedness=save_collidedness,
-            chunk_len_s=chunk_len_s,
         )
         if featurization_cfg is not None and not featurization_cfg.skip:
             # this is only for the TPCA feature.
@@ -1082,7 +1083,4 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         self.recording = recording
 
     def get_traces(self, start_frame, end_frame, channel_indices):
-        traces, _ = self.recording.get_traces_and_inject_spikes(
-            start_frame, end_frame, channel_indices, inject=True
-        )
-        return traces
+        return self.recording.injected_traces(start_frame, end_frame, channel_indices)

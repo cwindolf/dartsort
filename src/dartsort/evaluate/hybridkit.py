@@ -221,7 +221,6 @@ def make_hybrid_recording(
         temporal_jitter=temporal_jitter,
         extract_radius=150.0 if save_collidedness else 0.0,
         random_seed=rg,
-        compute_collision_waveforms=save_collidedness,
     )
 
     hybrid_recording.save_simulation(

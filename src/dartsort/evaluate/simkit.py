@@ -169,7 +169,6 @@ def generate_simulation(
         amp_jitter_family=amp_jitter_family,
         extract_radius=extract_radius,
         features_dtype=features_dtype,
-        compute_collision_waveforms=save_collision_waveforms or save_collidedness,
     )
     if no_save:
         return sim_recording, template_simulator
@@ -245,7 +244,6 @@ def make_simulated_recording(
     extract_radius: float = 100.0,
     random_seed: int = 0,
     features_dtype="float32",
-    compute_collision_waveforms: bool = False,
 ) -> InjectSpikesPreprocessor:
     """Sample a spike train and a drift trajectory, and inject spikes into recording
 
@@ -309,7 +307,6 @@ def make_simulated_recording(
         extract_radius=extract_radius,
         random_seed=random_seed,
         features_dtype=features_dtype,
-        compute_collision_waveforms=compute_collision_waveforms,
         extra_data_to_save=extra,
     )
 
