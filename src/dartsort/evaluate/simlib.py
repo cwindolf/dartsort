@@ -45,7 +45,7 @@ from ..util.data_util import (
 from ..util.internal_config import FeaturizationConfig, WaveformConfig
 from ..util.logging_util import get_logger, progbar
 from ..util.motion import MotionInfo
-from ..util.multiprocessing_util import get_pool
+from ..util.multiprocessing_util import get_pool, handle_negative_jobs
 from ..util.spiketorch import ptp
 from ..util.waveform_util import make_channel_index
 
@@ -1019,7 +1019,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     format="binary",
                     folder=recording_dir,
                     overwrite=True,
-                    n_jobs=n_jobs or 1,
+                    n_jobs=handle_negative_jobs(n_jobs)[1],
                     pool_engine=pool_engine,
                     chunk_duration=chunk_len_s,
                     mp_context=mp_context,
