@@ -12,11 +12,14 @@ from ..util.drift_util import bending_laplacian
 from ..util.internal_config import ComputationConfig, InterpolationParams
 from ..util.interpolation_util import FromFullProbeInterpolator
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import progbar
+from ..util.logging_util import DARTSORTVERBOSE, get_logger, progbar
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import current_worker_rank, pool_from_cfg
 from ..util.py_util import databag
 from .transform_base import BaseWaveformFeaturizer
+
+logger = get_logger(__name__)
+pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
 
 _my_name = "reduction_data"
 _worker_bufnames = ("count", "mean", "batch_xbar", "meansq", "batch_xsqbar")
@@ -419,6 +422,8 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         prior = prior.to(device=device, dtype=torch.float)
         srgeom = self.srgeom_erp.b.rgeom
         prior = self.rgeom_erp.interp_to(srgeom, prior)
+        if pnoid:
+            assert prior.isfinite().all()
         centers = self.rgeom_erp.b.rgeom[main_channels.to(device)]
         is_fit = torch.cdist(centers, srgeom) <= self.fit_radius_um
         n_fit = is_fit.sum(1)
@@ -428,7 +433,7 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         )
         fit_nodes = fit_nodes[:, : int(n_fit.max())]
         valid = torch.arange(fit_nodes.shape[1], device=device) < n_fit[:, None]
-        prior_out = prior * is_fit.logical_not()[:, None, :]
+        prior_out = prior.masked_fill(is_fit[:, None, :], 0.0)
 
         # sum over spikes of erp^T erp and erp_fit^T erp F0_out, by chunk
         n_nodes = len(self.srgeom)
@@ -455,6 +460,7 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
         lap_sq = laplacian @ laplacian
         del laplacian
         features = prior.clone()
+        nbadchol = 0
         for i0 in range(0, self.n_units, unit_batch_size):
             ix = slice(i0, min(i0 + unit_batch_size, self.n_units))
             nodes = fit_nodes[ix]
@@ -474,11 +480,16 @@ class SuperresTemplateWaveformReducer(BaseWaveformFeaturizer):
             )
             rhs = data_fit - cross[ix].double() + shrinkage * prior_fit
             rhs = rhs.sub_(self.smoothness * q).mul_(ok[:, None, :])
-            chol, _ = torch.linalg.cholesky_ex(system)
+            chol, info = torch.linalg.cholesky_ex(system)
+            nbadchol = info.count_nonzero().add_(nbadchol)
             fit = torch.cholesky_solve(rhs.mT, chol).mT
             fit = torch.where(ok[:, None, :] > 0, fit, prior_fit)
             features[ix] = features[ix].scatter(2, node_ix, fit.float())
             del P, q, system, rhs, fit, prior_fit, data_fit
+
+        assert not int(nbadchol)
+        if pnoid:
+            assert features.isfinite().all()
 
         return node_counts.numpy(force=True), features.numpy(force=True)
 
