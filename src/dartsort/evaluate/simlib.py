@@ -464,10 +464,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             -self.trough_offset_samples,
             self.spike_length_samples - self.trough_offset_samples,
         )
-        self.spike_safe_pad = max(
-            self.trough_offset_samples,
-            self.spike_length_samples - self.trough_offset_samples,
-        )
+        self.spike_safe_pad = self.spike_length_samples
         self.margin = 2 * self.spike_safe_pad
         self.extract_channel_index = make_channel_index(
             template_simulator.geom, extract_radius
@@ -701,6 +698,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         if torch.is_tensor(echans):
             echans = echans.numpy(force=True)
         noise_waveforms = noise_padded[tix[:, :, None], echans[:, None, :]]
+        noise_waveforms = noise_waveforms.astype(np.float32, copy=False)
         spikes["collidedness"] = np.sqrt(
             np.nanmean(np.square(noise_waveforms).mean(1), 1)
         )
@@ -751,22 +749,40 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             del traces
             return None, spikes
 
-        waveforms = cast(np.ndarray, spikes["waveforms"])
-        tix = cast(np.ndarray, spikes["tix"])
+        injected = spikes
+        if not inject:
+            injected = self.get_spikes(
+                traces, start_frame, end_frame, in_chunk_only=False
+            )
+        if inject:
+            traces = traces.copy()
+        else:
+            traces = traces.astype(np.float32)
+        waveforms = cast(np.ndarray, injected["waveforms"])
+        injected_tix = cast(np.ndarray, injected["tix"])
         waveforms = waveforms.astype(traces.dtype, copy=False)
-        traces = traces.copy()
-        np.add.at(traces, (tix[:, :, None], self.chans_arange[None, None]), waveforms)
+        np.add.at(
+            traces,
+            (injected_tix[:, :, None], self.chans_arange[None, None]),
+            waveforms,
+        )
+        del injected, waveforms, injected_tix
 
         if self.compute_collision_waveforms and not inject:
+            tix = cast(np.ndarray, spikes["tix"])
             echans = cast(np.ndarray, spikes["echans"])
             traces_pad = np.pad(traces, [(0, 0), (0, 1)], constant_values=np.nan)
-            cwfs = traces_pad[tix[:, :, None], echans[:, None, :]]
-            cwfs -= spikes["collisioncleaned_waveforms"]
+            total_wfs = traces_pad[tix[:, :, None], echans[:, None, :]]
+            del traces_pad
+            total_wfs -= spikes["injected_waveforms"]
+            cwfs = total_wfs - spikes["noise_waveforms"]
             spikes["collision_waveforms"] = cwfs
-            cwfs = np.nan_to_num(cwfs).reshape(len(cwfs), -1)
             # collidedness is what's relevant to the features, which are perfectly
             # decollided. gt_collidedness is worst case (no cc).
-            spikes["gt_collidedness"] = np.linalg.norm(cwfs, axis=1)
+            spikes["gt_collidedness"] = np.sqrt(np.nanmean(np.square(cwfs).mean(1), 1))
+            spikes["total_collidedness"] = np.sqrt(
+                np.nanmean(np.square(total_wfs).mean(1), 1)
+            )
 
         traces = traces[self.margin : len(traces) - self.margin]
         if channel_indices is not None:
@@ -806,6 +822,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             save_injected_waveforms
             or save_collision_waveforms
             or save_collisioncleaned_waveforms
+            or self.compute_collision_waveforms
         )
 
         n_jobs, Executor, context = get_pool(n_jobs, cls="ThreadPoolExecutor")
@@ -861,6 +878,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 dataset_shapes["collision_waveforms"] = (inj_wf_shape, f_dt)
             if save_collidedness:
                 dataset_shapes["gt_collidedness"] = ((), f_dt)
+                dataset_shapes["total_collidedness"] = ((), f_dt)
             datasets = {
                 k: h5.create_dataset(k, dtype=dt, shape=(n, *sh))
                 for k, (sh, dt) in dataset_shapes.items()
