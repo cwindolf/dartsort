@@ -291,7 +291,7 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
 
 def ds_save_features(
     cfg: DARTsortInternalConfig | None,
-    sorting: DARTsortSorting,
+    h5_path: Path | None,
     output_dir: Path | None,
     work_dir: Path | None = None,
     is_final=False,
@@ -311,8 +311,8 @@ def ds_save_features(
     assert output_dir is not None
 
     # find h5 and models and copy
-    assert sorting.parent_h5_path is not None
-    h5_path = ensure_path(sorting.parent_h5_path)
+    assert h5_path is not None
+    h5_path = ensure_path(h5_path)
     assert h5_path.exists()
     models_path = h5_path.parent / f"{h5_path.stem}_models"
     resid_path = h5_path.parent / f"{h5_path.stem}_residual.bin"

@@ -1,5 +1,10 @@
+from collections.abc import Generator
+from contextlib import nullcontext
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import h5py
 import numpy as np
-import torch
 from dredge.dredge_ap import register as dredge_register
 from dredge.motion_util import (
     MotionEstimate,
@@ -10,62 +15,75 @@ from dredge.motion_util import (
 from spikeinterface.core import BaseRecording, Motion
 
 from .data_util import DARTsortSorting
-from .internal_config import MotionEstimationConfig, default_motion_estimation_cfg
+from .internal_config import (
+    ComputationConfig,
+    MotionEstimationConfig,
+    default_motion_estimation_cfg,
+)
+from .job_util import ensure_computation_config
+from .py_util import databag
 
 
 def dredge_estimate_motion(
     recording: BaseRecording,
-    sorting: DARTsortSorting,
+    spikes: DARTsortSorting | Path,
     motion_cfg: MotionEstimationConfig = default_motion_estimation_cfg,
     localizations_dataset_name="point_source_localizations",
     amplitudes_dataset_name="denoised_ptp_amplitudes",
-    device: torch.device | None = None,
+    computation_cfg: ComputationConfig | None = None,
 ) -> MotionEstimate | None:
     if not motion_cfg.do_motion_estimation:
         return None
+    computation_cfg = ensure_computation_config(computation_cfg)
 
-    x = getattr(sorting, localizations_dataset_name)[:, 0]
-    z = getattr(sorting, localizations_dataset_name)[:, 2]
-    a = getattr(sorting, amplitudes_dataset_name)
-    geom = recording.get_channel_locations()
-    xmin = geom[:, 0].min() - motion_cfg.probe_boundary_padding_um
-    xmax = geom[:, 0].max() + motion_cfg.probe_boundary_padding_um
-    zmin = geom[:, 1].min() - motion_cfg.probe_boundary_padding_um
-    zmax = geom[:, 1].max() + motion_cfg.probe_boundary_padding_um
-    valid = x == x.clip(xmin, xmax)
-    valid &= z == z.clip(zmin, zmax)
-    if motion_cfg.min_amplitude:
-        valid &= a >= motion_cfg.min_amplitude
-    valid = np.flatnonzero(valid)
+    if (
+        isinstance(spikes, DARTsortSorting)
+        and spikes.get_mask_indices() is None
+        and all(
+            spikes.has_dataset_on_disk_not_loaded(k)
+            for k in (
+                localizations_dataset_name,
+                amplitudes_dataset_name,
+                "times_seconds",
+            )
+        )
+    ):
+        assert spikes.parent_h5_path is not None
+        spikes = spikes.parent_h5_path
 
-    # features for registration
-    z = z[valid]
-    t_s = sorting.times_seconds
-    t_s = t_s[valid]
-    a = a[valid]
+    spike_batches = MotionSpikeBatches(
+        spikes=spikes,
+        geom=recording.get_channel_locations(),
+        motion_cfg=motion_cfg,
+        localizations_dataset_name=localizations_dataset_name,
+        amplitudes_dataset_name=amplitudes_dataset_name,
+    )
 
     # run registration
-    dredge_motion_est, _ = dredge_register(
-        amps=a,
-        depths_um=z,
-        times_s=t_s,
-        rigid=motion_cfg.rigid,
-        bin_um=motion_cfg.spatial_bin_length_um,
-        bin_s=motion_cfg.temporal_bin_length_s,
-        win_step_um=motion_cfg.window_step_um,
-        weights_threshold_low=motion_cfg.weight_threshold,
-        weights_threshold_high=motion_cfg.weight_threshold,
-        win_scale_um=motion_cfg.window_scale_um,
-        win_margin_um=motion_cfg.window_margin_um,
-        max_disp_um=motion_cfg.max_disp_um,
-        max_dt_s=motion_cfg.max_dt_s,
-        mincorr=motion_cfg.correlation_threshold,
-        gaussian_smoothing_sigma_um=motion_cfg.smoothing_um,
-        gaussian_smoothing_sigma_s=motion_cfg.smoothing_s,
-        batching_mode=motion_cfg.motion_batching_mode,
-        chunk_len_s=motion_cfg.motion_chunk_len_s,
-        device=device,
-    )
+    with TemporaryDirectory(
+        dir=computation_cfg.maybe_tmpdir_parent(), ignore_cleanup_errors=True
+    ) as tmpdir:
+        dredge_motion_est, _ = dredge_register(
+            spike_batches=spike_batches,
+            low_memory=computation_cfg.low_memory,
+            tmpdir=Path(tmpdir),
+            rigid=motion_cfg.rigid,
+            bin_um=motion_cfg.spatial_bin_length_um,
+            bin_s=motion_cfg.temporal_bin_length_s,
+            win_step_um=motion_cfg.window_step_um,
+            weights_threshold_low=motion_cfg.weight_threshold,
+            weights_threshold_high=motion_cfg.weight_threshold,
+            win_scale_um=motion_cfg.window_scale_um,
+            win_margin_um=motion_cfg.window_margin_um,
+            max_disp_um=motion_cfg.max_disp_um,
+            max_dt_s=motion_cfg.max_dt_s,
+            mincorr=motion_cfg.correlation_threshold,
+            gaussian_smoothing_sigma_um=motion_cfg.smoothing_um,
+            gaussian_smoothing_sigma_s=motion_cfg.smoothing_s,
+            batching_mode=motion_cfg.motion_batching_mode,
+            chunk_len_s=motion_cfg.motion_chunk_len_s,
+            device=computation_cfg.actual_device(),
+        )
     dredge_motion_est = speed_limit_filter(
         dredge_motion_est,
         band_width=motion_cfg.median_neighborhood_bins,
@@ -74,6 +92,54 @@ def dredge_estimate_motion(
     )
 
     return dredge_motion_est
+
+
+@databag
+class MotionSpikeBatches:
+    spikes: DARTsortSorting | Path
+    geom: np.ndarray
+    motion_cfg: MotionEstimationConfig
+    localizations_dataset_name: str
+    amplitudes_dataset_name: str
+    batch_size: int = 2**20
+
+    def __iter__(self) -> Generator[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        pad = self.motion_cfg.probe_boundary_padding_um
+        xmin = self.geom[:, 0].min() - pad
+        xmax = self.geom[:, 0].max() + pad
+        zmin = self.geom[:, 1].min() - pad
+        zmax = self.geom[:, 1].max() + pad
+
+        if isinstance(self.spikes, Path):
+            context = h5py.File(self.spikes, "r", locking=False)
+        else:
+            context = nullcontext(self.spikes)
+        with context as source:
+            if isinstance(source, h5py.File):
+                locs = source[self.localizations_dataset_name]
+                amps = source[self.amplitudes_dataset_name]
+                times = source["times_seconds"]
+                assert isinstance(locs, h5py.Dataset)
+                assert isinstance(amps, h5py.Dataset)
+                assert isinstance(times, h5py.Dataset)
+                batch_size = self.batch_size
+            else:
+                locs = getattr(source, self.localizations_dataset_name)
+                amps = getattr(source, self.amplitudes_dataset_name)
+                times = source.times_seconds
+                batch_size = max(1, times.shape[0])
+
+            n = times.shape[0]
+            for i0 in range(0, n, batch_size):
+                i1 = min(n, i0 + batch_size)
+                batch_locs = locs[i0:i1]
+                x = batch_locs[:, 0]
+                z = batch_locs[:, 2]
+                a = amps[i0:i1]
+                valid = np.logical_and(x == x.clip(xmin, xmax), z == z.clip(zmin, zmax))
+                if self.motion_cfg.min_amplitude:
+                    np.logical_and(valid, a >= self.motion_cfg.min_amplitude, out=valid)
+                yield a[valid], z[valid], times[i0:i1][valid]
 
 
 def dredge_to_si(dredge_motion_est: MotionEstimate) -> Motion:

@@ -96,7 +96,7 @@ def get_motion_info(
         assert sampling_cfg is not None
         assert waveform_cfg is not None
         output_directory = ensure_path(output_directory)
-        motion_sorting = detect_for_motion(
+        motion_spikes = detect_for_motion(
             output_dir=output_directory,
             recording=recording,
             previous_sorting=sorting,
@@ -113,20 +113,20 @@ def get_motion_info(
             return None  # type: ignore
         ds_save_features(
             cfg=_save_cfg,
-            sorting=motion_sorting,
+            h5_path=motion_spikes,
             work_dir=output_directory,
             output_dir=_save_dir,
         )
     else:
-        motion_sorting = sorting
+        motion_spikes = sorting
 
     if need_motion_estimate:
-        assert motion_sorting is not None
+        assert motion_spikes is not None
         dredge_motion_est = dredge_estimate_motion(
             recording=recording,
-            sorting=motion_sorting,
+            spikes=motion_spikes,
             motion_cfg=motion_cfg,
-            device=ensure_computation_config(computation_cfg).actual_device(),
+            computation_cfg=computation_cfg,
             localizations_dataset_name=localizations_dataset_name,
             amplitudes_dataset_name=amplitudes_dataset_name,
         )
@@ -479,7 +479,7 @@ def detect_for_motion(
     featurization_kw: dict | None = None,
     show_progress: bool = False,
     _fit_localizer_only: bool = False,
-) -> DARTsortSorting:
+) -> Path:
     """Thresholding detection and localization to get spikes for motion estimation."""
     from ..peel import Shaver, Threshold
     from ..transform import WaveformPipeline
@@ -566,6 +566,4 @@ def detect_for_motion(
         return None  # type: ignore
 
     assert peel_path is not None
-    sorting = DARTsortSorting.from_peeling_hdf5(peel_path)
-
-    return sorting
+    return peel_path
