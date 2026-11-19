@@ -800,14 +800,23 @@ class DARTsortSorting:
     @classmethod
     def load(
         cls,
-        sorting_npz,
+        sorting_npz: str | Path,
         additional_persistent_features=None,
         load_ephemeral_feature_names=None,
         load_persistent_feature_names=None,
+        low_memory: bool = False,
     ) -> Self:
-        """Load from npz (usually dartsort_sorting.npz)."""
+        """Load from npz (usually dartsort_sorting.npz).
+
+        In low_memory=True mode, some returned properties of this object are memmap
+        arrays (read-only).
+        """
         sorting_npz = ensure_path(sorting_npz, strict=True)
-        with np.load(sorting_npz) as data:
+        with (
+            nullcontext(npz_memmaps(sorting_npz))
+            if low_memory
+            else np.load(sorting_npz) as data
+        ):
             times_samples = data["times_samples"]
             channels = data["channels"]
             labels = data.get("labels", None)
@@ -825,7 +834,7 @@ class DARTsortSorting:
                 ephemeral_features = {}
             if geom is not None:
                 ephemeral_features["geom"] = geom
-            if parent_h5_path is not None:
+            if parent_h5_path is not None and not low_memory:
                 loaded_persistent_features = data.get("loaded_persistent_features", [])
             else:
                 loaded_persistent_features = []
@@ -841,10 +850,23 @@ class DARTsortSorting:
                 )
             if load_persistent_feature_names is None:
                 load_persistent_feature_names = list(loaded_persistent_features)
-            self = cls.from_peeling_hdf5(
-                parent_h5_path,
-                load_feature_names=load_persistent_feature_names,
-            )
+            if low_memory:
+                self = cls(
+                    times_samples=times_samples,
+                    channels=channels,
+                    labels=None,
+                    sampling_frequency=sampling_frequency,
+                    parent_h5_path=parent_h5_path,
+                )
+                self.load_persistent_features(
+                    load_feature_names=load_persistent_feature_names,
+                    load_simple_features=False,
+                )
+            else:
+                self = cls.from_peeling_hdf5(
+                    parent_h5_path,
+                    load_feature_names=load_persistent_feature_names,
+                )
             if labels is not None:
                 ephemeral_features["labels"] = labels
             return self.ephemeral_replace(
@@ -1146,18 +1168,22 @@ class DARTsortSorting:
             return _read_by_chunk(h5_mask, dset, show_progress=False)
 
 
-def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
+def load(
+    f: str | Path, labels_stem: str | None = None, low_memory: bool = False
+) -> DARTsortSorting:
     """Load a spike train from h5, npz, or folder."""
     f = ensure_path(f, strict=True)
 
-    if f.name.endswith(".h5"):
+    if f.name.endswith(".h5") and low_memory:
+        raise ValueError(f"Can't load {f} in low-memory mode (no h5 memmap...)")
+    elif f.name.endswith(".h5"):
         st = DARTsortSorting.from_peeling_hdf5(h5_path=f)
     elif f.name.endswith(".npz"):
-        st = DARTsortSorting.load(f)
+        st = DARTsortSorting.load(f, low_memory=low_memory)
     elif f.is_dir() and (f / "dartsort_sorting.npz").exists():
-        st = DARTsortSorting.load(f / "dartsort_sorting.npz")
+        st = DARTsortSorting.load(f / "dartsort_sorting.npz", low_memory=low_memory)
     elif f.is_dir() and (f / "sorting.npz").exists():
-        st = DARTsortSorting.load(f / "sorting.npz")
+        st = DARTsortSorting.load(f / "sorting.npz", low_memory=low_memory)
     else:
         raise ValueError(f"Not sure how to load '{f}'.")
 
@@ -1175,7 +1201,7 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
             elif len(glb) > 1:
                 raise ValueError(f"Ambiguous {labels_stem=} matched {labels_npy}.")
             labels_npy = glb[0]
-        labels = np.load(labels_npy)
+        labels = np.load(labels_npy, mmap_mode="r" if low_memory else None)
         if not labels.shape == st.channels.shape:
             raise ValueError(
                 f"{labels_npy} shape {labels.shape} does not match channels shape {st.channels.shape}."
@@ -1447,8 +1473,7 @@ def sorting_from_spikeinterface(
 
 
 def concatenate_sortings(
-    sortings: Sequence[DARTsortSorting],
-    sort_times: bool = True
+    sortings: Sequence[DARTsortSorting], sort_times: bool = True
 ) -> DARTsortSorting:
     """Concatenate sortings and check that the result is sorted
 
@@ -1599,7 +1624,9 @@ def pack_hdf5_to_npz(
             with zf.open(f"{name}.npy", "w", force_zip64=True) as npy_file:
                 if name in loaded_datasets:
                     np.lib.format.write_array(
-                        npy_file, np.asanyarray(loaded_datasets[name]), allow_pickle=False
+                        npy_file,
+                        np.asanyarray(loaded_datasets[name]),
+                        allow_pickle=False,
                     )
                     continue
 
@@ -1619,6 +1646,42 @@ def pack_hdf5_to_npz(
                 for i0 in range(0, n, batch_size):
                     i1 = min(n, i0 + batch_size)
                     npy_file.write(np.ascontiguousarray(dset[i0:i1]).tobytes())
+
+
+def npz_memmaps(npz_filename: Path) -> dict[str, np.ndarray]:
+    memmaps = {}
+    with np.load(npz_filename) as npz, npz_filename.open("rb") as raw:
+        for name in npz.files:
+            info = npz.zip.getinfo(f"{name}.npy")
+            if info.compress_type != zipfile.ZIP_STORED:
+                raise ValueError(f"Can't memmap {name} of {npz_filename} (compressed)")
+            with npz.zip.open(info) as member:
+                version = np.lib.format.read_magic(member)
+                assert version in ((1, 0), (2, 0))
+                if version == (1, 0):
+                    header = np.lib.format.read_array_header_1_0(member)
+                else:
+                    header = np.lib.format.read_array_header_2_0(member)
+                shape, fortran_order, dtype = header
+                header_len = member.tell()
+
+            if not shape or 0 in shape or dtype.kind not in "biuf":
+                memmaps[name] = npz[name]
+                continue
+
+            raw.seek(info.header_offset)
+            local_header = raw.read(30)
+            name_len = int.from_bytes(local_header[26:28], "little")
+            extra_len = int.from_bytes(local_header[28:30], "little")
+            memmaps[name] = np.memmap(
+                npz_filename,
+                dtype=dtype,
+                mode="r",
+                shape=shape,
+                offset=info.header_offset + 30 + name_len + extra_len + header_len,
+                order="F" if fortran_order else "C",
+            )
+    return memmaps
 
 
 def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:

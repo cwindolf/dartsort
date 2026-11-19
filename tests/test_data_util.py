@@ -81,11 +81,16 @@ def test_save_pack_extra_features():
             sorting_npz, pack_extra_features=["point_source_localizations", "labels"]
         )
 
-        loaded = DARTsortSorting.load(sorting_npz)
-        assert np.array_equal(loaded.times_samples, np.arange(n))
-        assert np.array_equal(loaded.channels, channels)
-        assert np.array_equal(loaded.labels, new_labels)
-        assert np.array_equal(loaded.load_dataset("point_source_localizations"), locs)
+        for low_memory in (False, True):
+            loaded = DARTsortSorting.load(sorting_npz, low_memory=low_memory)
+            assert isinstance(loaded.times_samples, np.memmap) == low_memory
+            assert isinstance(loaded.labels, np.memmap) == low_memory
+            assert np.array_equal(loaded.times_samples, np.arange(n))
+            assert np.array_equal(loaded.channels, channels)
+            assert loaded.labels is not None
+            assert np.array_equal(loaded.labels, new_labels)
+            locs_loaded = loaded.load_dataset("point_source_localizations")
+            assert np.array_equal(locs_loaded, locs)
 
 
 def test_flatten_gmm_on_disk():
