@@ -279,7 +279,9 @@ def _dartsort_impl(
             )
         assert sorting is not None
         logger.info(f"Initial detection: {sorting}")
-        ds_save_features(cfg, sorting, output_dir, work_dir, is_final=is_final)
+        ds_save_features(
+            cfg, sorting.parent_h5_path, output_dir, work_dir, is_final=is_final
+        )
 
         with timer("motion", ret["timing"]):
             if motion is None:
@@ -399,7 +401,7 @@ def _dartsort_impl(
             break
         assert sorting is not None
         logger.info(f"Matching step {step}: {sorting}")
-        ds_save_features(cfg, sorting, output_dir, work_dir, is_final)
+        ds_save_features(cfg, sorting.parent_h5_path, output_dir, work_dir, is_final)
 
         with timer(f"cluster{step}", ret["timing"]):
             if step_clus_cfg or (step_ref_cfgs is not None and len(step_ref_cfgs)):
