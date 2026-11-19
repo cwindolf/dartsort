@@ -183,7 +183,11 @@ def make_hybrid_recording(
     if filter:
         target_recording = spre.highpass_filter(target_recording, dtype="float32")
         if "inter_sample_shift" in target_recording.get_property_keys():
-            target_recording = spre.phase_shift(target_recording)
+            target_recording = spre.phase_shift(
+                target_recording,
+                inter_sample_shift=target_recording.get_property("inter_sample_shift"),
+            )
+            target_recording.delete_property("inter_sample_shift")
     if remove_bad_channels:
         assert filter
         bcids = spre.detect_bad_channels(target_recording, seed=0)
