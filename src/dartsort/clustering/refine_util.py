@@ -74,17 +74,6 @@ def pc_merge(
     # compute distances
     if refinement_cfg.pc_merge_metric == "cosine":
         dists = spiketorch.cosine_distance(means)
-    elif refinement_cfg.pc_merge_metric == "maxz":
-        x = x.square_()
-        meansq, _ = spiketorch.average_by_label(
-            x, xlabels, stable_features.channels, n_reg_chans
-        )
-        stddev = meansq.sub_(means.square()).sqrt_()
-        stddev = stddev.clamp_(min=torch.finfo(stddev.dtype).tiny)
-        stderr = stddev.div_(counts.sqrt()[:, None])
-        dists = spiketorch.maxz_distance(
-            means, stderr, counts, min_iou=refinement_cfg.pc_merge_min_iou
-        )
     elif refinement_cfg.pc_merge_metric.endswith("normeuc"):
         dists = spiketorch.weighted_normeuc_distance(
             means, counts, min_iou=refinement_cfg.pc_merge_min_iou

@@ -240,7 +240,8 @@ def shared_temporal_pconv(temporal_comps: Tensor, up_temporal_comps: Tensor) -> 
     # OIL = rank * up, 1, t. rank major, not up major.
     fil = up_temporal_comps.reshape(rank * up, 1, t)
     # NOL = rank, rank * up, 2 * t - 1
-    pconv = F.conv1d(input=inp, weight=fil, padding=t - 1)
+    pconv = F.conv1d(input=inp.double(), weight=fil.double(), padding=t - 1)
+    pconv = pconv.to(temporal_comps.dtype)
     assert pconv.shape == (rank, rank * up, 2 * t - 1)
     pconv = pconv.view(rank, rank, up, 2 * t - 1)
     pconv = torch.flip(pconv, dims=(3,))
@@ -411,7 +412,7 @@ def weighted_best_lagged_scaled_normeuc_dist(
         djj /= normsqii.mul_(scnormsqjj).sqrt_()
 
         # take minimums, enforce >= 0, square root
-        dd = dii.clamp_(_0, djj)
+        dd = torch.minimum(dii, djj).clamp_(min=_0)
         torch.sqrt(dd, out=d_flat[i0:i1])
 
     lag_flat -= lag_offset
@@ -1135,7 +1136,7 @@ def cosine_distance(means, means_b=None, true_distance=True):
         norm_b[blank_b] = 1
     dot /= norm[:, None]
     dot /= norm_b[None, :]
-    dist = torch.subtract(_1, dot, out=dot)
+    dist = torch.subtract(_1, dot, out=dot).relu_()
     if true_distance:
         dist.mul_(2.0).sqrt_()
     dist[blank] = torch.inf
@@ -1184,46 +1185,6 @@ def weighted_normsup_distance(means, weights, batch_size=512, min_iou=0.75):
 
         dist = dist.div_(torch.minimum(nmi, nmj))
         pdist[i0 + valid] = dist
-    pdist = pdist.numpy(force=True)
-    return squareform(pdist)
-
-
-def maxz_distance(means, stderrs, weights, batch_size=512, min_iou=0.75):
-    assert means.ndim == 3
-    assert weights.ndim == 2
-    k = means.shape[0]
-    assert weights.shape == (k, means.shape[2])
-
-    ii, jj = torch.triu_indices(k, k, offset=1)
-    npair = ii.shape[0]
-
-    pdist = means.new_full((npair,), torch.inf)
-    piou = means.new_zeros(npair)
-
-    weights = weights / weights.amax(dim=1, keepdims=True)
-
-    for i0 in progrange(0, npair, batch_size, desc="MaxZ"):
-        i1 = min(npair, i0 + batch_size)
-
-        iii = ii[i0:i1]
-        jjj = jj[i0:i1]
-
-        wi = weights[iii]
-        wj = weights[jjj]
-        wmin = torch.minimum(wi, wj)
-        piou[i0:i1] = wmin.sum(1) / torch.maximum(wi, wj).sum(1)
-        (valid,) = (piou[i0:i1] >= min_iou).nonzero(as_tuple=True)
-
-        xi = means[iii[valid]]
-        xj = means[jjj[valid]]
-        sei = stderrs[iii[valid]]
-        sej = stderrs[jjj[valid]]
-
-        # se = sei + sej  # deliberately multiplying by 2 to get a chi thing.
-        se = 2.0 * torch.minimum(sei, sej)
-        z_chan = (xi - xj).div_(se).square_().mean(dim=1).sqrt_()
-        max_z = z_chan.amax(dim=1)
-        pdist[i0 + valid] = max_z
     pdist = pdist.numpy(force=True)
     return squareform(pdist)
 

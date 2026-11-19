@@ -453,7 +453,7 @@ def _pairwise_correlate_templates(templates, ii, jj, max_shift: int, batch_size=
         ones = torch.ones_like(templates[i0:i1])[None, :]
         conv = F.conv2d(ones, filt, padding=(max_shift, 0), groups=i1 - i0)
         assert conv.shape == (1, i1 - i0, lags.shape[0], 1)
-        conv = conv[0, :, :, 0].sqrt_()
+        conv = conv[0, :, :, 0].relu_().sqrt_()
         normsa[i0:i1] = conv
         normsb[i0:i1] = torch.flip(conv, dims=(1,))
 

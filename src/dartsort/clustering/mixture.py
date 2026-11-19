@@ -5268,7 +5268,7 @@ class TruncatedKmeanspp:
         if self.metric == "euc":
             d = xsq @ centers.shared.T
             d = d.addmm_(wx, centers.values.T, alpha=-2.0)
-            return d.add_(centers.normsq).div_(centers.n_feats)
+            return d.add_(centers.normsq).relu_().div_(centers.n_feats)
         elif self.metric == "cosine":
             return cosine_cdist_from_dots(
                 wx @ centers.values.T, xsq @ centers.shared.T, centers.normsq

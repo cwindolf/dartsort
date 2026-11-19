@@ -71,7 +71,7 @@ class FullNoise(torch.nn.Module):
 
         cov = torch.cov(x.T)
         eigvals, v = torch.linalg.eigh(cov)
-        std = eigvals.sqrt()
+        std = eigvals.relu_().sqrt()
         vt = v.T.contiguous()
 
         return cls(std, vt, nt=t, nc=c)
