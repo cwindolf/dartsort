@@ -30,7 +30,7 @@ def simulate_moppca(
     from ...transform import TemporalPCAFeaturizer
     from ..data_util import DARTsortSorting
     from ..interpolation_util import SpikeNeighborhoods
-    from ..noise_util import EmbeddedNoise
+    from ..noise_util import KroneckerNoise
 
     N = Nper * K
 
@@ -73,30 +73,20 @@ def simulate_moppca(
         mu = mu * clus_mask[:, None]
 
     if t_cov == "eye":
-        cov = np.eye(D)
-        noise = EmbeddedNoise(
-            rank,
-            nc,
-            cov_kind="scalar",
-            global_std=torch.tensor(1.0, dtype=torch.float, device=device),
-        )
+        noise = KroneckerNoise.identity(rank, nc, std=1.0, device=device)
     elif t_cov == "eyesmall":
-        cov = 1e-4 * np.eye(D)
-        noise = EmbeddedNoise(
-            rank,
-            nc,
-            cov_kind="scalar",
-            global_std=torch.tensor(0.01, dtype=torch.float, device=device),
-        )
+        noise = KroneckerNoise.identity(rank, nc, std=0.01, device=device)
     elif t_cov == "random":
-        _c = rg.normal(size=(D, 10 * D))
-        cov = _c @ _c.T / (10 * D)
-        full_cov = torch.asarray(cov, dtype=torch.float, device=device).view(
-            rank, nc, rank, nc
+        _t = rg.normal(size=(rank, 40 * rank))
+        _s = rg.normal(size=(nc, 40 * nc))
+        noise = KroneckerNoise(
+            temporal_cov=torch.asarray(_t @ _t.T / (40 * rank), dtype=torch.float, device=device),
+            spatial_cov=torch.asarray(_s @ _s.T / (40 * nc), dtype=torch.float, device=device),
         )
-        noise = EmbeddedNoise(rank, nc, cov_kind="full", full_cov=full_cov)
     else:
         assert False
+    cov = torch.kron(noise.b.temporal_cov, noise.b.spatial_cov)
+    assert cov.shape == (D, D)
 
     if t_w == "hot":
         W = np.zeros((K, rank, nc, M))
@@ -120,10 +110,11 @@ def simulate_moppca(
 
     labels = rg.integers(K, size=N)
     u = rg.normal(size=(N, M))
-    eps = rg.multivariate_normal(mean=np.zeros(D), cov=cov, size=N)
+    eps = rg.multivariate_normal(
+        mean=np.zeros(D), cov=cov.numpy(force=True).astype(np.float64), size=N
+    )
 
     labels = torch.asarray(labels)
-    cov = noise.marginal_covariance()
     u = torch.asarray(u, dtype=torch.float)
     eps = torch.asarray(eps, dtype=torch.float)
     mu = torch.asarray(mu, dtype=torch.float)

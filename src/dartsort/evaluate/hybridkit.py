@@ -122,11 +122,11 @@ def make_hybrid_recording(
     amplitude_jitter: float = 0.05,
     amp_jitter_family: Literal["gamma", "uniform", "normal"] = "normal",
     temporal_jitter: int = 8,
+    save_collidedness: bool = False,
     save_chunk_len_s: float = 0.5,
     template_simulator_kwargs: dict | None = None,
     metadata: dict[str, Any] | None = None,
     computation_cfg=None,
-    pool_engine="thread",
     extra_unit_information: pd.DataFrame | None = None,
     rg: np.random.Generator | int = 0,
 ) -> HybridDataset:
@@ -182,7 +182,11 @@ def make_hybrid_recording(
     if filter:
         target_recording = spre.highpass_filter(target_recording, dtype="float32")
         if "inter_sample_shift" in target_recording.get_property_keys():
-            target_recording = spre.phase_shift(target_recording)
+            target_recording = spre.phase_shift(
+                target_recording,
+                inter_sample_shift=target_recording.get_property("inter_sample_shift"),
+            )
+            target_recording.delete_property("inter_sample_shift")
     if remove_bad_channels:
         assert filter
         bcids = spre.detect_bad_channels(target_recording, seed=0)
@@ -218,9 +222,8 @@ def make_hybrid_recording(
         amplitude_jitter=amplitude_jitter,
         amp_jitter_family=amp_jitter_family,
         temporal_jitter=temporal_jitter,
-        extract_radius=0.0,
+        extract_radius=150.0 if save_collidedness else 0.0,
         random_seed=rg,
-        compute_collision_waveforms=False,
     )
 
     hybrid_recording.save_simulation(
@@ -234,10 +237,9 @@ def make_hybrid_recording(
         save_noise_waveforms=False,
         save_collision_waveforms=False,
         save_collisioncleaned_waveforms=False,
-        save_collidedness=False,
+        save_collidedness=save_collidedness,
         extra_unit_information=extra_unit_information,
         n_residual_snips=0,
-        pool_engine=pool_engine,
     )
     metadata = dict(metadata or {})
     metadata.update(
@@ -254,6 +256,7 @@ def make_hybrid_recording(
         amplitude_jitter=amplitude_jitter,
         amp_jitter_family=amp_jitter_family,
         temporal_jitter=temporal_jitter,
+        save_collidedness=save_collidedness,
     )
     with (ensure_path(folder) / "metadata.json").open("w") as jsonf:
         json.dump(metadata, jsonf)

@@ -537,7 +537,6 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
         neighborhood_ids=neighborhood_ids,
         n_candidates=n_candidates,
         candidate_count=int((candidates >= 0).sum().item()),
-        duties=None,
     )
     N = true_labels.shape[0]
     assert scores.candidates.shape == (N, n_candidates)
@@ -582,10 +581,9 @@ def test_component_initialization(
         device=device,
     )
     n = moppca_sim["x"].shape[0]
-    mean = moppca_sim["mu"][0].numpy(force=True).ravel()
     basis = moppca_sim["W"][0].numpy(force=True)
     basis = basis.transpose(2, 0, 1).reshape(rank, -1)
-    ncov = moppca_sim["noise"].marginal_covariance().to_dense().numpy(force=True)
+    ncov = moppca_sim["cov"].numpy(force=True)
     subspace = basis.T @ basis
     true_cov = subspace + ncov
 
@@ -593,16 +591,19 @@ def test_component_initialization(
     emp_cov = emp_cov.numpy(force=True)
     emp_subspace = emp_cov - ncov
 
-    mean_, basis_ = mixture._initialize_single(
+    if true_mean:
+        mean_ = moppca_sim["mu"][0].view(-1).to(device)
+    else:
+        mean_ = moppca_sim["x"].view(n, -1).mean(0)
+    basis_ = mixture._initialize_single(
         x=moppca_sim["x"],
         chans=torch.arange(n_chans, device=device),
         noise=moppca_sim["noise"],
+        mean=mean_,
         rank=rank,
-        mean=moppca_sim["mu"][0].view(-1).to(device) if true_mean else None,
         full_svd=full_svd,
     )
     assert basis_ is not None
-    mean_ = mean_.numpy(force=True).ravel()
     basis_ = basis_.numpy(force=True).reshape(rank, -1)
     subspace_ = basis_.T @ basis_
 
@@ -610,11 +611,6 @@ def test_component_initialization(
     mean_atol = 8 * se
     subspace_atol = np.abs(emp_cov - true_cov).max() + mean_atol
 
-    if not true_mean:
-        np.testing.assert_allclose(
-            mean_, moppca_sim["x"].view(n, -1).mean(0).numpy(force=True)
-        )
-    np.testing.assert_allclose(mean_, mean, atol=mean_atol)
     np.testing.assert_allclose(subspace_, emp_subspace, atol=mean_atol)
     np.testing.assert_allclose(subspace_, subspace, atol=subspace_atol)
 

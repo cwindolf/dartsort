@@ -176,13 +176,27 @@ def dartcopy2(icfg, src, dest):
         panic(icfg.workdir_copier)
 
 
-def dartcopytree(icfg, src, dest):
+def _ignore_existing_links(src: Path, dest: Path):
+    def ignore(dir, fns):
+        sdir = Path(dir)
+        ddir = dest / sdir.relative_to(src)
+        fns = [n for n in fns if (sdir / n).is_symlink() and (ddir / n).is_symlink()]
+        fns = [n for n in fns if (sdir / n).readlink() == (ddir / n).readlink()]
+        return fns
+
+    return ignore
+
+
+def dartcopytree(icfg, src: str | Path, dest: str | Path):
+    src = ensure_path(src, strict=True)
+    dest = ensure_path(dest)
     try:
         if icfg.workdir_copier == "shutil":
             shutil.copytree(
                 src,
                 dest,
                 symlinks=not icfg.workdir_follow_symlinks,
+                ignore=_ignore_existing_links(src, dest),
                 dirs_exist_ok=True,
             )
         elif icfg.workdir_copier == "rsync":

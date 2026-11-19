@@ -11,6 +11,7 @@ from .util.internal_config import (
     KmeansppStopping,
     MixtureStep,
     MotionBatchingMode,
+    NoiseCovKind,
     PreprocessingStrategy,
     RealignStrategy,
     SpikeStorage,
@@ -434,15 +435,12 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_spike_storage: SpikeStorage = "cpu"
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
-    cov_kind: str = "factorizednoise"
+    cov_kind: NoiseCovKind = "kronecker"
     gmm_euclidean_threshold: float = 3.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
     gmm_scaled_normeuc_threshold: float = 1.5
-    robust_strategy: Literal["none", "fixed", "huber"] = "none"
-    robust_fixed_std_dataset: str = "collidedness"
-    robust_fixed_power: float = 40.0
-    robust_df: float = 4.0
+    robust_strategy: Literal["none", "huber"] = "none"
     huber_quantile: float = 0.9
     huber_noise: bool = True
     gmm_criterion_clip_level: Annotated[float, Field(gt=0)] | None = 1.0

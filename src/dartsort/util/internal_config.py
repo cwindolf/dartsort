@@ -506,6 +506,7 @@ class TemplateMergeConfig:
 
 
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
+NoiseCovKind = Literal["kronecker", "identity"]
 ComponentDistanceMetric = Literal["euc", "cosine", "normeuc", "scaled_normeuc"]
 KmeansppSelection = Literal["phi", "marginal"]
 KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
@@ -544,8 +545,7 @@ class RefinementConfig:
 
     # -- gmm parameters
     # noise params
-    cov_kind: str = "factorizednoise"
-    glasso_alpha: float | int | None = None
+    cov_kind: NoiseCovKind = "kronecker"
 
     # model params
     neighb_overlap: float = 0.75
@@ -587,16 +587,12 @@ class RefinementConfig:
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
-    robust_strategy: Literal["none", "fixed", "huber"] = "none"
-    robust_fixed_std_dataset: str = "collidedness"
-    robust_fixed_power: float = 40.0
-    robust_df: float = 4.0
+    robust_strategy: Literal["none", "huber"] = "none"
     huber_quantile: float = 0.9
     huber_noise: bool = True
     criterion_clip_level: float | None = 1.0
     demolition_min_resp_ratio: float = 0.0
     demolish_during_selection: bool = False
-    refit_in_demolition: bool = False
     em_after_demolish: bool = True
     whiten_split: bool = True
     split_kmeanspp_metric: SplitKmeansppMetric = "euc"
@@ -1429,8 +1425,6 @@ def _refinement_cfg(
         cl_alpha=cfg.gmm_cl_alpha,
         cl_split_only=cfg.gmm_cl_split_only,
         robust_strategy=cfg.robust_strategy,
-        robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
-        robust_fixed_power=cfg.robust_fixed_power,
         kmeanspp_cfg=KmeansppConfig(
             tries=cfg.kmeanspp_tries,
             stop_dist=cfg.kmeanspp_stop_dist,
@@ -1445,7 +1439,6 @@ def _refinement_cfg(
         train_batch_size=cfg.gmm_batch_size,
         eval_batch_size=cfg.gmm_batch_size,
         spike_storage=cfg.gmm_spike_storage,
-        robust_df=cfg.robust_df,
         huber_quantile=cfg.huber_quantile,
         huber_noise=cfg.huber_noise,
         criterion_clip_level=cfg.gmm_criterion_clip_level,
@@ -1689,7 +1682,6 @@ def _featurization_cfg(cfg: "DeveloperConfig") -> FeaturizationConfig:
         tpca_fit_radius=cfg.fit_radius_um,
         tpca_max_waveforms=cfg.n_waveforms_fit,
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
-        save_collidedness=cfg.robust_strategy == "fixed",
         tpca_from_templates=cfg.tpca_from_templates,
         singlechan_denoised_amplitudes_and_localizations=cfg.singlechan_denoised_amplitudes_and_localizations,
         do_enforce_decrease=cfg.do_enforce_decrease,

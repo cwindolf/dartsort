@@ -1,36 +1,32 @@
-import warnings
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast
 
 import h5py
-import linear_operator
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from scipy.linalg import eigh
-from scipy.spatial.distance import pdist, squareform
-from sklearn.covariance import GraphicalLassoCV, graphical_lasso
 from sklearn.decomposition import PCA
 from torch import Tensor
 
 if TYPE_CHECKING:
     from ..transform.temporal_pca import BaseTemporalPCA
-from ..util import more_operators, spiketorch
+from ..util import spiketorch
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ComputationConfig,
     InterpolationParams,
+    NoiseCovKind,
     WhiteningConfig,
     tps_interp_clampna_extrap_params,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import DARTSORTDEBUG, get_logger, progbar, progrange
+from ..util.logging_util import get_logger, progbar, progrange
 from ..util.motion import MotionInfo
 from ..util.py_util import panic
-from ..util.spiketorch import spawn_torch_rg
 from ..util.torch_util import BModule
 from ..util.waveform_util import make_channel_index
 
@@ -75,7 +71,7 @@ class FullNoise(torch.nn.Module):
 
         cov = torch.cov(x.T)
         eigvals, v = torch.linalg.eigh(cov)
-        std = eigvals.sqrt()
+        std = eigvals.relu_().sqrt()
         vt = v.T.contiguous()
 
         return cls(std, vt, nt=t, nc=c)
@@ -409,663 +405,131 @@ class StationaryFactorizedNoise(torch.nn.Module):
         )
 
 
-class EmbeddedNoise(BModule):
-    """Handles computations related to noise in TPCA space.
-
-    Can have a couple of kinds of mean. mean_kind == ...
-      - "zero": noise was already centered, my mean is 0
-      - "by_rank": same mean on all channels
-      - "full": value per rank, chan
-
-    Default is zero, because we usually do not do "centering" in our TPCA
-    (i.e., it is just linear not affine). Since the channels are highpassed,
-    they have mean 0, and still do in TPCA space.
-
-    And cov_kind = ...
-      - "scalar": one global variance
-      - "diagonal_by_rank": same variance across chans, varies by rank
-      - "diagonal": value per rank, chan
-      - "factorized": kronecker prod of dense rank and chan factors
-      - "factorized_by_rank": same, but chan factor varies by rank
-      - "factorized_rank_diag" : factorized, but rank factor is diagonal
-      - "factorized_by_rank_rank_diag" : factorized_by_rank, but rank factor is diagonal
-         this one is block diagonal and therefore nicer than factorized_by_rank.
-      - "full": not generally practical.
-    """
-
+class KroneckerNoise(BModule):
     def __init__(
         self,
-        rank: int,
-        n_channels: int,
-        mean_kind="zero",
-        cov_kind="factorized_by_rank_rank_diag",
-        mean=None,
-        global_std=None,
-        rank_std=None,
-        full_std=None,
-        rank_vt=None,
-        channel_std=None,
-        channel_vt=None,
-        full_cov=None,
-        zero_radius=None,
+        temporal_cov: Tensor,
+        spatial_cov: Tensor,
+        zero_radius: float | None = None,
     ):
         super().__init__()
-        self.rank: int = rank
-        self.n_channels: int = n_channels
-        self.mean_kind = mean_kind
-        self.cov_kind = cov_kind
-        self.D = rank * n_channels
+        self.rank: int = temporal_cov.shape[0]
+        self.n_channels: int = spatial_cov.shape[0]
+        assert temporal_cov.shape == (self.rank, self.rank)
+        assert spatial_cov.shape == (self.n_channels, self.n_channels)
         self.zero_radius = zero_radius
+        self.register_buffer("temporal_cov", temporal_cov)
+        self.register_buffer("spatial_cov", spatial_cov)
 
-        self.register_buffer("chans_arange", torch.arange(n_channels))
-        self.register_buffer("global_std", global_std)
-
-        device = None
-        if global_std is not None:
-            device = global_std.device
-
-        if mean is not None:
-            self.register_buffer("mean", mean)
-        if rank_std is not None:
-            self.register_buffer("rank_std", rank_std)
-        if channel_std is not None:
-            self.register_buffer("channel_std", channel_std)
-        if full_std is not None:
-            self.register_buffer("full_std", full_std)
-        if rank_vt is not None:
-            self.register_buffer("rank_vt", rank_vt)
-        if channel_vt is not None:
-            self.register_buffer("channel_vt", channel_vt)
-            self.register_buffer("channel_vt_zpad", F.pad(channel_vt, (0, 1)))
-        if full_cov is not None:
-            self.register_buffer("full_cov", full_cov)
-            if device is None:
-                device = full_cov.device
-
-        # precompute stuff
-        self._full_cov = None
-        self._full_covinvcov = None
-        self._full_inverse = None
-        self._full_whitener = None
-        self._logdet = None
-        self.register_buffer("mean_full", self.mean_rc().clone().detach())
-        self.cache = {}
-        self.to(device)
-
-    @property
-    def logdet(self) -> Tensor:
-        if self._logdet is None:
-            self.marginal_covariance()
-        return cast(Tensor, self._logdet)
+        temporal_chol, temporal_info = torch.linalg.cholesky_ex(temporal_cov)
+        spatial_chol, spatial_info = torch.linalg.cholesky_ex(spatial_cov)
+        if temporal_info or spatial_info:
+            raise ValueError("Noise covariance not positive definite.")
+        temporal_whitener = torch.linalg.solve_triangular(
+            temporal_chol, torch.eye(self.rank).to(temporal_chol), upper=False
+        )
+        spatial_whitener = torch.linalg.solve_triangular(
+            spatial_chol, torch.eye(self.n_channels).to(spatial_chol), upper=False
+        )
+        self.register_buffer("temporal_whitener", temporal_whitener, persistent=False)
+        self.register_buffer("spatial_whitener", spatial_whitener, persistent=False)
 
     @property
     def device(self) -> torch.device:
-        return self.b.chans_arange.device
+        return self.b.temporal_cov.device
 
-    def mean_rc(self) -> Tensor:
-        """Return noise mean as a rank x channels tensor"""
-        shape = self.rank, self.n_channels
-        if self.mean_kind == "zero":
-            return torch.zeros(shape)
-        elif self.mean_kind == "by_rank":
-            return cast(Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
-        elif self.mean_kind == "full":
-            return cast(Tensor, self.mean)
-        else:
-            panic(self.mean_kind)
+    @classmethod
+    def identity(
+        cls,
+        rank: int,
+        n_channels: int,
+        std: float = 1.0,
+        zero_radius: float | None = None,
+        device: torch.device | None = None,
+    ) -> Self:
+        temporal_cov = torch.eye(rank, device=device).mul_(std**2)
+        spatial_cov = torch.eye(n_channels, device=device)
+        return cls(temporal_cov, spatial_cov, zero_radius=zero_radius)
 
-    def marginal_mean(self):
-        """Return noise mean as a rank x channels tensor"""
-        shape = self.rank, self.n_channels
-        if self.mean_kind == "zero":
-            return torch.zeros(shape)
-        if self.mean_kind == "by_rank":
-            return cast(Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
-        if self.mean_kind == "full":
-            return self.mean
-        panic(self.mean_kind)
-
-    def whitener(self, channels=slice(None)):  # noqa: B008
-        cov = self.marginal_covariance(channels=channels)
-        chol = cov.cholesky().to_dense()
-        eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
-        whitener = torch.linalg.solve_triangular(chol, eye, upper=False)
-        return whitener.reshape(cov.shape)
-
-    def whiten(self, data, channels=slice(None)):  # noqa: B008
-        assert self.mean_kind == "zero"
-        cov = self.marginal_covariance(channels=channels)
-        assert data.ndim == 3
-        data = data.reshape(len(data), -1)
-        chol = cov.cholesky().to_dense()
-        res = torch.linalg.solve_triangular(chol, data.T, upper=False)
-        res = res.T.unsqueeze(2)
-
-        # contour integral quad with lanczos is too fancy here...
-        # res = linear_operator.sqrt_inv_matmul(cov, data.unsqueeze(2))
-        assert res.ndim == 3 and res.shape == (*data.shape, 1)
-        return res
-
-    def whiten_full(self, data):
-        # self._full_whitener = None
-        if self._full_whitener is None:
-            self._full_whitener = self.whitener()
-        data = data.reshape(len(data), -1)
-        return data @ self._full_whitener
-
-    def full_dense_cov(self, device=None):
-        if self._full_cov is None:
-            self.marginal_covariance(device=device)
-        if device is not None:
-            self._full_cov_dense = self._full_cov_dense.to(device)
-        return self._full_cov_dense
-
-    def full_covinvcov(self, device=None):
-        if self._full_cov is None:
-            self.marginal_covariance(device=device)
-        assert self._full_cov is not None
-        if self._full_covinvcov is None:
-            self._full_covinvcov = self._full_cov.solve(self.full_dense_cov())
-        if device is not None:
-            self._full_covinvcov = self._full_covinvcov.to(device)
-        return self._full_covinvcov
-
-    def full_inverse(self, device=None):
-        if self._full_cov is None:
-            self.marginal_covariance(device=device)
-        assert self._full_cov is not None
-        if self._full_inverse is None:
-            self._full_inverse = self._full_cov.inverse().to_dense()
-        if device is not None:
-            self._full_inverse = self._full_inverse.to(device)
-        return self._full_inverse
-
-    def cov_batch_mul(self, x: Tensor, channels_src: Tensor, channels_targ: Tensor):
-        assert x.ndim == 3
-        n = x.shape[0]
-        assert x.shape[2] == channels_src.shape[1]
-        assert channels_src.ndim == 2
-        assert channels_src.shape[0] == n
-        if channels_targ.ndim == 2:
-            assert channels_targ.shape[0] == n
-        else:
-            assert channels_targ.ndim == 1
-
-        if self.cov_kind == "factorized":
-            rank_root = self.b.rank_vt.T * self.b.rank_std
-            rank_cov = rank_root @ rank_root.T
-            rank_cov = rank_cov[None].broadcast_to(n, *rank_cov.shape)
-            x = rank_cov.bmm(x)
-
-            chan_root_left = self.b.channel_vt_zpad.T[channels_src] * self.b.channel_std
-            chan_root_right = (
-                self.b.channel_vt_zpad.T[channels_targ] * self.b.channel_std
-            )
-            if chan_root_right.ndim == 2:
-                targ_shp = (chan_root_left.shape[0], *chan_root_right.shape)
-                chan_root_right = chan_root_right[None].broadcast_to(targ_shp)
-            chan_cov = chan_root_left.bmm(chan_root_right.mT)
-            return x.bmm(chan_cov)
-        elif self.cov_kind == "scalar":
-            if channels_targ.ndim == 1:
-                channels_targ = channels_targ[None, :].broadcast_to(
-                    (n, channels_targ.numel())
-                )
-            channels_src = torch.where(
-                channels_src == self.n_channels, -2, channels_src
-            )
-            eyes = (channels_src[:, :, None] == channels_targ[:, None, :]).float()
-            chan_cov = eyes * self.b.global_std**2
-            return x.bmm(chan_cov)
-        elif self.cov_kind == "full":
-            # this branch is for debugging. it is slow.
-            if channels_targ.ndim == 1:
-                channels_targ = channels_targ[None, :].broadcast_to(
-                    (n, channels_targ.numel())
-                )
-            cov_zpad = F.pad(self.b.full_cov, (0, 1, 0, 0, 0, 1))[None]
-            cov = cov_zpad.take_along_dim(
-                indices=channels_src[:, None, :, None, None], dim=2
-            )
-            assert cov.shape == (
-                n,
-                self.rank,
-                channels_src.shape[1],
-                self.rank,
-                self.n_channels + 1,
-            )
-            cov = cov.take_along_dim(
-                indices=channels_targ[:, None, None, None, :], dim=4
-            )
-            assert cov.shape == (
-                n,
-                self.rank,
-                channels_src.shape[1],
-                self.rank,
-                channels_targ.shape[1],
-            )
-            cov = cov.view(
-                n,
-                self.rank * channels_src.shape[1],
-                self.rank * channels_targ.shape[1],
-            )
-            x = x.view(n, 1, -1).bmm(cov)
-            return x.view(n, self.rank, channels_targ.shape[1])
-        else:
-            raise NotImplementedError(
-                f"Need to implement cov_batch_mul for {self.cov_kind=}."
-            )
-
-    def cov_batch(self, channels_left: Tensor, channels_right: Tensor):
-        if self.cov_kind != "factorized":
-            raise NotImplementedError(
-                f"Need to implement cov_batch for {self.cov_kind=}."
-            )
-        rank_root = self.b.rank_vt.T * self.b.rank_std
-        rank_cov = rank_root @ rank_root.T
-        chan_root_left = self.b.channel_vt_zpad.T[channels_left] * self.b.channel_std
-        chan_root_right = self.b.channel_vt_zpad.T[channels_right] * self.b.channel_std
-        if chan_root_right.ndim == 2:
-            chan_root_right = chan_root_right[None].broadcast_to(
-                chan_root_left.shape[0], *chan_root_right.shape
-            )
-        chan_cov = chan_root_left.bmm(chan_root_right.mT)
-        rank_cov = rank_cov[None].broadcast_to(
-            channels_left.shape[0], self.rank, self.rank
-        )
-        return operators.KroneckerProductLinearOperator(rank_cov, chan_cov)
-
-    def marginal_covariance(
-        self,
-        channels: Tensor | slice = slice(None),  # noqa: B008
-        cache_prefix=None,
-        cache_key=None,
-        device=None,
-    ):
-        if device is not None:
-            device = torch.device(device)
-        if cache_key is not None and torch.is_tensor(cache_key):
-            cache_key = cache_key.item()
-        if cache_prefix is not None:
-            cache_key = (cache_prefix, cache_key)
-        if cache_key is not None and cache_key in self.cache:
-            res = self.cache[cache_key]
-            if device is not None and device != res.device:
-                res = res.to(device)
-                self.cache[cache_key] = res
-            # TODO: why is this necessary? I thought that calling solve would cache this.
-            if not hasattr(res, "_memoize_cache"):
-                res.cholesky()
-            return res
-        if channels is None or channels == slice(None):
-            if self._full_cov is None:
-                fcov = self._marginal_covariance()
-                self._full_cov_dense = fcov.to_dense()
-                if not isinstance(fcov, operators.ConstantDiagLinearOperator):
-                    fcov = operators.CholLinearOperator(fcov.cholesky())
-                self._full_cov = fcov
-                self._logdet = self._full_cov.logdet()
-            if device is not None and device != self._full_cov.device:
-                self._full_cov = self._full_cov.to(device)
-                self._logdet = cast(Tensor, self._logdet).to(device)
-            return self._full_cov
-        cov = self._marginal_covariance(channels)
-        if device is not None and device != cov.device:
-            cov = cov.to(device)
-        if cache_key is not None:
-            self.cache[cache_key] = cov
-        return cov
-
-    def offdiag_covariance(
-        self, channels_left=slice(None), channels_right=slice(None), device=None  # noqa: B008
-    ):
-        odc = self._marginal_covariance(
-            channels=channels_right, channels_left=channels_left
-        )
-        if device is not None:
-            odc = odc.to(device)
-        return odc
-
-    def _marginal_covariance(
-        self, channels: Tensor | slice = slice(None), channels_left=None  # noqa: B008
-    ):
-        channels = self.b.chans_arange[channels]
-        have_left = channels_left is not None
-        if channels_left is None:
-            channels_left = channels
-        nc = channels.numel()
-        ncl = int(channels_left.numel())
-
-        if have_left:
-            if self.cov_kind in ("scalar", "diagonal_by_rank", "diagonal"):
-                # if torch.isin(channels_left.to(channels), channels).any():
-                #     raise ValueError(
-                #         "Don't know how to get non-marginal covariance block "
-                #         f"for cov_kind={self.cov_kind} when the block overlaps "
-                #         "with the diagonal."
-                #     )
-                return operators.ZeroLinearOperator(
-                    self.rank * ncl,  # type: ignore
-                    self.rank * nc,  # type: ignore
-                    dtype=self.b.global_std.dtype,
-                )
-
-        if self.cov_kind == "scalar":
-            eye = operators.IdentityLinearOperator(self.rank * nc, device=self.device)
-            return self.b.global_std.square() * eye
-
-        if self.cov_kind == "diagonal_by_rank":
-            rank_diag = operators.DiagLinearOperator(self.b.rank_std**2)
-            chans_eye = operators.IdentityLinearOperator(nc, device=self.device)
-            return torch.kron(rank_diag, chans_eye)  # type: ignore
-
-        if self.cov_kind == "diagonal":
-            chans_std = self.b.full_std[:, channels]
-            return operators.DiagLinearOperator(chans_std**2)
-
-        if self.cov_kind == "full":
-            marg_cov = self.b.full_cov[:, channels_left][..., channels]
-            r = marg_cov.shape[0]
-            marg_cov = marg_cov.reshape(r * ncl, r * nc)
-            return linear_operator.to_linear_operator(marg_cov)
-
-        if self.cov_kind == "factorized":
-            rank_root = self.b.rank_vt.T * self.b.rank_std
-            rank_cov = rank_root @ rank_root.T
-            chan_root = self.b.channel_vt.T[channels] * self.b.channel_std
-            chan_root_right = chan_root.T
-            if have_left:
-                chan_root = self.b.channel_vt.T[channels_left] * self.b.channel_std
-            chan_cov = chan_root @ chan_root_right
-            return operators.KroneckerProductLinearOperator(rank_cov, chan_cov)
-
-        if self.cov_kind == "factorized_rank_diag":
-            rank_cov = operators.DiagLinearOperator(self.b.rank_std.square())
-            chan_root = self.b.channel_vt.T[channels] * self.b.channel_std
-            chan_root_right = chan_root.T
-            if have_left:
-                chan_root = self.b.channel_vt.T[channels_left] * self.b.channel_std
-            chan_cov = chan_root @ chan_root_right
-            return torch.kron(rank_cov, chan_cov)  # type: ignore
-
-        if self.cov_kind == "factorized_by_rank_rank_diag":
-            rank_std = self.b.rank_std.view(self.rank, 1, 1)
-            chans_std = self.b.channel_std[:, :, None]  # no slice here!
-            rc_std = rank_std * chans_std
-            chans_vt = self.b.channel_vt[:, :, channels]
-            chan_rootl = chan_root = rc_std * chans_vt
-            if have_left:
-                chans_vtl = self.b.channel_vt[:, :, channels_left]
-                chan_rootl = rc_std * chans_vtl
-            blocks = torch.bmm(chan_rootl.mT, chan_root)
-            blocks = linear_operator.to_linear_operator(blocks)
-            if have_left:
-                return more_operators.NonSquareBlockLinearOperator(blocks)
-            return operators.BlockDiagLinearOperator(blocks)
-
-        panic(self.cov_kind)
+    def whiten(self, x: Tensor) -> Tensor:
+        assert x.shape[1:] == (self.rank, self.n_channels)
+        return self.b.temporal_whitener @ x @ self.b.spatial_whitener.T
 
     @classmethod
     def estimate(
         cls,
-        snippets,
-        mean_kind="zero",
-        cov_kind="scalar",
-        shrinkage=0.0,
-        glasso_alpha: float | None = None,
-        eps=1e-4,
+        snippets: Tensor | np.ndarray,
+        *,
+        cov_kind: NoiseCovKind,
         zero_radius: float | None = None,
-        svd_batch_size=256,
-        rgeom=None,
-    ):
-        """Factory method to estimate noise model from TPCA snippets
-
-        Parameters
-        ----------
-        snippets : torch.Tensor
-            (n, rank, c) array of tpca-embedded noise snippets
-            missing values are okay, indicate by NaN please
-        """
+        eps: float = 1e-4,
+        batch_size: int = 2**16,
+    ) -> Self:
         n, rank, n_channels = snippets.shape
-        init_kw = dict(
-            rank=rank, n_channels=n_channels, mean_kind=mean_kind, cov_kind=cov_kind
-        )
         x = torch.asarray(snippets)
         x = x.to(torch.promote_types(x.dtype, torch.float))
-        if zero_radius is not None or shrinkage:
-            assert cov_kind.startswith("factorized")
-            assert rgeom is not None
 
-        # estimate mean and center data
-        if mean_kind == "zero":
-            mean = None
-        elif mean_kind == "by_rank":
-            mean = torch.nanmean(x, dim=(0, 2))
-            assert mean.isfinite().all()
-            x = x - mean.unsqueeze(1)
-        elif mean_kind == "full":
-            mean = torch.nanmean(x, dim=0)
-            mean = torch.where(
-                mean.isnan().all(1).unsqueeze(1),
-                torch.nanmean(mean, dim=1).unsqueeze(1),
-                mean,
+        if cov_kind == "identity":
+            full_var = torch.nanmean(x.square(), dim=0)
+            rank_var = torch.nanmean(full_var, dim=1)
+            global_std = torch.nanmean(rank_var).sqrt().item()
+            return cls.identity(
+                rank,
+                n_channels,
+                std=global_std,
+                zero_radius=zero_radius,
+                device=x.device,
             )
-            x = x - mean
-        else:
-            panic(mean_kind)
+        elif cov_kind != "kronecker":
+            panic(cov_kind)
 
-        # estimate covs
-        # still n, rank, n_channels
-        dxsq = x.square()
-        full_var = torch.nanmean(dxsq, dim=0)
-        rank_var = torch.nanmean(full_var, dim=1)
-        rank_std = rank_var.sqrt_()
-        assert rank_var.isfinite().all()
-        global_var = torch.nanmean(rank_var)
-        global_std = global_var.sqrt()
+        # full cov estimation for rank part via svd
+        # we have NaNs, but we can get rid of them because channels are either all
+        # NaN or not.
 
-        if cov_kind == "scalar":
-            return cls(mean=mean, global_std=global_std, **init_kw)  # type: ignore
-
-        if cov_kind == "by_rank":
-            return cls(mean=mean, global_std=global_std, rank_std=rank_std, **init_kw)  # type: ignore
-
-        if cov_kind == "diagonal":
-            full_var = torch.where(
-                full_var.isnan().all(1).unsqueeze(1),
-                rank_var.unsqueeze(1),
-                full_var,
-            )
-            full_std = full_var.sqrt()
-            return cls(mean=mean, global_std=global_std, full_std=full_std, **init_kw)  # type: ignore
-
-        if cov_kind == "full":
-            x = x.view(n, rank * n_channels)
-            present = torch.isfinite(x).any(dim=0)
-            cov = torch.eye(x.shape[1], device=x.device, dtype=x.dtype)
-            vcov = spiketorch.nancov(x[:, present], force_posdef=True, eps=eps)
-            assert torch.is_tensor(vcov)
-            cov[present[:, None] & present[None, :]] = vcov.view(-1)
-            cov = cov.reshape(rank, n_channels, rank, n_channels)
-            return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)  # type: ignore
-
-        assert cov_kind.startswith("factorized")
-        # handle rank part first, then the spatial part
-
-        # start by getting the rank part of the cov, if necessary, and whitening
-        # the ranks to leave behind x_spatial
-        if "rank_diag" in cov_kind:
-            # rank part is diagonal
-            rank_vt = None
-            x_spatial = x.div_(rank_std.unsqueeze(1))
-            del x
-        else:
-            # full cov estimation for rank part via svd
-            # we have NaNs, but we can get rid of them because channels are either all
-            # NaN or not. below, for the spatial part, no such luck and we have to
-            # evaluate the covariance in a masked way
-
-            # doing this on CPU since the SVD can use a lot of memory.
-            x_rank = x.permute(0, 2, 1)
-            x_rank = x_rank.cpu().reshape(n * n_channels, rank)
-            (valid,) = x_rank.isfinite().all(dim=1).nonzero(as_tuple=True)
-            x_rankv = x_rank[valid]
-            orig_device = x.device
-            del x
-            assert not x_rankv.requires_grad
-            u_rankv, rank_sing, rank_vt = torch.linalg.svd(x_rankv, full_matrices=False)
-
-            correction = torch.tensor(len(x_rankv) - 1.0).sqrt()
-            rank_std = rank_sing / correction
-            rank_std = rank_std.to(orig_device)
-            correction = correction.to(orig_device)
-
-            # whitened spatial part -- reuse storage
-            x_spatial = x_rank
-            del x_rank
-            x_spatial[valid] = u_rankv
-            x_spatial = x_spatial.reshape(n, n_channels, rank).permute(0, 2, 1)
-            x_spatial = x_spatial.to(orig_device)
-            x_spatial.mul_(correction)
-
-        spatial_mask = None
-        if zero_radius:
-            assert rgeom is not None
-            assert rgeom.shape[0] == n_channels
-            rg_np = rgeom.numpy(force=True) if torch.is_tensor(rgeom) else rgeom
-            spatial_mask = squareform(pdist(rg_np)) < zero_radius
-
-        # spatial part could be "by rank" or same for all ranks
-        # either way, there are nans afoot
-        if "by_rank" in cov_kind:
-            channel_std = torch.ones_like(x_spatial[0])
-            channel_vt = torch.zeros((rank, n_channels, n_channels)).to(channel_std)
-            for q in range(rank):
-                xq = x_spatial[:, q]
-                validq = xq.isfinite().any(0)
-                covq = spiketorch.nancov(xq[:, validq])
-                assert torch.is_tensor(covq)
-                if shrinkage:
-                    covq = F.softshrink(covq, shrinkage)
-                fullcovq = torch.eye(xq.shape[1], dtype=covq.dtype, device=covq.device)
-                fullcovq[validq[:, None] & validq[None, :]] = covq.view(-1)
-                if spatial_mask is not None:
-                    fullcovq *= torch.asarray(spatial_mask).to(fullcovq)
-                if glasso_alpha:
-                    res = graphical_lasso(
-                        fullcovq.numpy(force=True),
-                        alpha=glasso_alpha,
-                        mode="cd",
-                        max_iter=100,
-                        verbose=logger.isEnabledFor(DARTSORTDEBUG),
-                    )
-                    fullcovq = torch.from_numpy(res[0]).to(fullcovq)
-                qeig, qv = torch.linalg.eigh(fullcovq)
-                channel_std[q] = qeig.sqrt()
-                channel_vt[q] = qv.T
-        else:
-            x_spatial = x_spatial.reshape(n * rank, n_channels)
-            valid = x_spatial.isfinite().any(0)
-
-            if "noise" in cov_kind:
-                xx = x_spatial.numpy(force=True)
-                invalid = np.isnan(xx)
-                xx[invalid] = (
-                    np.random.default_rng(0).normal(size=invalid.sum()).astype(xx.dtype)
-                )
-                x_spatial = torch.from_numpy(xx).to(x_spatial)
-                valid = slice(None)
-                init_kw["cov_kind"] = cov_kind.removesuffix("noise")
-                cov = torch.cov(x_spatial.T.double())
-                cov = spiketorch.enforce_posdef(cov, eps=eps)
-            else:
-                cov = spiketorch.nancov(
-                    x_spatial[:, valid].double(), force_posdef=True, eps=eps
-                )
-            assert torch.is_tensor(cov)
-            if shrinkage:
-                cov = F.softshrink(cov, shrinkage)
-
-            if glasso_alpha and isinstance(glasso_alpha, int):
-                logger.dartsortdebug(
-                    f"Run glasso cv on {x_spatial.shape=} {cov.abs().max()=}"
-                )
-                # todo: clean up, propagate, ...
-                glasso = GraphicalLassoCV(
-                    alphas=glasso_alpha,
-                    n_jobs=1,
-                    verbose=logger.isEnabledFor(DARTSORTDEBUG),
-                    assume_centered=True,
-                )
-                xx = x_spatial[:, valid].double().numpy(force=True)
-                invalid = np.isnan(xx)
-                xx[invalid] = np.random.default_rng(0).normal(size=invalid.sum())
-                with warnings.catch_warnings(action="ignore"):
-                    glasso.fit(xx)
-                logger.dartsortdebug(f"Best alpha was {glasso.alpha_=}")
-                glasso_alpha = glasso.alpha_
-
-            if glasso_alpha and isinstance(glasso_alpha, float):
-                logger.dartsortdebug(f"Run glasso on {cov.shape=}")
-                res = graphical_lasso(
-                    cov.numpy(force=True),
-                    alpha=glasso_alpha,
-                    mode="cd",
-                    max_iter=100,
-                    verbose=logger.isEnabledFor(DARTSORTDEBUG),
-                )
-                cov = torch.from_numpy(res[0]).to(cov)
-
-            cov_spatial = cov = cov.to(x_spatial)
-            assert cov_spatial.isfinite().all()
-            if valid != slice(None):
-                assert torch.is_tensor(valid)
-                cov_spatial = torch.eye(
-                    x_spatial.shape[1], dtype=x_spatial.dtype, device=x_spatial.device
-                )
-                cov_spatial[valid[:, None] & valid[None, :]] = cov.view(-1)
-            assert cov_spatial.isfinite().all()
-            if spatial_mask is not None:
-                cov_spatial *= torch.asarray(spatial_mask).to(cov_spatial)
-            assert cov_spatial.isfinite().all()
-            channel_eig, channel_v = torch.linalg.eigh(cov_spatial.double())
-            if spatial_mask is None:
-                assert channel_eig.isfinite().all()
-            else:
-                # the spatial mask is, i guess, not so plausible as a cov...
-                channel_eig[channel_eig < eps] = eps
-            channel_std = channel_eig.sqrt().float()
-            channel_vt = channel_v.T.contiguous().float()
-            assert channel_std.isfinite().all()
-            assert channel_vt.isfinite().all()
-
-        return cls(
-            mean=mean,
-            global_std=global_std,
-            rank_std=rank_std,
-            rank_vt=rank_vt,
-            channel_std=channel_std,
-            channel_vt=channel_vt,
-            zero_radius=zero_radius,
-            **init_kw,  # type: ignore
+        # doing this on CPU since the SVD can use a lot of memory.
+        orig_device = x.device
+        x_rank = x.permute(0, 2, 1).cpu().reshape(n * n_channels, rank)
+        del x
+        (valid,) = x_rank.isfinite().all(dim=1).nonzero(as_tuple=True)
+        u_rankv, rank_sing, rank_vt = torch.linalg.svd(
+            x_rank[valid], full_matrices=False
         )
+        correction = torch.tensor(valid.numel() - 1.0).sqrt()
+        rank_std = (rank_sing / correction).to(orig_device)
+        rank_root = rank_vt.to(orig_device).T * rank_std
+        temporal_cov = rank_root @ rank_root.T
+
+        # whitened spatial part -- reuse storage
+        x_spatial = x_rank
+        del x_rank
+        x_spatial[valid] = u_rankv
+        x_spatial = x_spatial.reshape(n, n_channels, rank).permute(0, 2, 1)
+        x_spatial = x_spatial.to(orig_device)
+        x_spatial.mul_(correction.to(orig_device))
+        x_spatial = x_spatial.reshape(n * rank, n_channels)
+
+        cov = spatial_covariance(x_spatial.split(batch_size))
+        min_eig = torch.linalg.eigvalsh(cov)[0]
+        if min_eig < eps:
+            cov.diagonal().add_(eps - min_eig)
+        spatial_cov = cov.to(x_spatial)
+
+        return cls(temporal_cov, spatial_cov, zero_radius=zero_radius)
 
     @classmethod
     def estimate_from_hdf5(
         cls,
-        hdf5_path,
-        mean_kind="zero",
-        cov_kind="factorizednoise",
+        hdf5_path: str | Path,
+        *,
+        cov_kind: NoiseCovKind,
         motion: MotionInfo | None = None,
         tpca: "PCA | BaseTemporalPCA | None" = None,
         interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
-        device=None,
+        device: torch.device | None = None,
         rank: int | None = None,
-        shrinkage=0.0,
-        glasso_alpha: float | None = None,
         zero_radius: float | None = None,
-        rgeom=None,
-    ):
+    ) -> Self:
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = cast(h5py.Dataset, h5["geom"])[:]
         if motion is None:
@@ -1080,21 +544,12 @@ class EmbeddedNoise(BModule):
             do_tpca=True,
         )
         assert snippets.shape[0] > 1
-        logger.dartsortdebug(
-            f"Estimate embedded noise with {mean_kind=} {cov_kind=} {glasso_alpha=} "
-            f"from {snippets.shape=}."
-        )
         if rank is not None:
             assert snippets.shape[1] == rank
-        return cls.estimate(
-            snippets,
-            shrinkage=shrinkage,
-            mean_kind=mean_kind,
-            cov_kind=cov_kind,
-            glasso_alpha=glasso_alpha,
-            zero_radius=zero_radius,
-            rgeom=rgeom,
+        logger.dartsortdebug(
+            f"Estimate embedded noise with {cov_kind=} from {snippets.shape=}."
         )
+        return cls.estimate(snippets, cov_kind=cov_kind, zero_radius=zero_radius)
 
 
 def generate_interpolated_residual_snippets(
@@ -1248,6 +703,24 @@ def interpolate_residual_snippets(
     return snips_out
 
 
+def spatial_covariance(batches: Iterable[Tensor]) -> Tensor:
+    cov = pair_counts = None
+    for xb in batches:
+        assert xb.ndim == 2
+        xb = xb.to(torch.promote_types(xb.dtype, torch.float))
+        if cov is None:
+            cov = xb.new_zeros((xb.shape[1], xb.shape[1]), dtype=torch.double)
+            pair_counts = torch.zeros_like(cov)
+        assert pair_counts is not None
+
+        observed = xb.isfinite().to(xb)
+        xb = xb.nan_to_num()
+        cov += (xb.T @ xb).double()
+        pair_counts += (observed.T @ observed).double()
+    assert cov is not None and pair_counts is not None
+    return cov / pair_counts.clamp_(min=1.0)
+
+
 def residual_covariance(
     sorting: DARTsortSorting,
     do_interpolation: bool,
@@ -1256,7 +729,6 @@ def residual_covariance(
     device: torch.device | None = None,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
-    seed: int = 0,
     batch_size=256,
 ) -> Tensor:
     assert sorting.parent_h5_path is not None
@@ -1276,31 +748,11 @@ def residual_covariance(
     else:
         snipgen = sorting._yield_dataset(residual_dataset_name, batch_size=batch_size)
 
-    rg = spawn_torch_rg(seed=seed, device=device)
-    cov = None
-    N = 0
-    for snip in snipgen:
-        snip = torch.asarray(snip).to(device=device, non_blocking=True)
-        nc = snip.shape[2]
-        snip = snip.view(-1, nc)
-        if cov is None:
-            cov = snip.new_zeros((nc, nc))
-
-        isna = snip.isnan()
-        rvs = torch.randn(
-            size=snip.shape, generator=rg, device=device, dtype=snip.dtype
-        )
-        snip.masked_scatter_(isna, rvs)
-
-        scov = torch.cov(snip.T)
-        n = snip.shape[0]
-        N += n
-        w = n / N
-        cov += scov.sub_(cov).mul_(w)
-    assert N > 0
-    assert cov is not None
-
-    return cov
+    batches = (
+        torch.asarray(snip).to(device=device, non_blocking=True).view(-1, snip.shape[2])
+        for snip in snipgen
+    )
+    return spatial_covariance(batches).float()
 
 
 def residual_welch_whitener(

@@ -127,6 +127,30 @@ def registered_geometry(
     pitches_pad_up = int(np.round(upward_drift / pitch))
     pitches_pad_down = int(np.round(downward_drift / pitch))
 
+    shifts_um = pitch * np.arange(-pitches_pad_down, pitches_pad_up + 1)
+    unique_shifted_positions = combine_shifted_geometries(
+        geom, shifts_um, min_distance=min_distance
+    )
+    registered_geom = order_depth_major(unique_shifted_positions, get_orders(geom))
+    assert np.isclose(get_pitch(registered_geom), pitch)
+
+    return registered_geom
+
+
+def combine_shifted_geometries(
+    geom: np.ndarray, shifts_um: np.ndarray, min_distance: float | None = None
+) -> np.ndarray:
+    """Combine unique channel positions after shifting geom by shifts_um
+
+    By unique, I mean that two sites are the same if they're within min_distance / 2,
+    where min_distance is the smallest inter chan distance by default.
+
+    There is no ordering here! Use order_depth_major.
+    """
+    assert geom.ndim == 2
+    shifts_um = np.asarray(shifts_um, dtype=float)
+    assert shifts_um.ndim == 1
+
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
     # we know they are the same if their distance is smaller than:
@@ -147,17 +171,16 @@ def registered_geometry(
     # better loop
     chan_ix = np.arange(len(geom))
     kdt = KDTree(geom)
-    n_shifts = pitches_pad_up + pitches_pad_down + 1
     unique_shifted_positions_toobig = np.zeros(
-        (n_shifts * len(geom), geom.shape[1]), dtype=geom.dtype
+        ((len(shifts_um) + 1) * len(geom), geom.shape[1]), dtype=geom.dtype
     )
     unique_shifted_positions_toobig[: len(geom)] = geom
     cur_ix = len(geom)
-    for shift in range(-pitches_pad_down, pitches_pad_up + 1):
+    for shift in shifts_um:
         cur_pos = unique_shifted_positions_toobig[:cur_ix]
 
         # sign is flipped, since we're shifting the bad guys
-        cur_pos_shifted = cur_pos - [0, pitch * shift]
+        cur_pos_shifted = cur_pos - [0, shift]
         _, i = kdt.query(cur_pos_shifted, distance_upper_bound=min_distance)
 
         # figure out which were unmatched
@@ -167,16 +190,12 @@ def registered_geometry(
         n_new = len(i_unobs)
         if not n_new:
             continue
-        sh = [0, pitch * shift]
+        sh = [0, shift]
         unique_shifted_positions_toobig[cur_ix : cur_ix + n_new] = geom[i_unobs] + sh
         cur_ix += n_new
         assert cur_ix <= len(unique_shifted_positions_toobig)
 
-    unique_shifted_positions = unique_shifted_positions_toobig[:cur_ix]
-    registered_geom = order_depth_major(unique_shifted_positions, get_orders(geom))
-    assert np.isclose(get_pitch(registered_geom), pitch)
-
-    return registered_geom
+    return unique_shifted_positions_toobig[:cur_ix]
 
 
 def order_depth_major(geom: np.ndarray, orders: np.ndarray) -> np.ndarray:
@@ -213,13 +232,42 @@ def superres_registered_geometry(
         row_pitch = row_pitch / 2
     if row_pitch == pitch:
         return None
+    subdivisions = round(pitch / row_pitch)
+
+    pad_up = (registered_geom[:, 1].max() - geom[:, 1].max()) / pitch
+    pad_down = (geom[:, 1].min() - registered_geom[:, 1].min()) / pitch
+    pitches_pad_up = int(np.round(pad_up))
+    pitches_pad_down = int(np.round(pad_down))
+    assert np.isclose(pad_up, pitches_pad_up) and np.isclose(pad_down, pitches_pad_down)
+    assert pitches_pad_up >= 0 and pitches_pad_down >= 0
+
+    shifts_um = row_pitch * np.arange(
+        -subdivisions * pitches_pad_down, subdivisions * (pitches_pad_up + 1)
+    )
+    min_distance = np.sqrt(pdist(geom, metric="sqeuclidean").min())
+    min_distance = min(float(min_distance), row_pitch)
+    srgeom = combine_shifted_geometries(geom, shifts_um, min_distance=min_distance)
+
+    tol = row_pitch / 100
+    in_column_range = np.zeros(len(srgeom), dtype=bool)
+    for x in np.unique(registered_geom[:, 0]):
+        column_y = registered_geom[registered_geom[:, 0] == x, 1]
+        in_column = srgeom[:, 0] == x
+        in_column_range[in_column] = np.logical_and(
+            srgeom[in_column, 1] >= column_y.min() - tol,
+            srgeom[in_column, 1] <= column_y.max() + tol,
+        )
+    srgeom = srgeom[in_column_range]
+    del in_column_range
 
     lattice = to_grid_layout(registered_geom, row_pitch)
-    dist, _ = KDTree(lattice).query(registered_geom)
-    if dist.max() > row_pitch / 100:
+    dist, _ = KDTree(lattice).query(srgeom)
+    if dist.max() > tol:
         return None
+    dist, _ = KDTree(srgeom).query(registered_geom)
+    assert dist.max() <= tol
 
-    return order_depth_major(lattice, get_orders(geom))
+    return order_depth_major(srgeom, get_orders(geom))
 
 
 def bending_laplacian(srgeom: np.ndarray, n_neighbors: int = 4) -> np.ndarray:

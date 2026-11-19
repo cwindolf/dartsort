@@ -205,6 +205,15 @@ def handle_negative_jobs(n_jobs: int):
             n_cores = None
     if n_cores is None:
         n_cores = multiprocessing.cpu_count()
+    try:
+        import psutil
+
+        nth = psutil.cpu_count()
+        nco = psutil.cpu_count(logical=False)
+        if nth and nco:
+            n_cores = max(1, n_cores // (nth // nco))
+    except ImportError:
+        pass
     if n_jobs < 0:
         n_jobs = n_cores + (n_jobs + 1)
     assert n_jobs >= 0

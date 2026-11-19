@@ -148,11 +148,13 @@ def test_superres_registered_geometry(up_down):
     srgeom = drift_util.superres_registered_geometry(np1, rgeom)
     assert srgeom is not None
     assert drift_util.get_pitch(srgeom) == 20.0
-    srgeom_via_probe = drift_util.registered_geometry(
-        drift_util.to_grid_layout(np1, 20.0), **drift
-    )
+    srgeom_columns = []
+    for x in np.unique(rgeom[:, 0]):
+        column_y = rgeom[rgeom[:, 0] == x, 1]
+        y = np.arange(column_y.min(), column_y.max() + 10.0, 20.0)
+        srgeom_columns.append(np.c_[np.full_like(y, x), y])
     a = np.unique(srgeom, axis=0)
-    b = np.unique(srgeom_via_probe, axis=0)
+    b = np.unique(np.concatenate(srgeom_columns), axis=0)
     assert a.shape == b.shape
     assert np.allclose(a, b)
     assert cdist(rgeom, srgeom).min(axis=1).max() < 1e-6

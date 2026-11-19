@@ -17,9 +17,9 @@ from .torch_util import BModule, torch_compile
 from .waveform_util import make_channel_index
 
 if TYPE_CHECKING:
-    from .noise_util import EmbeddedNoise
+    from .noise_util import KroneckerNoise
 else:
-    EmbeddedNoise = None
+    KroneckerNoise = None
 
 
 def interpolate_by_chunk(
@@ -1060,35 +1060,47 @@ class StableFeaturesInterpolator(BModule):
 
 class NeighborhoodFiller(BModule):
     batch_size: int
+    neighborhoods: SpikeNeighborhoods
 
     def interp_to_chans(
         self,
         waveforms: torch.Tensor,
         neighborhood_ids: torch.Tensor,
         target_channels: torch.Tensor | slice,
+        *,
+        mean: torch.Tensor,
         out: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if waveforms.shape[0] <= self.batch_size and out is None:
-            return self._interp_to_chans(waveforms, neighborhood_ids, target_channels)
+        assert waveforms.ndim == 3
+        assert mean.shape == (waveforms.shape[1], self.neighborhoods.n_channels)
+        source_channels = self.neighborhoods.b.neighborhoods[neighborhood_ids]
+        source_mean = F.pad(mean, (0, 1))[:, source_channels].permute(1, 0, 2)
+        waveforms = waveforms - source_mean
+        del source_mean
 
-        if isinstance(target_channels, torch.Tensor):
-            assert target_channels.ndim == 1
-            ntarg = target_channels.shape[0]
+        if waveforms.shape[0] <= self.batch_size and out is None:
+            out = self._interp_to_chans(waveforms, neighborhood_ids, target_channels)
         else:
-            ntarg = len(range(*target_channels.indices(len(self.b.prgeom))))
-        out_shp = (*waveforms.shape[:2], ntarg)
-        if out is None:
-            out = waveforms.new_zeros(out_shp)
-        else:
-            assert out.shape == out_shp
-        n = out.shape[0]
-        for i0 in range(0, n, self.batch_size):
-            i1 = min(n, i0 + self.batch_size)
-            out[i0:i1] = self._interp_to_chans(
-                waveforms=waveforms[i0:i1],
-                neighborhood_ids=neighborhood_ids[i0:i1],
-                target_channels=target_channels,
-            )
+            if isinstance(target_channels, torch.Tensor):
+                assert target_channels.ndim == 1
+                ntarg = target_channels.shape[0]
+            else:
+                ntarg = len(range(*target_channels.indices(len(self.b.prgeom))))
+            out_shp = (*waveforms.shape[:2], ntarg)
+            if out is None:
+                out = waveforms.new_zeros(out_shp)
+            else:
+                assert out.shape == out_shp
+            n = out.shape[0]
+            for i0 in range(0, n, self.batch_size):
+                i1 = min(n, i0 + self.batch_size)
+                out[i0:i1] = self._interp_to_chans(
+                    waveforms=waveforms[i0:i1],
+                    neighborhood_ids=neighborhood_ids[i0:i1],
+                    target_channels=target_channels,
+                )
+
+        out += mean[:, target_channels]
         return out
 
     def _interp_to_chans(
@@ -1112,6 +1124,7 @@ class NeighborhoodInterpolator(NeighborhoodFiller):
         assert len(prgeom) == neighborhoods.n_channels + 1
         self.erp_params: InterpolationParams = params.normalize()
         self.batch_size = batch_size
+        self.neighborhoods = neighborhoods
         self.register_buffer("prgeom", prgeom.clone())
         self.b.prgeom[-1].fill_(torch.nan)
         neighb_data = interp_precompute(
@@ -1150,15 +1163,16 @@ class NeighborhoodInterpolator(NeighborhoodFiller):
 class NeighborhoodImputer(NeighborhoodFiller):
     def __init__(
         self,
-        noise: EmbeddedNoise,
+        noise: KroneckerNoise,
         neighborhoods: SpikeNeighborhoods,
         batch_size: int = 1024,
     ):
         super().__init__()
-        prec = all_neighb_precisions(noise, neighborhoods)
-        self.register_buffer("prec", prec)
-        chans_arange = torch.arange(noise.n_channels, device=prec.device)
+        spatial_prec = all_neighb_precisions(noise, neighborhoods)
+        self.register_buffer("spatial_prec", spatial_prec)
+        chans_arange = torch.arange(noise.n_channels, device=spatial_prec.device)
         self.register_buffer("chans_arange", chans_arange)
+        self.register_buffer("spatial_cov_zpad", F.pad(noise.b.spatial_cov, (0, 1, 0, 1)))
         self.neighborhoods = neighborhoods
         self.noise = noise
         self.batch_size = batch_size
@@ -1173,11 +1187,16 @@ class NeighborhoodImputer(NeighborhoodFiller):
             target_channels = self.b.chans_arange[target_channels]
         source_channels = self.neighborhoods.b.neighborhoods[neighborhood_ids]
 
-        waveforms = waveforms.view(waveforms.shape[0], 1, -1)
-        waveforms = waveforms.bmm(self.b.prec[neighborhood_ids])
         waveforms = waveforms.view(waveforms.shape[0], self.noise.rank, -1)
+        waveforms = waveforms.bmm(self.b.spatial_prec[neighborhood_ids])
 
-        return self.noise.cov_batch_mul(waveforms, source_channels, target_channels)
+        if target_channels.ndim == 1:
+            target_channels = target_channels[None].expand(len(waveforms), -1)
+        assert target_channels.shape[0] == len(waveforms)
+        spatial_cov = self.b.spatial_cov_zpad[
+            source_channels[:, :, None], target_channels[:, None, :]
+        ]
+        return waveforms.bmm(spatial_cov)
 
 
 class ToFullProbeInterpolator(BModule):
@@ -1329,33 +1348,32 @@ class FromFullProbeInterpolator(BModule):
         )
 
 
-def all_neighb_precisions(noise: EmbeddedNoise, neighborhoods: SpikeNeighborhoods):
+def all_neighb_precisions(noise: KroneckerNoise, neighborhoods: SpikeNeighborhoods):
     channel_index = neighborhoods.b.neighborhoods
     nneighb = channel_index.shape[0]
     nc_obs = channel_index.shape[1]
-    rank = noise.rank
     nc = noise.n_channels
     dev = channel_index.device
 
-    Cooinv = torch.zeros((nneighb, rank, nc_obs, rank, nc_obs), device=dev)
+    spatial_prec = torch.zeros((nneighb, nc_obs, nc_obs), device=dev)
+    spatial_infos = torch.zeros((nneighb,), dtype=torch.int, device=dev)
 
     for j, joix in enumerate(channel_index):
         (joixvix,) = (joix < nc).nonzero(as_tuple=True)
         joixv = joix[joixvix]
         ncoi = joixv.numel()
 
-        jCoo = noise.marginal_covariance(
-            channels=joixv, cache_prefix=neighborhoods.name, cache_key=j
+        jspatial_cov = noise.b.spatial_cov[joixv][:, joixv]
+        jspatial_L, spatial_infos[j] = torch.linalg.cholesky_ex(jspatial_cov)
+        jspatial_Linv = torch.linalg.solve_triangular(
+            jspatial_L, torch.eye(ncoi).to(jspatial_L), upper=False
         )
+        jspatial_prec = jspatial_Linv.T @ jspatial_Linv  # Cinv = Linv' Linv
+        spatial_prec[j, joixvix[:, None], joixvix[None]] = jspatial_prec
 
-        jL = jCoo.cholesky(upper=False)  # C = LL'
-        jLinv = jL.inverse().to_dense()
-        jCooinv = jLinv.T @ jLinv  # Cinv = Linv' Linv
-
-        # fancy inds to front! love that.
-        jCooinv = jCooinv.view(rank, ncoi, rank, ncoi)
-        Cooinv[j, :, joixvix[:, None], :, joixvix[None]] = jCooinv.permute(1, 3, 0, 2)
-
-    obsdim = rank * nc_obs
-    Cooinv = Cooinv.view(nneighb, obsdim, obsdim)
-    return Cooinv
+    nbail = int(spatial_infos.count_nonzero())
+    if nbail:
+        raise ValueError(
+            f"Noise covariance not positive definite in {nbail} neighborhoods."
+        )
+    return spatial_prec

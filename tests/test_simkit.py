@@ -252,7 +252,8 @@ def test_reproducible_and_residual(
 
     # check that the residual has the right stats
     if noise_kind == "zero":
-        assert (f == 0.0).all()
+        float16_atol = np.finfo(np.float16).eps * st0.ptp_amplitudes.max()
+        np.testing.assert_allclose(f, 0.0, atol=float16_atol)
     else:
         noise = StationaryFactorizedNoise.estimate(f)
         nc = f.shape[2]

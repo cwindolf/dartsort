@@ -629,7 +629,6 @@ class DemolishView(MixtureComponentPlot):
             eval_scores=mix_data.eval_scores,
             train_data=mix_data.train_data,
             eval_data=mix_data.val_data,  # type: ignore
-            cur_crit=None,
         )
         return group_res
 
@@ -853,6 +852,7 @@ class CovarianceView(MixtureComponentPlot):
             waveforms=features.to(mix_data.tmm.b.means),
             neighborhood_ids=mix_data.train_data.neighborhood_ids[inu_train],
             target_channels=target_chans,
+            mean=mix_data.tmm.b.means[unit_id],
         )
         feat_interp = feat_interp.view(feat_interp.shape[0], -1)
 
@@ -866,9 +866,10 @@ class CovarianceView(MixtureComponentPlot):
 
         # noise covariance
         assert mix_data.tmm.noise is not None
-        cov_noise = mix_data.tmm.noise.marginal_covariance(
-            channels=target_chans
-        ).to_dense()
+        noise = mix_data.tmm.noise
+        cov_noise = torch.kron(
+            noise.b.temporal_cov, noise.b.spatial_cov[target_chans][:, target_chans]
+        )
         assert cov_noise.shape == cov_interp.shape
 
         # signal covariance
@@ -1191,11 +1192,8 @@ class SplitView(MixtureComponentPlot):
 
         if debug_info.split_data is not None:
             split_inds = debug_info.split_data.indices.cpu()
-            tw = debug_info.split_data.duties
-            if tw is not None:
-                tw = tw.numpy(force=True)
         else:
-            tw = split_inds = None
+            split_inds = None
 
         return (
             txt,
@@ -1208,7 +1206,6 @@ class SplitView(MixtureComponentPlot):
             mean_chans,
             chans_by_km,
             split_inds,
-            tw,
         )
 
     def draw(
@@ -1232,7 +1229,6 @@ class SplitView(MixtureComponentPlot):
             mean_chans,
             chans_by_km,
             _split_inds,
-            tw,
         ) = c
 
         # layout
@@ -1289,14 +1285,7 @@ class SplitView(MixtureComponentPlot):
         )
 
         # pc scatter
-        if loadings is not None and tw is not None:
-            s = ax_pc.scatter(*loadings.T, c=tw, s=5, lw=0, alpha=1)
-            plt.colorbar(s, ax=ax_pc, shrink=0.3)
-            ax_pc.scatter(
-                *loadings.T, edgecolors=colors, s=10, lw=0.5, facecolor="none", alpha=1
-            )
-            ax_pc.grid()
-        elif loadings is not None and tw is None:
+        if loadings is not None:
             ax_pc.scatter(*loadings.T, c=colors, s=5, alpha=0.5)
             ax_pc.grid()
         else:

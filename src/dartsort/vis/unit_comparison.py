@@ -854,11 +854,11 @@ class CollidednessBreakdown(UnitComparisonPlot):
     def draw(self, panel, comparison, unit_id):
         gt_sorting = comparison.gt_analysis.sorting
         ax = panel.subplots()
-        if not hasattr(gt_sorting, "collidedness"):
+        if not hasattr(gt_sorting, "total_collidedness"):
             ax.text(
                 0,
                 0,
-                "gt sorting has\nno collidedness",
+                "gt sorting has\nno total_collidedness",
                 fontsize=8,
                 ha="center",
                 va="center",
@@ -870,9 +870,9 @@ class CollidednessBreakdown(UnitComparisonPlot):
         unsorted_masku = comparison.unsorted_detection[inu]
         unsorted_missu = inu[np.logical_not(unsorted_masku)]
 
-        coll_match = gt_sorting.collidedness[matchu]
-        coll_miss = gt_sorting.collidedness[missu]
-        coll_umiss = gt_sorting.collidedness[unsorted_missu]
+        coll_match = gt_sorting.total_collidedness[matchu]
+        coll_miss = gt_sorting.total_collidedness[missu]
+        coll_umiss = gt_sorting.total_collidedness[unsorted_missu]
 
         colls = [coll_match, coll_miss, coll_umiss]
         nothing = not any(a.size for a in colls)
@@ -927,7 +927,7 @@ class CollidednessBreakdown(UnitComparisonPlot):
             bbox_to_anchor=(0, 1, 1, 1),
             ncols=min(3, len(colls)),
         )
-        ax.set_xlabel("collidedness")
+        ax.set_xlabel("total collidedness")
         ax.set_ylabel("frequency")
 
 
