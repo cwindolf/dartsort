@@ -998,8 +998,6 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         save_collidedness=False,
         extra_unit_information: pd.DataFrame | None = None,
         chunk_len_s=0.5,
-        pool_engine="thread",
-        mp_context="spawn",
     ):
         folder = ensure_path(folder)
         folder.mkdir(exist_ok=True)
@@ -1030,9 +1028,8 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     folder=recording_dir,
                     overwrite=True,
                     n_jobs=handle_negative_jobs(n_jobs)[1],
-                    pool_engine=pool_engine,
+                    pool_engine="thread",
                     chunk_duration=chunk_len_s,
-                    mp_context=mp_context,
                 )
                 recording = cast(BaseRecording, recording)
                 for w in ws:
