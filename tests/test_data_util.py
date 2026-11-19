@@ -57,6 +57,37 @@ def test_from_peeling():
         assert np.array_equal(dsorting.labels, labels)
 
 
+def test_save_pack_extra_features():
+    rg = np.random.default_rng(0)
+    n = 20_017
+    channels = rg.integers(0, 384, size=(n,))
+    locs = rg.normal(size=(n, 4)).astype(np.float32)
+    with tempfile.TemporaryDirectory() as tempdir:
+        peeling_h5 = Path(tempdir) / "test.h5"
+        with h5py.File(peeling_h5, "w") as h:
+            h.create_dataset("sampling_frequency", data=1)
+            h.create_dataset("times_samples", data=np.arange(n), chunks=(1024,))
+            h.create_dataset("channels", data=channels, chunks=(1024,))
+            h.create_dataset("labels", data=rg.integers(0, 10, size=(n,)), chunks=(1024,))
+            h.create_dataset("point_source_localizations", data=locs, chunks=(1024, 4))
+
+        sorting = DARTsortSorting.from_peeling_hdf5(
+            peeling_h5, load_simple_features=False
+        )
+        new_labels = rg.integers(0, 5, size=(n,))
+        sorting = sorting.ephemeral_replace(labels=new_labels)
+        sorting_npz = Path(tempdir) / "test.npz"
+        sorting.save(
+            sorting_npz, pack_extra_features=["point_source_localizations", "labels"]
+        )
+
+        loaded = DARTsortSorting.load(sorting_npz)
+        assert np.array_equal(loaded.times_samples, np.arange(n))
+        assert np.array_equal(loaded.channels, channels)
+        assert np.array_equal(loaded.labels, new_labels)
+        assert np.array_equal(loaded.load_dataset("point_source_localizations"), locs)
+
+
 def test_flatten_gmm_on_disk():
     rg = np.random.default_rng(0)
     n, n_cand = times_samples.size, 3

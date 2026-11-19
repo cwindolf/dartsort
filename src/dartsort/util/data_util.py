@@ -1,6 +1,8 @@
 import warnings
+import zipfile
 from collections import namedtuple
 from collections.abc import Generator, Sequence
+from contextlib import nullcontext
 from copy import copy
 from pathlib import Path
 from threading import Lock
@@ -766,9 +768,14 @@ class DARTsortSorting:
 
         data.update(self._ephemeral_features)
         eph_keys = list(self._ephemeral_features.keys())
+        streamed_keys = []
+        unmasked = self.get_mask_indices() is None
         for k in pack_extra_features or []:
-            data[k] = getattr(self, k)
             eph_keys.append(k)
+            if unmasked and k not in data and self.has_dataset_on_disk_not_loaded(k):
+                streamed_keys.append(k)
+            else:
+                data[k] = getattr(self, k)
         if pack_simple_features:
             # ephemeral already stored so just need to check persistent
             for k in self._persistent_features:
@@ -783,7 +790,12 @@ class DARTsortSorting:
         data["loaded_persistent_features"] = np.array(
             list(self._persistent_features.keys())
         )
-        np.savez(sorting_npz, **data, allow_pickle=False)
+        pack_hdf5_to_npz(
+            sorting_npz,
+            self.parent_h5_path,
+            dataset_names=[*data.keys(), *streamed_keys],
+            loaded_datasets=data,
+        )
 
     @classmethod
     def load(
@@ -1559,6 +1571,54 @@ def virtual_concatenate_sorting_h5s(
         output_h5.create_dataset("chunk_starts_samples", data=chunk_starts)
         output_h5["last_chunk_start"] = np.int64(chunk_starts[-1])
         output_h5["last_chunk_index"] = np.int64(chunk_starts.size - 1)
+
+
+def pack_hdf5_to_npz(
+    npz_filename: str | Path,
+    h5_filename: str | Path | None,
+    dataset_names: Sequence[str],
+    loaded_datasets: dict[str, np.ndarray] | None,
+    chunks_per_batch: int = 8,
+):
+    npz_filename = ensure_path(npz_filename)
+    assert npz_filename.suffix == ".npz"
+    if loaded_datasets is None:
+        loaded_datasets = {}
+    need_h5 = any(name not in loaded_datasets for name in dataset_names)
+    if need_h5:
+        assert h5_filename is not None
+        h5_filename = ensure_path(h5_filename, strict=True)
+
+    with (
+        zipfile.ZipFile(
+            npz_filename, "w", compression=zipfile.ZIP_STORED, allowZip64=True
+        ) as zf,
+        h5py.File(h5_filename, "r", locking=False) if need_h5 else nullcontext() as h5,
+    ):
+        for name in dataset_names:
+            with zf.open(f"{name}.npy", "w", force_zip64=True) as npy_file:
+                if name in loaded_datasets:
+                    np.lib.format.write_array(
+                        npy_file, np.asanyarray(loaded_datasets[name]), allow_pickle=False
+                    )
+                    continue
+
+                assert h5 is not None
+                dset = h5[name]
+                assert isinstance(dset, h5py.Dataset)
+                assert dset.ndim >= 1
+                header = dict(
+                    descr=np.lib.format.dtype_to_descr(dset.dtype),
+                    fortran_order=False,
+                    shape=dset.shape,
+                )
+                np.lib.format.write_array_header_1_0(npy_file, header)
+                n = dset.shape[0]
+                chunk_rows = 1024 if dset.chunks is None else dset.chunks[0]
+                batch_size = chunks_per_batch * chunk_rows
+                for i0 in range(0, n, batch_size):
+                    i1 = min(n, i0 + batch_size)
+                    npy_file.write(np.ascontiguousarray(dset[i0:i1]).tobytes())
 
 
 def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:
