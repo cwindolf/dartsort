@@ -1234,6 +1234,7 @@ def _dedup_unit_loop(
     dt: np.ndarray, scores: np.ndarray, radius: int, discard: np.ndarray
 ):
     n = scores.shape[0]
+    toofar = radius + 1
     i0 = 0
     while i0 < n - 1:
         if dt[i0] > radius:
@@ -1257,15 +1258,15 @@ def _dedup_unit_loop(
             discard[ii] = True
 
             # figure out isi after bridging the gap, handle edges
-            bridge_isi = 0.0
+            bridge_isi = 0
             if ii < n - 1:
                 bridge_isi += dt[ii]
             else:
-                bridge_isi = np.inf
+                bridge_isi = toofar
             if ii > 0:
                 bridge_isi += dt[ii - 1]
             else:
-                bridge_isi = np.inf
+                bridge_isi = toofar
 
             # update dt with bridge isi
             if ii < n - 1:

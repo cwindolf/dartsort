@@ -79,6 +79,18 @@ def test_deduplicate_spikes_in_place(sorting, radius_ms, shuffle_times):
     assert mutated.labels is sorting.labels
 
 
+def test_deduplicate_spikes_train_edge():
+    sorting = DARTsortSorting(
+        times_samples=np.array([100, 104, 108, 112]),
+        channels=np.zeros(4, dtype=np.int64),
+        labels=np.zeros(4, dtype=np.int64),
+        sampling_frequency=1000.0,
+        ephemeral_features={"scores": np.array([3.0, 1.0, 4.0, 0.5])},
+    )
+    out = deduplicate_spikes(sorting, radius_ms=5.0).labels
+    np.testing.assert_array_equal(out, [0, -1, 0, -1])
+
+
 # -- combine_gmm_scores
 
 
