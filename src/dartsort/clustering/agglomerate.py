@@ -1235,54 +1235,35 @@ def deduplicate_spikes(
 
 @numba.njit(nogil=True)
 def _dedup_unit_loop(
-    dt: np.ndarray, scores: np.ndarray, radius: int, discard: np.ndarray
+    t: np.ndarray, scores: np.ndarray, radius: int, discard: np.ndarray
 ):
-    n = scores.shape[0]
-    toofar = radius + 1
+    n = t.shape[0]
     i0 = 0
     while i0 < n - 1:
-        if dt[i0] > radius:
+        if t[i0 + 1] - t[i0] > radius:
             i0 += 1
             continue
 
         i1 = i0 + 1
-        while i1 < n - 1 and dt[i1] <= radius:
+        while i1 < n - 1 and t[i1 + 1] - t[i1] <= radius:
             i1 += 1
 
         # now, i0:i1 + 1 is a slice of violators
-        # discard until all valid
-        score_slice = scores[i0 : i1 + 1]
-        dt_slice = dt[i0:i1]
-        order = np.argsort(score_slice)
-        # putting the -1 there ensures at least one spike is kept
-        # that case is only relevant when 0 in dt_slice
-        for oo in order[:-1]:
-            # discard spike i0 + oo
+        order = np.argsort(-scores[i0 : i1 + 1], kind="mergesort")
+        for oo in order:
             ii = i0 + oo
-            discard[ii] = True
+            if discard[ii]:
+                continue
+            j = ii
+            while j > i0 and t[ii] - t[j - 1] <= radius:
+                j -= 1
+                discard[j] = True
+            j = ii
+            while j < i1 and t[j + 1] - t[ii] <= radius:
+                j += 1
+                discard[j] = True
 
-            # figure out isi after bridging the gap, handle edges
-            bridge_isi = 0
-            if ii < n - 1:
-                bridge_isi += dt[ii]
-            else:
-                bridge_isi = toofar
-            if ii > 0:
-                bridge_isi += dt[ii - 1]
-            else:
-                bridge_isi = toofar
-
-            # update dt with bridge isi
-            if ii < n - 1:
-                dt[ii] = bridge_isi
-            if ii > 0:
-                dt[ii - 1] = bridge_isi
-
-            # check if done
-            if dt_slice.min() > radius:
-                break
-
-        i0 = i1
+        i0 = i1 + 1
 
 
 @numba.njit(nogil=True)
@@ -1308,9 +1289,6 @@ def _dedup_batch(
             batch_end -= 1
         unfinished[batch_end:j1] = True
 
-        if batch_end - j0 <= 1:
-            continue
-        dt = np.diff(t[j0:batch_end])
-        if dt.min() > radius:
-            continue
-        _dedup_unit_loop(dt, scores[j0:batch_end], radius, discard[j0:batch_end])
+        _dedup_unit_loop(
+            t[j0:batch_end], scores[j0:batch_end], radius, discard[j0:batch_end]
+        )

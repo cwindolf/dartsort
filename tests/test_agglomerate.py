@@ -84,16 +84,19 @@ def test_deduplicate_spikes_in_place(sorting, radius_ms, shuffle_times, batch_si
     assert mutated.labels is sorting.labels
 
 
-def test_deduplicate_spikes_train_edge():
+def test_deduplicate_spikes_runs():
+    times = np.r_[100, 104, 108, 112, 1000 + 4 * np.arange(10)]
+    labels = np.r_[np.zeros(4, dtype=np.int64), np.ones(10, dtype=np.int64)]
+    scores = np.r_[3.0, 1.0, 4.0, 0.5, np.arange(10.0, 0.0, -1.0)]
     sorting = DARTsortSorting(
-        times_samples=np.array([100, 104, 108, 112]),
-        channels=np.zeros(4, dtype=np.int64),
-        labels=np.zeros(4, dtype=np.int64),
+        times_samples=times,
+        channels=np.zeros_like(times),
+        labels=labels,
         sampling_frequency=1000.0,
-        ephemeral_features={"scores": np.array([3.0, 1.0, 4.0, 0.5])},
+        ephemeral_features={"scores": scores},
     )
     out = deduplicate_spikes(sorting, radius_ms=5.0).labels
-    np.testing.assert_array_equal(out, [0, -1, 0, -1])
+    np.testing.assert_array_equal(out, [0, -1, 0, -1, *[1, -1] * 5])
 
 
 # -- combine_gmm_scores
