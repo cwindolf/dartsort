@@ -20,6 +20,11 @@
 #
 # This pipeline is intended for users with very long recordings who want more control over the matching step.
 #
+# To that end, this also showcases *dartsort*'s `low_memory` flag. In that setting, *dartsort* falls back to
+# memmaps in certain situations or uses streaming algorithms to avoid ever allocating any array containing
+# spikes across the whole dataset, although it is allowed to store per-spike arrays in stages where the data
+# is subsampled.
+#
 # Since the matching step is the only one which passes over the whole recording, long recordings can benefit
 # from additional parallelism there beyond *dartsort*'s built-in single- or multi-GPU parallelism.
 # In this notebook, the matching step is run "chunked", but just in a for loop without parallelism.
@@ -33,6 +38,7 @@
 # %%
 import dataclasses
 
+import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import spikeinterface.full as si
@@ -52,6 +58,9 @@ experiment_path = dartsort.ensure_path("~/scratch/ibl-dandi-example/", mkdir=Tru
 
 # %%
 ds_dir = experiment_path / "dartsort-chunked"
+
+# %%
+# import shutil; shutil.rmtree(ds_dir)
 
 # %%
 # IBL BWM dandiset, example recording
@@ -116,8 +125,8 @@ plt.ylabel("channels")
 # # Configuration
 
 # %%
-# use defaults, except for the pipeline change
-cfg = dartsort.DARTsortUserConfig()
+# low_memory mode! otherwise, defaults are fine.
+cfg = dartsort.DARTsortUserConfig(low_memory=True)
 
 # %%
 # process into an internal config object for later use
@@ -125,6 +134,14 @@ internal_cfg = dartsort.to_internal_config(cfg)
 
 # %% [markdown]
 # # Initial spike detection and motion tracking model fits
+#
+# The first stage should set `fit_motion_models_only`, since motion tracking requires extracting
+# spikes across the full dataset and should therefore be chunked in this setting. That chunking
+# happens in the next section.
+#
+# If you're not doing motion tracking, you can still keep all of this stuff; later stages will
+# resume from the work that was finished here. Or, you could equivalently start from the next
+# call to `dartsort()` below the "Resume: estimate..." heading.
 
 # %%
 dartsort.dartsort(rec, ds_dir, cfg=dataclasses.replace(cfg, fit_motion_models_only=True))
@@ -184,12 +201,12 @@ if need_motion_peaks:
 if need_motion_peaks and not (ds_dir / "motionthreshold.h5").exists():
     motion_chunk_h5s = sorted(ds_dir.glob("motionthreshold_batch*.h5"))
     dartsort.virtual_concatenate_sorting_h5s(motion_chunk_h5s, ds_dir / "motionthreshold.h5")
-    motion_sorting = dartsort.load(ds_dir / "motionthreshold.h5")
-    assert np.array_equal(
-        motion_sorting.load_dataset("chunk_starts_samples"),
-        np.arange(0, duration_samples, chunk_length_samples),
-    )
-    print(motion_sorting)
+    with h5py.File(ds_dir / "motionthreshold.h5", "r", locking=False) as h5:
+        assert np.array_equal(
+            h5["chunk_starts_samples"][:],
+            np.arange(0, duration_samples, chunk_length_samples),
+        )
+        print(f"{h5['times_samples'].shape[0]} spikes for motion tracking")
 
 # %%
 # !ls -lah {ds_dir}
@@ -245,16 +262,26 @@ for batch_ix, batch_start_samples in enumerate(range(0, duration_samples, 60 * 3
 #
 # Users can change this. If you don't want to merge, set `postprocessing="clean"` in the configuration
 # section above. In that case, you could run the cleaning step on each chunk before concatenating: the
-# merge needs to agree across the batched matching output, but the output of cleaning is the same when
-# run batchwise or on the full result.
+# merge needs to agree across the batched matching output, but the output of cleaning is approximately the
+# same when run batchwise or on the full concatenation, except near chunk boundaries.
 #
 # Here, extra features (amplitudes, localizations) are loaded by the default behavior of `dartsort.load`,
 # which can be turned off for users who don't need them.
 
 # %%
-sorting = dartsort.concatenate_sortings(
-    [dartsort.load(h5) for h5 in sorted(ds_dir.glob("matching1_batch*.h5"))]
-)
+matching_h5 = ds_dir / "matching1.h5"
+if not matching_h5.exists():
+    dartsort.virtual_concatenate_sorting_h5s(
+        sorted(ds_dir.glob("matching1_batch*.h5")), matching_h5
+    )
+if internal_cfg.computation_cfg.low_memory:
+    dartsort.pack_peeling_hdf5_to_npz(matching_h5, ds_dir / "matching1.npz")
+    sorting = dartsort.load(ds_dir / "matching1.npz", low_memory=True)
+    sorting = dartsort.with_labels_in_memmap(
+        sorting, ds_dir / "matching1_labels_tmp_memmap.npy"
+    )
+else:
+    sorting = dartsort.load(matching_h5)
 
 # %%
 sorting = dartsort.cluster(
@@ -268,6 +295,10 @@ sorting = dartsort.cluster(
 # %%
 # if you want to keep this...
 sorting.save(ds_dir / "dartsort_sorting.npz")
+if internal_cfg.computation_cfg.low_memory:
+    sorting = dartsort.load(ds_dir / "dartsort_sorting.npz", low_memory=True)
+    (ds_dir / "matching1_labels_tmp_memmap.npy").unlink()
+    (ds_dir / "matching1.npz").unlink()
 
 # %% [markdown]
 # # Visualize

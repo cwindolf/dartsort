@@ -34,7 +34,7 @@ class DARTsortResult(TypedDict):
     """Esimated motion"""
 
 
-def ds_load(output_dir: str | Path) -> DARTsortResult | None:
+def ds_load(output_dir: str | Path, low_memory: bool = False) -> DARTsortResult | None:
     from ..util.motion import try_load_motion_info
 
     output_dir = ensure_path(output_dir)
@@ -44,7 +44,7 @@ def ds_load(output_dir: str | Path) -> DARTsortResult | None:
     sorting_npz = output_dir / "dartsort_sorting.npz"
     if not sorting_npz.exists():
         return None
-    sorting = load(sorting_npz)
+    sorting = load(sorting_npz, low_memory=low_memory)
     motion = try_load_motion_info(output_dir)
     assert motion is not None
     return {"sorting": sorting, "motion": motion}
@@ -374,6 +374,7 @@ def ds_handle_delete_intermediate_features(
         final_h5 = ensure_path(final_sorting.parent_h5_path)
         assert final_h5.exists()
         assert final_h5.parent == output_dir
+        final_h5.with_suffix(".npz").unlink(missing_ok=True)
         keep_models = None
     else:
         assert cfg.fit_matching_models_only
@@ -393,6 +394,7 @@ def ds_handle_delete_intermediate_features(
 
         logger.dartsortdebug(f"Clean up: remove {h5_path=}.")
         h5_path.unlink()
+        h5_path.with_suffix(".npz").unlink(missing_ok=True)
         if models_path.exists():
             assert models_path.is_dir()
             if models_path == keep_models:

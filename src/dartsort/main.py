@@ -23,7 +23,12 @@ from .peel import (
 )
 from .templates import TemplateData, estimate_template_library
 from .transform import WaveformPipeline
-from .util.data_util import DARTsortSorting, check_recording
+from .util.data_util import (
+    DARTsortSorting,
+    check_recording,
+    pack_peeling_hdf5_to_npz,
+    with_labels_in_memmap,
+)
 from .util.internal_config import (
     ClusteringConfig,
     ClusteringFeaturesConfig,
@@ -125,15 +130,15 @@ def dartsort(
     """
     output_dir = ensure_path(output_dir, mkdir=True)
     logger.info(tag)
+    cfg = to_internal_config(cfg)
 
     # check if totally done (to avoid doing preprocessing)
     # if not done, the sorter will still try to resume where it left off later
-    ds_res = ds_load(output_dir)
+    ds_res = ds_load(output_dir, low_memory=cfg.computation_cfg.low_memory)
     if ds_res is not None:
         return ds_res
 
     # convert cfg to internal format and store it for posterity
-    cfg = to_internal_config(cfg)
     ds_dump_config(cfg, output_dir)
 
     # in benchmarking, it can be useful to resume from initial detection
@@ -276,6 +281,7 @@ def _dartsort_impl(
                 motion=motion,
                 load_simple_features=False,
                 save_residual=is_final and cfg.save_full_final_residual,
+                low_memory=cfg.computation_cfg.low_memory,
             )
         assert sorting is not None
         logger.info(f"Initial detection: {sorting}")
@@ -345,6 +351,7 @@ def _dartsort_impl(
     assert motion is not None
     assert next_step > 0  # matching starts at 1
 
+    labels_tmp_npy: Path | None = None
     for step in range(next_step, cfg.matching_iterations + 1):
         is_final = step == cfg.matching_iterations
 
@@ -357,6 +364,7 @@ def _dartsort_impl(
         else:
             _nspk = cfg.subsampling_spikes_per_channel * motion.geom.shape[0]
         _pres = 1.0 if is_final else cfg.subsampling_fraction(recording)
+        step_low_memory = cfg.computation_cfg.low_memory and _nspk is None
         (
             step_clus_cfg,
             step_clfeat_cfg,
@@ -395,11 +403,19 @@ def _dartsort_impl(
                 fit_only=fit_only,
                 save_residual=is_final and cfg.save_full_final_residual,
                 save_fit_data=cfg.save_fit_data,
+                low_memory=step_low_memory,
             )
         if fit_only:
             ds_save_models(cfg, f"matching{step}", output_dir, work_dir)
             break
         assert sorting is not None
+        if labels_tmp_npy is not None:
+            labels_tmp_npy.unlink()
+            labels_tmp_npy = None
+        if step_low_memory and sorting.labels is not None:
+            h5_path = ensure_path(sorting.parent_h5_path, strict=True)
+            labels_tmp_npy = h5_path.parent / f"{h5_path.stem}_labels_tmp_memmap.npy"
+            sorting = with_labels_in_memmap(sorting, labels_tmp_npy)
         logger.info(f"Matching step {step}: {sorting}")
         ds_save_features(cfg, sorting.parent_h5_path, output_dir, work_dir, is_final)
 
@@ -426,14 +442,13 @@ def _dartsort_impl(
             work_dir=work_dir,
         )
 
-    # finally handle scratch directory and delete intermediate files if requested
-    ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
     total_timer.stop()
     ds_save_timing(ret["timing"], output_dir)
     logger.dartsortdebug(f"Timing: {ret['timing']}")
 
     # return without handling sorting if we're just fitting models
     if cfg.fit_matching_models_only:
+        ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
         # apologies for returning without a sorting. this use case is niche,
         # and I'd rather keep the nice return type for users, I think.
         return ret
@@ -448,6 +463,15 @@ def _dartsort_impl(
         sorting.parent_h5_path = final_h5_path
 
     sorting.save(output_dir / "dartsort_sorting.npz")
+    if cfg.computation_cfg.low_memory:
+        sorting = DARTsortSorting.load(
+            output_dir / "dartsort_sorting.npz", low_memory=True
+        )
+    if labels_tmp_npy is not None:
+        labels_tmp_npy.unlink()
+
+    # finally handle scratch directory and delete intermediate files if requested
+    ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
     ret["sorting"] = sorting
 
     return ret
@@ -462,6 +486,7 @@ def initial_detection(
     show_progress=True,
     load_simple_features: bool = True,
     save_residual: bool = False,
+    low_memory: bool = False,
 ) -> DARTsortSorting:
     """Initial spike detection
 
@@ -487,6 +512,7 @@ def initial_detection(
         _nspk = None
     else:
         _nspk = cfg.subsampling_spikes_per_channel * recording.get_num_channels()
+    low_memory = low_memory and _nspk is None
     if cfg.detection_type == "subtract":
         assert isinstance(cfg.initial_detection_cfg, SubtractionConfig)
         assert not cfg.initial_detection_cfg.fit_only  # this would not detect anything
@@ -505,6 +531,7 @@ def initial_detection(
             load_simple_features=load_simple_features,
             save_residual=save_residual,
             save_fit_data=cfg.save_fit_data,
+            low_memory=low_memory,
         )
         assert sorting is not None
     elif cfg.detection_type == "threshold":
@@ -524,6 +551,7 @@ def initial_detection(
             computation_cfg=cfg.computation_cfg,
             load_simple_features=load_simple_features,
             save_fit_data=cfg.save_fit_data,
+            low_memory=low_memory,
         )
     elif cfg.detection_type == "match":
         assert isinstance(cfg.initial_detection_cfg, MatchingConfig)
@@ -544,6 +572,7 @@ def initial_detection(
             load_simple_features=load_simple_features,
             save_residual=save_residual,
             save_fit_data=cfg.save_fit_data,
+            low_memory=low_memory,
         )
         assert sorting is not None
     else:
@@ -571,6 +600,8 @@ def subtract(
     load_simple_features: bool = True,
     save_residual: bool = False,
     save_fit_data: bool = False,
+    low_memory: bool = False,
+    pack_to_npz: str | Path | None = None,
 ) -> DARTsortSorting | None:
     output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -605,8 +636,11 @@ def subtract(
     cleanup_and_log_gpu_usage(computation_cfg, f"Post subtract ({hdf5_filename}):")
 
     if detection_path is not None:
-        sorting = DARTsortSorting.from_peeling_hdf5(
-            detection_path, load_simple_features=load_simple_features
+        sorting = _load_peeled_sorting(
+            detection_path,
+            load_simple_features=load_simple_features,
+            low_memory=low_memory,
+            pack_to_npz=pack_to_npz,
         )
     else:
         sorting = None
@@ -644,6 +678,8 @@ def match(
     fit_only: bool = False,
     save_residual: bool = False,
     save_fit_data: bool = False,
+    low_memory: bool = False,
+    pack_to_npz: str | Path | None = None,
 ) -> DARTsortSorting | None:
     output_dir = ensure_path(output_dir)
     model_dir = output_dir / model_subdir
@@ -725,8 +761,11 @@ def match(
         return None
 
     assert sorting_path is not None
-    sorting = DARTsortSorting.from_peeling_hdf5(
-        sorting_path, load_simple_features=load_simple_features
+    sorting = _load_peeled_sorting(
+        sorting_path,
+        load_simple_features=load_simple_features,
+        low_memory=low_memory,
+        pack_to_npz=pack_to_npz,
     )
 
     return sorting
@@ -745,6 +784,8 @@ def grab(
     hdf5_filename="grab.h5",
     model_subdir="grab_models",
     computation_cfg: ComputationConfig | None = None,
+    low_memory: bool = False,
+    pack_to_npz: str | Path | None = None,
 ) -> DARTsortSorting:
     output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -771,7 +812,12 @@ def grab(
     cleanup_and_log_gpu_usage(computation_cfg, f"Post grab ({hdf5_filename}):")
 
     assert sorting_path is not None
-    sorting = DARTsortSorting.from_peeling_hdf5(sorting_path)
+    sorting = _load_peeled_sorting(
+        sorting_path,
+        load_simple_features=True,
+        low_memory=low_memory,
+        pack_to_npz=pack_to_npz,
+    )
 
     return sorting
 
@@ -795,6 +841,8 @@ def threshold(
     computation_cfg: ComputationConfig | None = None,
     load_simple_features: bool = True,
     save_fit_data: bool = False,
+    low_memory: bool = False,
+    pack_to_npz: str | Path | None = None,
 ) -> DARTsortSorting:
     output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -826,11 +874,33 @@ def threshold(
     cleanup_and_log_gpu_usage(computation_cfg, f"Post threshold ({hdf5_filename}):")
 
     assert sorting_path is not None
-    sorting = DARTsortSorting.from_peeling_hdf5(
-        sorting_path, load_simple_features=load_simple_features
+    sorting = _load_peeled_sorting(
+        sorting_path,
+        load_simple_features=load_simple_features,
+        low_memory=low_memory,
+        pack_to_npz=pack_to_npz,
     )
 
     return sorting
+
+
+def _load_peeled_sorting(
+    h5_path: Path,
+    *,
+    load_simple_features: bool,
+    low_memory: bool,
+    pack_to_npz: str | Path | None,
+) -> DARTsortSorting:
+    if pack_to_npz is None and low_memory:
+        pack_to_npz = h5_path.with_suffix(".npz").name
+    if pack_to_npz is not None:
+        pack_peeling_hdf5_to_npz(h5_path, h5_path.parent / pack_to_npz)
+    if low_memory:
+        assert pack_to_npz is not None
+        return DARTsortSorting.load(h5_path.parent / pack_to_npz, low_memory=True)
+    return DARTsortSorting.from_peeling_hdf5(
+        h5_path, load_simple_features=load_simple_features
+    )
 
 
 def cluster(

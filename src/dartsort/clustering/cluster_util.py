@@ -74,7 +74,10 @@ def apply_reclustering(
     else:
         assert unit_snrs is not None
         times_samples = sorting.times_samples
-        times_updated = times_samples if in_place else times_samples.copy()
+        if in_place and times_samples.flags.writeable:
+            times_updated = times_samples
+        else:
+            times_updated = times_samples.copy()
         apply_time_shifts(
             times_updated,
             sorting.labels,

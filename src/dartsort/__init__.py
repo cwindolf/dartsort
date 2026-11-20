@@ -60,10 +60,12 @@ from .util.data_util import (
     get_tpca,
     load,
     load_stored_tsvd,
+    pack_peeling_hdf5_to_npz,
     sorting_from_spikeinterface,
     try_get_denoising_pipeline,
     try_get_model_dir,
     virtual_concatenate_sorting_h5s,
+    with_labels_in_memmap,
 )
 from .util.drift_util import registered_geometry
 from .util.internal_config import *

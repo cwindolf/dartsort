@@ -1039,8 +1039,8 @@ class DARTsortSorting:
         if self.parent_h5_path:
             h5_str = f" from {self.parent_h5_path}."
         if self.labels is not None:
-            noise_prop = (self.labels < 0).mean().item()
-            noise_pct = 100 * noise_prop
+            _, _, neg_count = pos_int_unique_and_counts(self.labels)
+            noise_pct = 100 * neg_count / max(1, ns)
             noise_str = f" ({noise_pct:.2f}% noise)"
         else:
             noise_str = ""
@@ -1646,6 +1646,45 @@ def pack_hdf5_to_npz(
                 for i0 in range(0, n, batch_size):
                     i1 = min(n, i0 + batch_size)
                     npy_file.write(np.ascontiguousarray(dset[i0:i1]).tobytes())
+
+
+def pack_peeling_hdf5_to_npz(h5_path: Path, npz_path: Path):
+    h5_path = ensure_path(h5_path, strict=True)
+    with h5py.File(h5_path, "r", locking=False) as h5:
+        small = {
+            k: cast(h5py.Dataset, h5[k])[()]
+            for k in h5
+            if DARTsortSorting._no_check_needed(k)
+        }
+        streamed = [k for k in ("times_samples", "channels", "labels") if k in h5]
+    data = dict(
+        parent_h5_path=np.array(str(relative_to_walk_up(h5_path, npz_path.parent))),
+        ephemeral_feature_names=np.array(
+            [k for k in small if k not in ("geom", "sampling_frequency")]
+        ),
+        loaded_persistent_features=np.array([]),
+        **small,
+    )
+    pack_hdf5_to_npz(
+        npz_path,
+        h5_path,
+        dataset_names=[*data.keys(), *streamed],
+        loaded_datasets=data,
+    )
+
+
+def with_labels_in_memmap(
+    sorting: DARTsortSorting, memmap_npy_path: Path
+) -> DARTsortSorting:
+    assert sorting.labels is not None
+    labels = np.lib.format.open_memmap(
+        memmap_npy_path,
+        mode="w+",
+        dtype=sorting.labels.dtype,
+        shape=sorting.labels.shape,
+    )
+    labels[:] = sorting.labels
+    return sorting.ephemeral_replace(labels=labels)
 
 
 def npz_memmaps(npz_filename: Path) -> dict[str, np.ndarray]:
@@ -2712,7 +2751,7 @@ def _apply_remapping_and_count_over(labels: np.ndarray, remapping: np.ndarray) -
     return over_count
 
 
-@numba.njit(nogil=True, parallel=True)
+@numba.njit(nogil=True)
 def welford_by_label_1d(
     labels: np.ndarray, x: np.ndarray, mean: np.ndarray, count: np.ndarray
 ):
