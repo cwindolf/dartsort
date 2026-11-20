@@ -1120,6 +1120,7 @@ def clean_final_sorting(
     merge_mapping: np.ndarray | None = None,
     score_by=("gmm_log_liks", "scores"),
     in_place: bool = True,
+    batch_size: int = 2**20,
 ) -> tuple[DARTsortSorting, np.ndarray]:
     """Deduplicate, flatten, depth-order
 
@@ -1146,8 +1147,12 @@ def clean_final_sorting(
         )
         dedup_ms = -1.0
 
-    sorting = deduplicate_spikes(sorting, dedup_ms, in_place=in_place)
-    sorting, reorder = reorder_by_depth(sorting, motion=motion, in_place=in_place)
+    sorting = deduplicate_spikes(
+        sorting, dedup_ms, in_place=in_place, batch_size=batch_size
+    )
+    sorting, reorder = reorder_by_depth(
+        sorting, motion=motion, in_place=in_place, batch_size=batch_size
+    )
     if merge_mapping is None:
         return sorting, reorder
     return sorting, reorder[np.unique(merge_mapping, return_inverse=True)[1]]

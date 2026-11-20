@@ -2712,23 +2712,10 @@ def _apply_remapping_and_count_over(labels: np.ndarray, remapping: np.ndarray) -
     return over_count
 
 
-def mean_by_label_1d(sorting: DARTsortSorting, x: np.ndarray) -> np.ndarray:
-    """Average a property within each label (ignoring -1s)."""
-    assert sorting.labels is not None
-    if not sorting.labels.size:
-        return np.zeros((0,))
-    assert x.dtype.kind == "f"
-    assert x.ndim == 1
-    assert sorting.labels.shape == x.shape
-    return _welford_by_label_1d(sorting.labels, x)
-
-
 @numba.njit(nogil=True, parallel=True)
-def _welford_by_label_1d(labels: np.ndarray, x: np.ndarray):
-    K = labels.max() + 1
-    mean = np.zeros((K,), dtype=np.float64)
-    count = np.zeros((K,), dtype=np.float64)
-
+def welford_by_label_1d(
+    labels: np.ndarray, x: np.ndarray, mean: np.ndarray, count: np.ndarray
+):
     # deliberately not parallel!
     for i in range(labels.shape[0]):
         li = labels[i]
@@ -2740,7 +2727,3 @@ def _welford_by_label_1d(labels: np.ndarray, x: np.ndarray):
         cli += 1.0
         count[li] = cli
         mean[li] += (xi - mean[li]) / cli
-
-    mean[count == 0] = np.nan
-
-    return mean
