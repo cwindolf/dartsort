@@ -674,11 +674,14 @@ def scatter_feature_vs_depth(
         c = np.clip(amplitudes[to_show], 0, amplitude_color_cutoff)
         amplitude_cmap = plt.get_cmap(amplitude_cmap)
         c = amplitude_cmap(c / amplitude_color_cutoff)
+        color_norm = plt.Normalize(0, amplitude_color_cutoff)
         order = slice(None)
         show_ellipses = False
     elif c is not None:
         c = plt.get_cmap(amplitude_cmap)(c[to_show])
+        color_norm = plt.Normalize(0, 1)
     elif labels is not None:
+        color_norm = None
         assert amplitudes is not None
         order = np.concatenate(
             (
@@ -720,6 +723,9 @@ def scatter_feature_vs_depth(
             rasterized=rasterized,
             **scatter_kw,
         )
+    if color_norm is not None:
+        scat.set_cmap(amplitude_cmap)  # type: ignore  # ty: ignore[x]
+        scat.set_norm(color_norm)  # type: ignore  # ty: ignore[x]
 
     if show_ellipses:
         ellip = add_ellipses(
