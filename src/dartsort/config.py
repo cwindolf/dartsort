@@ -139,7 +139,10 @@ class DARTsortUserConfig:
     tmpdir_parent: str | None = None
     """Control where tmpdirs are created."""
     low_memory: bool = False
-    """Best effort at not using tons of RAM. If you notice memory problems, please get in touch!"""
+    """Best effort at not using tons of RAM. If you notice memory problems, please get in
+    touch! Note that process pools may be used in some places here, so if you're running
+    dartsort in a script with low_memory=True you'll need to wrap it in an
+    `if __name__ == '__main__'` block."""
     save_intermediates: bool = False
     """Store all spike features from intermediate steps (for debugging)"""
 

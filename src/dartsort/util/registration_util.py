@@ -1,5 +1,5 @@
-from collections.abc import Generator
-from contextlib import nullcontext
+from collections.abc import Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -21,6 +21,7 @@ from .internal_config import (
     default_motion_estimation_cfg,
 )
 from .job_util import ensure_computation_config
+from .multiprocessing_util import handle_negative_jobs
 from .py_util import databag
 
 
@@ -51,13 +52,20 @@ def dredge_estimate_motion(
         assert spikes.parent_h5_path is not None
         spikes = spikes.parent_h5_path
 
+    geom = recording.get_channel_locations()
     spike_batches = MotionSpikeBatches(
         spikes=spikes,
-        geom=recording.get_channel_locations(),
+        geom=geom,
         motion_cfg=motion_cfg,
         localizations_dataset_name=localizations_dataset_name,
         amplitudes_dataset_name=amplitudes_dataset_name,
     )
+    pad = motion_cfg.probe_boundary_padding_um
+    n_jobs = 0
+    if computation_cfg.low_memory and len(spike_batches) >= 50:
+        _, n_jobs = handle_negative_jobs(
+            computation_cfg.actual_n_jobs(small=True, cpu=True)
+        )
 
     # run registration
     with TemporaryDirectory(
@@ -67,6 +75,9 @@ def dredge_estimate_motion(
             spike_batches=spike_batches,
             low_memory=computation_cfg.low_memory,
             tmpdir=Path(tmpdir),
+            depth_limits_um=(geom[:, 1].min() - pad, geom[:, 1].max() + pad),
+            time_limits_s=(recording.get_start_time(), recording.get_end_time()),
+            n_jobs=n_jobs,
             rigid=motion_cfg.rigid,
             bin_um=motion_cfg.spatial_bin_length_um,
             bin_s=motion_cfg.temporal_bin_length_s,
@@ -95,7 +106,7 @@ def dredge_estimate_motion(
 
 
 @databag
-class MotionSpikeBatches:
+class MotionSpikeBatches(Sequence[tuple[np.ndarray, np.ndarray, np.ndarray]]):
     spikes: DARTsortSorting | Path
     geom: np.ndarray
     motion_cfg: MotionEstimationConfig
@@ -103,43 +114,48 @@ class MotionSpikeBatches:
     amplitudes_dataset_name: str
     batch_size: int = 2**20
 
-    def __iter__(self) -> Generator[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    def __len__(self) -> int:
+        with self._datasets() as (_, _, times, batch_size):
+            return len(range(0, times.shape[0], batch_size))
+
+    def __getitem__(self, i: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:  # ty: ignore
         pad = self.motion_cfg.probe_boundary_padding_um
         xmin = self.geom[:, 0].min() - pad
         xmax = self.geom[:, 0].max() + pad
         zmin = self.geom[:, 1].min() - pad
         zmax = self.geom[:, 1].max() + pad
 
+        with self._datasets() as (locs, amps, times, batch_size):
+            n = times.shape[0]
+            i0 = i * batch_size
+            if i < 0 or i0 >= n:
+                raise IndexError(i)
+            i1 = min(n, i0 + batch_size)
+            batch_locs = locs[i0:i1]
+            x = batch_locs[:, 0]
+            z = batch_locs[:, 2]
+            a = amps[i0:i1]
+            valid = np.logical_and(x == x.clip(xmin, xmax), z == z.clip(zmin, zmax))
+            if self.motion_cfg.min_amplitude:
+                np.logical_and(valid, a >= self.motion_cfg.min_amplitude, out=valid)
+            return a[valid], z[valid], times[i0:i1][valid]
+
+    @contextmanager
+    def _datasets(self):
         if isinstance(self.spikes, Path):
-            context = h5py.File(self.spikes, "r", locking=False)
-        else:
-            context = nullcontext(self.spikes)
-        with context as source:
-            if isinstance(source, h5py.File):
-                locs = source[self.localizations_dataset_name]
-                amps = source[self.amplitudes_dataset_name]
-                times = source["times_seconds"]
+            with h5py.File(self.spikes, "r", locking=False) as h5:
+                locs = h5[self.localizations_dataset_name]
+                amps = h5[self.amplitudes_dataset_name]
+                times = h5["times_seconds"]
                 assert isinstance(locs, h5py.Dataset)
                 assert isinstance(amps, h5py.Dataset)
                 assert isinstance(times, h5py.Dataset)
-                batch_size = self.batch_size
-            else:
-                locs = getattr(source, self.localizations_dataset_name)
-                amps = getattr(source, self.amplitudes_dataset_name)
-                times = source.times_seconds
-                batch_size = max(1, times.shape[0])
-
-            n = times.shape[0]
-            for i0 in range(0, n, batch_size):
-                i1 = min(n, i0 + batch_size)
-                batch_locs = locs[i0:i1]
-                x = batch_locs[:, 0]
-                z = batch_locs[:, 2]
-                a = amps[i0:i1]
-                valid = np.logical_and(x == x.clip(xmin, xmax), z == z.clip(zmin, zmax))
-                if self.motion_cfg.min_amplitude:
-                    np.logical_and(valid, a >= self.motion_cfg.min_amplitude, out=valid)
-                yield a[valid], z[valid], times[i0:i1][valid]
+                yield locs, amps, times, self.batch_size
+        else:
+            locs = getattr(self.spikes, self.localizations_dataset_name)
+            amps = getattr(self.spikes, self.amplitudes_dataset_name)
+            times = self.spikes.times_seconds
+            yield locs, amps, times, max(1, times.shape[0])
 
 
 def dredge_to_si(dredge_motion_est: MotionEstimate) -> Motion:
