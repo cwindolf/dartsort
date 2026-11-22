@@ -1000,9 +1000,21 @@ class BasePeeler(BModule):
         self, chunk_starts_samples: np.ndarray, n_chunks: int, ordered: bool = False
     ) -> np.ndarray:
         rg = np.random.default_rng(self.random_seed)
-        chunk_starts_samples = rg.choice(
-            chunk_starts_samples, size=n_chunks, replace=False
+        n_candidates = chunk_starts_samples.shape[0]
+        duration_s = (
+            self.recording.get_num_samples() / self.recording.sampling_frequency
         )
+
+        # some stratified sampling to reduce variance
+        # get logarithmically more pieces to stratify over as recording grows
+        n_pieces = int(3 * np.log1p(duration_s))
+        n_pieces = max(1, min(n_candidates, n_chunks, n_pieces))
+        piece = np.arange(n_candidates) * n_pieces // n_candidates
+        piece_sizes = np.bincount(piece, minlength=n_pieces)
+        rank = np.concatenate([rg.permutation(s) for s in piece_sizes])
+        order = np.lexsort((rg.random(n_candidates), rank))
+
+        chunk_starts_samples = chunk_starts_samples[order[:n_chunks]]
         if ordered:
             chunk_starts_samples.sort()
 

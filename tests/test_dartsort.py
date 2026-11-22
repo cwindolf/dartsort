@@ -8,6 +8,10 @@ import pytest
 
 import dartsort
 from dartsort.transform.single_channel_denoiser import default_pretrained_path
+from dartsort.util.internal_config import (
+    default_computation_cfg,
+    default_motion_computation_cfg,
+)
 
 
 @pytest.mark.parametrize("do_motion_estimation", [True])
@@ -27,13 +31,21 @@ def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
         peeler_sampling_cfg=dartsort.FitSamplingConfig(n_residual_snips=512),
         featurization_cfg=dartsort.FeaturizationConfig(),
         motion_estimation_cfg=dartsort.MotionEstimationConfig(
-            do_motion_estimation=do_motion_estimation, rigid=True
+            do_motion_estimation=do_motion_estimation,
+            rigid=True,
+            motion_batching_mode="coarse_guided_online",
+            motion_chunk_len_s=4.0,
+            motion_coarse_bin_s=2.0,
         ),
         work_in_tmpdir=True,
         save_intermediate_features=True,
         save_intermediate_labels=True,
         matching_iterations=0,
         preprocessing="none",
+        computation_cfg=dataclasses.replace(default_computation_cfg, low_memory=True),
+        motion_computation_cfg=dataclasses.replace(
+            default_motion_computation_cfg, low_memory=True
+        ),
     )
     res = dartsort.dartsort(sim_recording, output_dir=tmp_path, cfg=cfg)
     assert res["sorting"].parent_h5_path is not None

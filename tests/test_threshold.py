@@ -49,6 +49,37 @@ def test_residual_snips_from_silent_chunks(tmp_path, mini_simulations):
         assert h5["times_seconds"][:].min() >= rec.get_duration() / 2 - 1.0
 
 
+def test_stratified_sample_chunks(mini_simulations):
+    rec = mini_simulations["driftn_szmini"]["recording"]
+    thresholder = Threshold.from_config(
+        recording=rec,
+        waveform_cfg=WaveformConfig(),
+        thresholding_cfg=ThresholdingConfig(),
+        featurization_cfg=FeaturizationConfig(
+            do_localization=False, do_tpca_denoise=False, save_amplitudes=False
+        ),
+        sampling_cfg=FitSamplingConfig(),
+    )
+    n_candidates = 1000
+    candidates = np.arange(n_candidates)
+    n_pieces_max = int(3 * np.log1p(rec.get_duration()))
+    assert n_pieces_max > 1
+
+    for n_chunks in (1, 2, n_pieces_max - 1, n_pieces_max, 37, 500, n_candidates):
+        chosen = thresholder.sample_chunks(candidates, n_chunks)
+        assert chosen.shape == (n_chunks,)
+        assert np.unique(chosen).size == n_chunks
+
+        n_pieces = min(n_chunks, n_pieces_max)
+        piece = chosen * n_pieces // n_candidates
+        counts = np.bincount(piece, minlength=n_pieces)
+        assert counts.min() >= n_chunks // n_pieces
+        assert counts.max() <= -(-n_chunks // n_pieces)
+
+    chosen = thresholder.sample_chunks(candidates, n_candidates, ordered=True)
+    np.testing.assert_array_equal(chosen, candidates)
+
+
 def proposal_thresholder(rec, proposal):
     return Threshold.from_config(
         recording=rec,

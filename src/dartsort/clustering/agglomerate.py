@@ -14,8 +14,6 @@ from ..templates.templates import TemplateData
 from ..util.data_util import (
     DARTsortSorting,
     apply_label_remapping_in_place,
-    count_not_sorted,
-    pos_int_unique_and_counts,
 )
 from ..util.internal_config import (
     ComputationConfig,
@@ -1122,6 +1120,7 @@ def clean_final_sorting(
     merge_mapping: np.ndarray | None = None,
     score_by=("gmm_log_liks", "scores"),
     in_place: bool = True,
+    batch_size: int = 2**20,
 ) -> tuple[DARTsortSorting, np.ndarray]:
     """Deduplicate, flatten, depth-order
 
@@ -1148,8 +1147,12 @@ def clean_final_sorting(
         )
         dedup_ms = -1.0
 
-    sorting = deduplicate_spikes(sorting, dedup_ms, in_place=in_place)
-    sorting, reorder = reorder_by_depth(sorting, motion=motion, in_place=in_place)
+    sorting = deduplicate_spikes(
+        sorting, dedup_ms, in_place=in_place, batch_size=batch_size
+    )
+    sorting, reorder = reorder_by_depth(
+        sorting, motion=motion, in_place=in_place, batch_size=batch_size
+    )
     if merge_mapping is None:
         return sorting, reorder
     return sorting, reorder[np.unique(merge_mapping, return_inverse=True)[1]]
@@ -1160,6 +1163,7 @@ def deduplicate_spikes(
     radius_ms: float = -1.0,
     score_by=("gmm_log_liks", "scores"),
     in_place: bool = False,
+    batch_size: int = 2**20,
 ) -> DARTsortSorting:
     if radius_ms < 0 or sorting.labels is None:
         return sorting
@@ -1171,110 +1175,125 @@ def deduplicate_spikes(
     assert radius_samples >= 0
 
     new_labels = sorting.labels if in_place else sorting.labels.copy()
-    scores = None
-    for sck in score_by:
-        if not sorting.has_dataset(sck):
-            continue
-        sl = (slice(None), 0) if sck.endswith("log_liks") else ()
-        scores = sorting.load_dataset(sck, sl=sl)
-        if scores is not None:
-            logger.dartsortdebug(f"deduplicate by score {sck}")
+    assert new_labels.flags.writeable
+    for score_name in score_by:
+        if sorting.has_dataset(score_name):
             break
-    if scores is None:
-        raise ValueError(f"sorting had none of {score_by}.")
-    if scores.ndim >= 2:
-        scores = scores[:, 0]
-    assert scores.ndim == 1
-    assert scores.shape == new_labels.shape
-
-    # handle unsorted times
-    if count_not_sorted(sorting.times_samples) > 0:
-        tsort = np.argsort(sorting.times_samples, kind="stable")
-        labels_by_time = new_labels[tsort]
-        times_samples = sorting.times_samples[tsort]
-        scores = scores[tsort]
     else:
-        tsort = None
-        labels_by_time = new_labels
-        times_samples = sorting.times_samples
+        raise ValueError(f"sorting had none of {score_by}.")
+    logger.dartsortdebug(f"deduplicate by score {score_name}")
+    score_col = (0,) if score_name.endswith("log_liks") else ()
 
-    unit_ids, _, _ = pos_int_unique_and_counts(labels_by_time)
+    times_samples = sorting.times_samples
+    n = new_labels.shape[0]
+    assert times_samples.shape == (n,)
+    if sorting.get_mask_indices() is not None:
+        batch_size = max(1, n)
+    batch_starts = range(0, n, batch_size)
+    batch_tmin = np.array(
+        [times_samples[i0 : i0 + batch_size].min() for i0 in batch_starts]
+    )
+    later_tmin = np.minimum.accumulate(batch_tmin[::-1])[::-1]
+    later_tmin = np.r_[later_tmin[1:], np.iinfo(times_samples.dtype).max]
+
     ndrop = 0
-    unit_mask_tmp = np.empty(labels_by_time.shape, dtype=bool)
-    for unit_id in unit_ids:
-        in_unit = np.flatnonzero(np.equal(labels_by_time, unit_id, out=unit_mask_tmp))
-        if in_unit.size <= 1:
-            continue
-        t = times_samples[in_unit]
-        dt = np.diff(t)
-        if dt.min() > radius_samples:
-            continue
-        discard = dedup_unit(t, dt, scores[in_unit], radius_samples)
+    prev_unfinished = np.zeros(0, dtype=np.intp)
+    for b, i0 in enumerate(batch_starts):
+        i1 = min(n, i0 + batch_size)
+        labeled = new_labels[i0:i1] >= 0
+        ix = np.concatenate([prev_unfinished, i0 + np.flatnonzero(labeled)])
+        scores = sorting.load_dataset(score_name, sl=(slice(i0, i1), *score_col))
+        scores = scores[labeled]
+        del labeled
+        if prev_unfinished.size:
+            prev_scores = sorting.load_dataset(
+                score_name, sl=(prev_unfinished, *score_col)
+            )
+            scores = np.concatenate([prev_scores, scores])
+            del prev_scores
+        if scores.ndim >= 2:
+            scores = scores[:, 0]
+        assert scores.shape == ix.shape
+
+        t = times_samples[ix]
+        order = np.lexsort((ix, t, new_labels[ix]))
+        ix = ix[order]
+        t = t[order]
+        scores = scores[order]
+        del order
+        unit_bounds = np.flatnonzero(np.diff(new_labels[ix])) + 1
+        unit_bounds = np.r_[0, unit_bounds, ix.size]
+
+        discard = np.zeros(ix.shape, dtype=bool)
+        unfinished = np.zeros(ix.shape, dtype=bool)
+        _dedup_batch(
+            t, scores, unit_bounds, later_tmin[b], radius_samples, discard, unfinished
+        )
         ndrop += discard.sum()
-        labels_by_time[in_unit[discard]] = -1
+        new_labels[ix[discard]] = -1
+        prev_unfinished = np.sort(ix[unfinished])
+    assert not prev_unfinished.size
 
     logger.dartsortdebug(f"drop {ndrop}/{len(sorting)} isi violator spikes")
-    if tsort is not None:
-        new_labels[tsort] = labels_by_time
-
     return sorting.ephemeral_replace(labels=new_labels)
-
-
-def dedup_unit(
-    t: np.ndarray, dt: np.ndarray, scores: np.ndarray, radius: int
-) -> np.ndarray:
-    """Deduplicate a single unit's spike train."""
-    discard = np.zeros(t.shape, dtype=bool)
-    _dedup_unit_loop(dt, scores, radius, discard)
-    return discard
 
 
 @numba.njit(nogil=True)
 def _dedup_unit_loop(
-    dt: np.ndarray, scores: np.ndarray, radius: int, discard: np.ndarray
+    t: np.ndarray, scores: np.ndarray, radius: int, discard: np.ndarray
 ):
-    n = scores.shape[0]
+    n = t.shape[0]
     i0 = 0
     while i0 < n - 1:
-        if dt[i0] > radius:
+        if t[i0 + 1] - t[i0] > radius:
             i0 += 1
             continue
 
         i1 = i0 + 1
-        while i1 < n - 1 and dt[i1] <= radius:
+        while i1 < n - 1 and t[i1 + 1] - t[i1] <= radius:
             i1 += 1
 
         # now, i0:i1 + 1 is a slice of violators
-        # discard until all valid
-        score_slice = scores[i0 : i1 + 1]
-        dt_slice = dt[i0:i1]
-        order = np.argsort(score_slice)
-        # putting the -1 there ensures at least one spike is kept
-        # that case is only relevant when 0 in dt_slice
-        for oo in order[:-1]:
-            # discard spike i0 + oo
+        order = np.argsort(-scores[i0 : i1 + 1], kind="mergesort")
+        for oo in order:
             ii = i0 + oo
-            discard[ii] = True
+            if discard[ii]:
+                continue
+            j = ii
+            while j > i0 and t[ii] - t[j - 1] <= radius:
+                j -= 1
+                discard[j] = True
+            j = ii
+            while j < i1 and t[j + 1] - t[ii] <= radius:
+                j += 1
+                discard[j] = True
 
-            # figure out isi after bridging the gap, handle edges
-            bridge_isi = 0.0
-            if ii < n - 1:
-                bridge_isi += dt[ii]
-            else:
-                bridge_isi = np.inf
-            if ii > 0:
-                bridge_isi += dt[ii - 1]
-            else:
-                bridge_isi = np.inf
+        i0 = i1 + 1
 
-            # update dt with bridge isi
-            if ii < n - 1:
-                dt[ii] = bridge_isi
-            if ii > 0:
-                dt[ii - 1] = bridge_isi
 
-            # check if done
-            if dt_slice.min() > radius:
-                break
+@numba.njit(nogil=True)
+def _dedup_batch(
+    t: np.ndarray,
+    scores: np.ndarray,
+    unit_bounds: np.ndarray,
+    later_tmin: int,
+    radius: int,
+    discard: np.ndarray,
+    unfinished: np.ndarray,
+):
+    for jj in range(unit_bounds.shape[0] - 1):
+        j0 = unit_bounds[jj]
+        j1 = unit_bounds[jj + 1]
+        batch_end = j0 + np.searchsorted(t[j0:j1], later_tmin - radius)
+        # walk back so that we end before any runs which could cross to the next chunk
+        while (
+            batch_end > j0
+            and batch_end < j1
+            and t[batch_end] - t[batch_end - 1] <= radius
+        ):
+            batch_end -= 1
+        unfinished[batch_end:j1] = True
 
-        i0 = i1
+        _dedup_unit_loop(
+            t[j0:batch_end], scores[j0:batch_end], radius, discard[j0:batch_end]
+        )

@@ -11,8 +11,8 @@ from ..util.data_util import (
     DARTsortSorting,
     apply_label_remapping_in_place,
     count_not_sorted,
-    mean_by_label_1d,
     pos_int_unique_and_counts,
+    welford_by_label_1d,
     yield_masked_chunks,
 )
 from ..util.logging_util import get_logger
@@ -74,7 +74,10 @@ def apply_reclustering(
     else:
         assert unit_snrs is not None
         times_samples = sorting.times_samples
-        times_updated = times_samples if in_place else times_samples.copy()
+        if in_place and times_samples.flags.writeable:
+            times_updated = times_samples
+        else:
+            times_updated = times_samples.copy()
         apply_time_shifts(
             times_updated,
             sorting.labels,
@@ -375,6 +378,7 @@ def reorder_by_depth(
     geom: np.ndarray | None = None,
     centroids: np.ndarray | None = None,
     in_place: bool = False,
+    batch_size: int = 2**20,
 ) -> tuple[DARTsortSorting, np.ndarray]:
     """Reorder cluster labels so that centroid depth is increasing
 
@@ -409,10 +413,21 @@ def reorder_by_depth(
         centroids = w @ geom[:, 1]
 
     if centroids is None:
-        z = sorting.load_dataset("point_source_localizations", sl=(slice(None), 2))
-        if motion is not None:
-            z = motion.correct_s(sorting.times_seconds, z)
-        centroids = mean_by_label_1d(sorting, z)
+        n = len(sorting)
+        if sorting.get_mask_indices() is not None:
+            batch_size = max(1, n)
+        centroids = np.zeros(sorting.n_units)
+        counts = np.zeros(sorting.n_units)
+        for i0 in range(0, n, batch_size):
+            i1 = min(n, i0 + batch_size)
+            z = sorting.load_dataset(
+                "point_source_localizations", sl=(slice(i0, i1), 2)
+            )
+            if motion is not None:
+                t = sorting.load_dataset("times_seconds", sl=slice(i0, i1))
+                z = motion.correct_s(t, z)
+            welford_by_label_1d(sorting.labels[i0:i1], z, centroids, counts)
+        assert counts.min(initial=1) > 0
 
     labels = sorting.labels if in_place else sorting.labels.copy()
     reorder = np.argsort(np.argsort(centroids, kind="stable"), kind="stable")

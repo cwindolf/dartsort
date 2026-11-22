@@ -1,6 +1,8 @@
 import warnings
+import zipfile
 from collections import namedtuple
 from collections.abc import Generator, Sequence
+from contextlib import nullcontext
 from copy import copy
 from pathlib import Path
 from threading import Lock
@@ -766,9 +768,14 @@ class DARTsortSorting:
 
         data.update(self._ephemeral_features)
         eph_keys = list(self._ephemeral_features.keys())
+        streamed_keys = []
+        unmasked = self.get_mask_indices() is None
         for k in pack_extra_features or []:
-            data[k] = getattr(self, k)
             eph_keys.append(k)
+            if unmasked and k not in data and self.has_dataset_on_disk_not_loaded(k):
+                streamed_keys.append(k)
+            else:
+                data[k] = getattr(self, k)
         if pack_simple_features:
             # ephemeral already stored so just need to check persistent
             for k in self._persistent_features:
@@ -783,19 +790,33 @@ class DARTsortSorting:
         data["loaded_persistent_features"] = np.array(
             list(self._persistent_features.keys())
         )
-        np.savez(sorting_npz, **data, allow_pickle=False)
+        pack_hdf5_to_npz(
+            sorting_npz,
+            self.parent_h5_path,
+            dataset_names=[*data.keys(), *streamed_keys],
+            loaded_datasets=data,
+        )
 
     @classmethod
     def load(
         cls,
-        sorting_npz,
+        sorting_npz: str | Path,
         additional_persistent_features=None,
         load_ephemeral_feature_names=None,
         load_persistent_feature_names=None,
+        low_memory: bool = False,
     ) -> Self:
-        """Load from npz (usually dartsort_sorting.npz)."""
+        """Load from npz (usually dartsort_sorting.npz).
+
+        In low_memory=True mode, some returned properties of this object are memmap
+        arrays (read-only).
+        """
         sorting_npz = ensure_path(sorting_npz, strict=True)
-        with np.load(sorting_npz) as data:
+        with (
+            nullcontext(npz_memmaps(sorting_npz))
+            if low_memory
+            else np.load(sorting_npz) as data
+        ):
             times_samples = data["times_samples"]
             channels = data["channels"]
             labels = data.get("labels", None)
@@ -813,7 +834,7 @@ class DARTsortSorting:
                 ephemeral_features = {}
             if geom is not None:
                 ephemeral_features["geom"] = geom
-            if parent_h5_path is not None:
+            if parent_h5_path is not None and not low_memory:
                 loaded_persistent_features = data.get("loaded_persistent_features", [])
             else:
                 loaded_persistent_features = []
@@ -829,10 +850,23 @@ class DARTsortSorting:
                 )
             if load_persistent_feature_names is None:
                 load_persistent_feature_names = list(loaded_persistent_features)
-            self = cls.from_peeling_hdf5(
-                parent_h5_path,
-                load_feature_names=load_persistent_feature_names,
-            )
+            if low_memory:
+                self = cls(
+                    times_samples=times_samples,
+                    channels=channels,
+                    labels=None,
+                    sampling_frequency=sampling_frequency,
+                    parent_h5_path=parent_h5_path,
+                )
+                self.load_persistent_features(
+                    load_feature_names=load_persistent_feature_names,
+                    load_simple_features=False,
+                )
+            else:
+                self = cls.from_peeling_hdf5(
+                    parent_h5_path,
+                    load_feature_names=load_persistent_feature_names,
+                )
             if labels is not None:
                 ephemeral_features["labels"] = labels
             return self.ephemeral_replace(
@@ -1005,8 +1039,8 @@ class DARTsortSorting:
         if self.parent_h5_path:
             h5_str = f" from {self.parent_h5_path}."
         if self.labels is not None:
-            noise_prop = (self.labels < 0).mean().item()
-            noise_pct = 100 * noise_prop
+            _, _, neg_count = pos_int_unique_and_counts(self.labels)
+            noise_pct = 100 * neg_count / max(1, ns)
             noise_str = f" ({noise_pct:.2f}% noise)"
         else:
             noise_str = ""
@@ -1134,18 +1168,22 @@ class DARTsortSorting:
             return _read_by_chunk(h5_mask, dset, show_progress=False)
 
 
-def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
+def load(
+    f: str | Path, labels_stem: str | None = None, low_memory: bool = False
+) -> DARTsortSorting:
     """Load a spike train from h5, npz, or folder."""
     f = ensure_path(f, strict=True)
 
-    if f.name.endswith(".h5"):
+    if f.name.endswith(".h5") and low_memory:
+        raise ValueError(f"Can't load {f} in low-memory mode (no h5 memmap...)")
+    elif f.name.endswith(".h5"):
         st = DARTsortSorting.from_peeling_hdf5(h5_path=f)
     elif f.name.endswith(".npz"):
-        st = DARTsortSorting.load(f)
+        st = DARTsortSorting.load(f, low_memory=low_memory)
     elif f.is_dir() and (f / "dartsort_sorting.npz").exists():
-        st = DARTsortSorting.load(f / "dartsort_sorting.npz")
+        st = DARTsortSorting.load(f / "dartsort_sorting.npz", low_memory=low_memory)
     elif f.is_dir() and (f / "sorting.npz").exists():
-        st = DARTsortSorting.load(f / "sorting.npz")
+        st = DARTsortSorting.load(f / "sorting.npz", low_memory=low_memory)
     else:
         raise ValueError(f"Not sure how to load '{f}'.")
 
@@ -1163,7 +1201,7 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
             elif len(glb) > 1:
                 raise ValueError(f"Ambiguous {labels_stem=} matched {labels_npy}.")
             labels_npy = glb[0]
-        labels = np.load(labels_npy)
+        labels = np.load(labels_npy, mmap_mode="r" if low_memory else None)
         if not labels.shape == st.channels.shape:
             raise ValueError(
                 f"{labels_npy} shape {labels.shape} does not match channels shape {st.channels.shape}."
@@ -1435,8 +1473,7 @@ def sorting_from_spikeinterface(
 
 
 def concatenate_sortings(
-    sortings: Sequence[DARTsortSorting],
-    sort_times: bool = True
+    sortings: Sequence[DARTsortSorting], sort_times: bool = True
 ) -> DARTsortSorting:
     """Concatenate sortings and check that the result is sorted
 
@@ -1559,6 +1596,131 @@ def virtual_concatenate_sorting_h5s(
         output_h5.create_dataset("chunk_starts_samples", data=chunk_starts)
         output_h5["last_chunk_start"] = np.int64(chunk_starts[-1])
         output_h5["last_chunk_index"] = np.int64(chunk_starts.size - 1)
+
+
+def pack_hdf5_to_npz(
+    npz_filename: str | Path,
+    h5_filename: str | Path | None,
+    dataset_names: Sequence[str],
+    loaded_datasets: dict[str, np.ndarray] | None,
+    chunks_per_batch: int = 8,
+):
+    npz_filename = ensure_path(npz_filename)
+    assert npz_filename.suffix == ".npz"
+    if loaded_datasets is None:
+        loaded_datasets = {}
+    need_h5 = any(name not in loaded_datasets for name in dataset_names)
+    if need_h5:
+        assert h5_filename is not None
+        h5_filename = ensure_path(h5_filename, strict=True)
+
+    with (
+        zipfile.ZipFile(
+            npz_filename, "w", compression=zipfile.ZIP_STORED, allowZip64=True
+        ) as zf,
+        h5py.File(h5_filename, "r", locking=False) if need_h5 else nullcontext() as h5,
+    ):
+        for name in dataset_names:
+            with zf.open(f"{name}.npy", "w", force_zip64=True) as npy_file:
+                if name in loaded_datasets:
+                    np.lib.format.write_array(
+                        npy_file,
+                        np.asanyarray(loaded_datasets[name]),
+                        allow_pickle=False,
+                    )
+                    continue
+
+                assert h5 is not None
+                dset = h5[name]
+                assert isinstance(dset, h5py.Dataset)
+                assert dset.ndim >= 1
+                header = dict(
+                    descr=np.lib.format.dtype_to_descr(dset.dtype),
+                    fortran_order=False,
+                    shape=dset.shape,
+                )
+                np.lib.format.write_array_header_1_0(npy_file, header)
+                n = dset.shape[0]
+                chunk_rows = 1024 if dset.chunks is None else dset.chunks[0]
+                batch_size = chunks_per_batch * chunk_rows
+                for i0 in range(0, n, batch_size):
+                    i1 = min(n, i0 + batch_size)
+                    npy_file.write(np.ascontiguousarray(dset[i0:i1]).tobytes())
+
+
+def pack_peeling_hdf5_to_npz(h5_path: Path, npz_path: Path):
+    h5_path = ensure_path(h5_path, strict=True)
+    with h5py.File(h5_path, "r", locking=False) as h5:
+        small = {
+            k: cast(h5py.Dataset, h5[k])[()]
+            for k in h5
+            if DARTsortSorting._no_check_needed(k)
+        }
+        streamed = [k for k in ("times_samples", "channels", "labels") if k in h5]
+    data = dict(
+        parent_h5_path=np.array(str(relative_to_walk_up(h5_path, npz_path.parent))),
+        ephemeral_feature_names=np.array(
+            [k for k in small if k not in ("geom", "sampling_frequency")]
+        ),
+        loaded_persistent_features=np.array([]),
+        **small,
+    )
+    pack_hdf5_to_npz(
+        npz_path,
+        h5_path,
+        dataset_names=[*data.keys(), *streamed],
+        loaded_datasets=data,
+    )
+
+
+def with_labels_in_memmap(
+    sorting: DARTsortSorting, memmap_npy_path: Path
+) -> DARTsortSorting:
+    assert sorting.labels is not None
+    labels = np.lib.format.open_memmap(
+        memmap_npy_path,
+        mode="w+",
+        dtype=sorting.labels.dtype,
+        shape=sorting.labels.shape,
+    )
+    labels[:] = sorting.labels
+    return sorting.ephemeral_replace(labels=labels)
+
+
+def npz_memmaps(npz_filename: Path) -> dict[str, np.ndarray]:
+    memmaps = {}
+    with np.load(npz_filename) as npz, npz_filename.open("rb") as raw:
+        for name in npz.files:
+            info = npz.zip.getinfo(f"{name}.npy")
+            if info.compress_type != zipfile.ZIP_STORED:
+                raise ValueError(f"Can't memmap {name} of {npz_filename} (compressed)")
+            with npz.zip.open(info) as member:
+                version = np.lib.format.read_magic(member)
+                assert version in ((1, 0), (2, 0))
+                if version == (1, 0):
+                    header = np.lib.format.read_array_header_1_0(member)
+                else:
+                    header = np.lib.format.read_array_header_2_0(member)
+                shape, fortran_order, dtype = header
+                header_len = member.tell()
+
+            if not shape or 0 in shape or dtype.kind not in "biuf":
+                memmaps[name] = npz[name]
+                continue
+
+            raw.seek(info.header_offset)
+            local_header = raw.read(30)
+            name_len = int.from_bytes(local_header[26:28], "little")
+            extra_len = int.from_bytes(local_header[28:30], "little")
+            memmaps[name] = np.memmap(
+                npz_filename,
+                dtype=dtype,
+                mode="r",
+                shape=shape,
+                offset=info.header_offset + 30 + name_len + extra_len + header_len,
+                order="F" if fortran_order else "C",
+            )
+    return memmaps
 
 
 def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:
@@ -2589,23 +2751,10 @@ def _apply_remapping_and_count_over(labels: np.ndarray, remapping: np.ndarray) -
     return over_count
 
 
-def mean_by_label_1d(sorting: DARTsortSorting, x: np.ndarray) -> np.ndarray:
-    """Average a property within each label (ignoring -1s)."""
-    assert sorting.labels is not None
-    if not sorting.labels.size:
-        return np.zeros((0,))
-    assert x.dtype.kind == "f"
-    assert x.ndim == 1
-    assert sorting.labels.shape == x.shape
-    return _welford_by_label_1d(sorting.labels, x)
-
-
-@numba.njit(nogil=True, parallel=True)
-def _welford_by_label_1d(labels: np.ndarray, x: np.ndarray):
-    K = labels.max() + 1
-    mean = np.zeros((K,), dtype=np.float64)
-    count = np.zeros((K,), dtype=np.float64)
-
+@numba.njit(nogil=True)
+def welford_by_label_1d(
+    labels: np.ndarray, x: np.ndarray, mean: np.ndarray, count: np.ndarray
+):
     # deliberately not parallel!
     for i in range(labels.shape[0]):
         li = labels[i]
@@ -2617,7 +2766,3 @@ def _welford_by_label_1d(labels: np.ndarray, x: np.ndarray):
         cli += 1.0
         count[li] = cli
         mean[li] += (xi - mean[li]) / cli
-
-    mean[count == 0] = np.nan
-
-    return mean

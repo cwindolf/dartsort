@@ -886,7 +886,7 @@ class MatchingConfig:
     delete_pconv: bool = True
 
 
-MotionBatchingMode = Literal["full", "online"]
+MotionBatchingMode = Literal["full", "online", "coarse_guided_online"]
 
 
 @cfg_dataclass
@@ -898,6 +898,9 @@ class MotionEstimationConfig:
     # DREDge parameters
     motion_batching_mode: MotionBatchingMode = "full"
     motion_chunk_len_s: float = 3000.0
+    motion_coarse_bin_s: float = 600.0
+    motion_coarse_max_dt_s: float | None = None
+    motion_fine_max_disp_um: float | None = None
     probe_boundary_padding_um: float = 100.0
     spatial_bin_length_um: float = 1.0
     temporal_bin_length_s: float = 1.0

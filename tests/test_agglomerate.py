@@ -57,7 +57,8 @@ def test_deduplicate_spikes(sorting, radius_ms):
 
 @pytest.mark.parametrize("radius_ms", [0.0, 0.3])
 @pytest.mark.parametrize("shuffle_times", [False, True])
-def test_deduplicate_spikes_in_place(sorting, radius_ms, shuffle_times):
+@pytest.mark.parametrize("batch_size", [2**20, 2])
+def test_deduplicate_spikes_in_place(sorting, radius_ms, shuffle_times, batch_size):
     if shuffle_times:
         order = np.array([4, 0, 8, 2, 6, 1, 7, 3, 5])
         sorting = DARTsortSorting(
@@ -70,13 +71,32 @@ def test_deduplicate_spikes_in_place(sorting, radius_ms, shuffle_times):
     assert sorting.labels is not None
     original_labels = sorting.labels.copy()
 
-    copied = deduplicate_spikes(sorting, radius_ms=radius_ms, in_place=False)
+    copied = deduplicate_spikes(
+        sorting, radius_ms=radius_ms, in_place=False, batch_size=batch_size
+    )
     np.testing.assert_array_equal(sorting.labels, original_labels)
 
-    mutated = deduplicate_spikes(sorting, radius_ms=radius_ms, in_place=True)
+    mutated = deduplicate_spikes(
+        sorting, radius_ms=radius_ms, in_place=True, batch_size=batch_size
+    )
     np.testing.assert_array_equal(mutated.labels, copied.labels)
     np.testing.assert_array_equal(sorting.labels, copied.labels)
     assert mutated.labels is sorting.labels
+
+
+def test_deduplicate_spikes_runs():
+    times = np.r_[100, 104, 108, 112, 1000 + 4 * np.arange(10)]
+    labels = np.r_[np.zeros(4, dtype=np.int64), np.ones(10, dtype=np.int64)]
+    scores = np.r_[3.0, 1.0, 4.0, 0.5, np.arange(10.0, 0.0, -1.0)]
+    sorting = DARTsortSorting(
+        times_samples=times,
+        channels=np.zeros_like(times),
+        labels=labels,
+        sampling_frequency=1000.0,
+        ephemeral_features={"scores": scores},
+    )
+    out = deduplicate_spikes(sorting, radius_ms=5.0).labels
+    np.testing.assert_array_equal(out, [0, -1, 0, -1, *[1, -1] * 5])
 
 
 # -- combine_gmm_scores
