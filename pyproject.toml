@@ -15,7 +15,7 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  "dredge-ephys>=0.4.0",
+  "dredge-ephys>=0.5.0",
   "h5py",
   "jaxtyping",
   "numba",
