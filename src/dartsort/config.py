@@ -270,9 +270,20 @@ class DARTsortUserConfig:
     """Motion bins farther than this from the local median will be replaced by interpolation."""
     median_neighborhood_bins: int = 51
     motion_batching_mode: MotionBatchingMode = "full"
-    """'full' or 'online'. Online helps with long recordings."""
+    """'full', 'coarse_guided_online', 'online'.
+
+    If you have very long recordings (hundreds-thousands of hours), "coarse_guided_online" is
+    recommended: "full" cannot run at that scale, coarse-guided is a good happy medium.
+    """
     motion_chunk_len_s: Annotated[float, Field(gt=0)] = 3000.0
     """Chunk length in seconds for online motion tracking"""
+    motion_coarse_bin_s: Annotated[float, Field(gt=0)] = 600.0
+    """Coarse bin length for 'coarse_guided_online'"""
+    motion_coarse_max_dt_s: Annotated[float, Field(gt=0)] | None = None
+    """max_dt_s of the coarse solve -- infinite (None) by default"""
+    motion_fine_max_disp_um: Annotated[float, Field(gt=0)] | None = None
+    """Fine timescale search range in coarse_guided_online motion. This is how much
+    wiggle is modeled after correcting for the coarse (long timescale) motion."""
 
     # -- pipeline control parameters for specific use cases
     fit_motion_models_only: bool = False

@@ -31,7 +31,11 @@ def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
         peeler_sampling_cfg=dartsort.FitSamplingConfig(n_residual_snips=512),
         featurization_cfg=dartsort.FeaturizationConfig(),
         motion_estimation_cfg=dartsort.MotionEstimationConfig(
-            do_motion_estimation=do_motion_estimation, rigid=True
+            do_motion_estimation=do_motion_estimation,
+            rigid=True,
+            motion_batching_mode="coarse_guided_online",
+            motion_chunk_len_s=4.0,
+            motion_coarse_bin_s=2.0,
         ),
         work_in_tmpdir=True,
         save_intermediate_features=True,
