@@ -2,7 +2,6 @@
 Test conversions among DARTsortSorting, NumpySorting, and HDF5 formats.
 """
 
-import gc
 import tempfile
 from pathlib import Path
 from typing import cast
@@ -58,46 +57,37 @@ def test_from_peeling():
         assert np.array_equal(dsorting.labels, labels)
 
 
-def test_save_pack_extra_features():
+def test_save_pack_extra_features(tmp_path):
     rg = np.random.default_rng(0)
     n = 20_017
     channels = rg.integers(0, 384, size=(n,))
     locs = rg.normal(size=(n, 4)).astype(np.float32)
-    with tempfile.TemporaryDirectory() as tempdir:
-        peeling_h5 = Path(tempdir) / "test.h5"
-        with h5py.File(peeling_h5, "w") as h:
-            h.create_dataset("sampling_frequency", data=1)
-            h.create_dataset("times_samples", data=np.arange(n), chunks=(1024,))
-            h.create_dataset("channels", data=channels, chunks=(1024,))
-            h.create_dataset("labels", data=rg.integers(0, 10, size=(n,)), chunks=(1024,))
-            h.create_dataset("point_source_localizations", data=locs, chunks=(1024, 4))
+    peeling_h5 = tmp_path / "test.h5"
+    with h5py.File(peeling_h5, "w") as h:
+        h.create_dataset("sampling_frequency", data=1)
+        h.create_dataset("times_samples", data=np.arange(n), chunks=(1024,))
+        h.create_dataset("channels", data=channels, chunks=(1024,))
+        h.create_dataset("labels", data=rg.integers(0, 10, size=(n,)), chunks=(1024,))
+        h.create_dataset("point_source_localizations", data=locs, chunks=(1024, 4))
 
-        sorting = DARTsortSorting.from_peeling_hdf5(
-            peeling_h5, load_simple_features=False
-        )
-        new_labels = rg.integers(0, 5, size=(n,))
-        sorting = sorting.ephemeral_replace(labels=new_labels)
-        sorting_npz = Path(tempdir) / "test.npz"
-        sorting.save(
-            sorting_npz, pack_extra_features=["point_source_localizations", "labels"]
-        )
+    sorting = DARTsortSorting.from_peeling_hdf5(peeling_h5, load_simple_features=False)
+    new_labels = rg.integers(0, 5, size=(n,))
+    sorting = sorting.ephemeral_replace(labels=new_labels)
+    sorting_npz = tmp_path / "test.npz"
+    sorting.save(
+        sorting_npz, pack_extra_features=["point_source_localizations", "labels"]
+    )
 
-        loaded = None
-
-        for low_memory in (False, True):
-            loaded = DARTsortSorting.load(sorting_npz, low_memory=low_memory)
-            assert isinstance(loaded.times_samples, np.memmap) == low_memory
-            assert isinstance(loaded.labels, np.memmap) == low_memory
-            assert np.array_equal(loaded.times_samples, np.arange(n))
-            assert np.array_equal(loaded.channels, channels)
-            assert loaded.labels is not None
-            assert np.array_equal(loaded.labels, new_labels)
-            locs_loaded = loaded.load_dataset("point_source_localizations")
-            assert np.array_equal(locs_loaded, locs)
-
-        # release for windows before deleting file
-        del loaded
-        gc.collect()
+    for low_memory in (False, True):
+        loaded = DARTsortSorting.load(sorting_npz, low_memory=low_memory)
+        assert isinstance(loaded.times_samples, np.memmap) == low_memory
+        assert isinstance(loaded.labels, np.memmap) == low_memory
+        assert np.array_equal(loaded.times_samples, np.arange(n))
+        assert np.array_equal(loaded.channels, channels)
+        assert loaded.labels is not None
+        assert np.array_equal(loaded.labels, new_labels)
+        locs_loaded = loaded.load_dataset("point_source_localizations")
+        assert np.array_equal(locs_loaded, locs)
 
 
 def test_pack_peeling_hdf5_to_npz(tmp_path):
