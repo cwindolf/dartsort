@@ -1,4 +1,5 @@
 import dataclasses
+import gc
 import subprocess
 import warnings
 from typing import Any
@@ -54,7 +55,10 @@ def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
     assert (tmp_path / "subtraction.h5").exists()
     assert not (tmp_path / "matching1.h5").exists()
 
-    # delete the final output to trick ds into thinking it wasn't done
+    # delete the final output to trick ds into thinking it wasn't done.
+    # gc first for windows file stuff 
+    del res
+    gc.collect()
     (tmp_path / "dartsort_sorting.npz").unlink()
 
     # test the fast-forward thing

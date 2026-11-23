@@ -2,6 +2,7 @@
 Test conversions among DARTsortSorting, NumpySorting, and HDF5 formats.
 """
 
+import gc
 import tempfile
 from pathlib import Path
 from typing import cast
@@ -81,6 +82,8 @@ def test_save_pack_extra_features():
             sorting_npz, pack_extra_features=["point_source_localizations", "labels"]
         )
 
+        loaded = None
+
         for low_memory in (False, True):
             loaded = DARTsortSorting.load(sorting_npz, low_memory=low_memory)
             assert isinstance(loaded.times_samples, np.memmap) == low_memory
@@ -91,6 +94,10 @@ def test_save_pack_extra_features():
             assert np.array_equal(loaded.labels, new_labels)
             locs_loaded = loaded.load_dataset("point_source_localizations")
             assert np.array_equal(locs_loaded, locs)
+
+        # release for windows before deleting file
+        del loaded
+        gc.collect()
 
 
 def test_pack_peeling_hdf5_to_npz(tmp_path):
