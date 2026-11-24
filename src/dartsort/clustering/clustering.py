@@ -1,6 +1,6 @@
 import gc
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal, Self, cast
+from typing import TYPE_CHECKING, Literal, Self
 
 import numpy as np
 import sklearn.cluster
@@ -814,7 +814,6 @@ refinement_strategies["none"] = Refinement
 
 
 class TMMRefinement(Refinement):
-    _needs_simple_features = True
     _needs_stable_features = True
 
     def _demix(
@@ -826,9 +825,6 @@ class TMMRefinement(Refinement):
         skip_final_assign_and_return_mix_data=False,
         tpca: "BaseTemporalPCA | None" = None,
     ):
-        assert features is not None
-        subsampling, ixs = self.handle_sampling(features)
-        ixs = cast(np.ndarray, ixs) if subsampling else None
         res = mixture.tmm_demix(
             sorting=sorting,
             motion=motion,
@@ -836,7 +832,6 @@ class TMMRefinement(Refinement):
             refinement_cfg=self.refinement_cfg,
             computation_cfg=self.computation_cfg,
             stable_features=stable_features,
-            fit_indices=ixs,
             save_step_labels_format=self.labels_fmt,
             save_step_labels_dir=self.save_labels_dir,
             save_cfg=self.save_cfg,

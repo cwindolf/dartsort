@@ -14,6 +14,7 @@ from ..clustering.agglomerate import HAVE_KDEPY
 from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
 from ..clustering.mixture import (
     MixtureModelAndDatasets,
+    ModelSelectionContext,
     NeighborhoodLUT,
     Scores,
     StreamingSpikeData,
@@ -88,6 +89,11 @@ class MixtureVisData:
 
     def to_sorting(self) -> DARTsortSorting:
         return self.sorting.ephemeral_replace(labels=self.full_labels)
+
+    def model_selection_context(self) -> ModelSelectionContext:
+        return ModelSelectionContext.from_scores(
+            self.train_data, self.val_data, self.train_scores, self.eval_scores
+        )
 
     def inu_and_times_full(self, unit_id: int):
         inu_full = np.flatnonzero(self.full_labels == unit_id)
@@ -666,20 +672,25 @@ class MergeView(MixtureComponentPlot):
         _, group, D = _get_my_merge_group(mix_data, unit_id)
 
         # get pair mask
+        group = torch.asarray(group)
         pair_mask = torch.asarray(D < mix_data.tmm.p.merge_max_distance)
 
+        # this is already done in group_units.
+        # restrict my merge such that units which don't overlap at all aren't
+        # considered. to trim search, but also because bad solutions can
+        # occur in that case.
+        lut = mix_data.tmm.lut
+        un_adj = (lut.b.lut[group] < lut.b.unit_ids.shape[0]).float()
+        uu_adj = un_adj @ un_adj.T > 0
+        pair_mask = pair_mask.logical_and_(uu_adj.to(pair_mask))
+
         # run it
-        group_res = mix_data.tmm.try_merge_group(
-            group=torch.asarray(group),
-            train_data=mix_data.train_data,
-            eval_data=mix_data.val_data,
-            eval_scores=mix_data.eval_scores,
-            train_labels=torch.asarray(mix_data.train_labels),
-            eval_labels=mix_data.eval_labels,
-            pair_mask=pair_mask,
-            apply_adj_mask=True,
-            debug=True,
-        )
+        if group.numel() <= 1:
+            group_res = None
+        else:
+            [(_, group_res)] = mix_data.tmm.propose_and_check_merges(
+                mix_data.model_selection_context(), [(group, pair_mask)], debug=True
+            )
 
         return group, D, pair_mask, group_res
 
@@ -1023,17 +1034,20 @@ class SplitView(MixtureComponentPlot):
             group = torch.tensor([unit_id])
 
         if debug_info is None:
-            split_res, debug_info = mix_data.tmm.split_group(
-                group=group,
-                train_data=mix_data.train_data,
-                eval_data=mix_data.val_data,
-                eval_scores=mix_data.eval_scores,
-                train_labels=torch.asarray(mix_data.train_labels),
-                eval_labels=mix_data.eval_labels,
+            ctx = mix_data.model_selection_context()
+            proposal, debug_info = mix_data.tmm.propose_split(
+                ctx,
+                group,
                 debug=True,
                 keep_original_components=self.keep_original_components,
-                fix_responsibilities=self.fix_responsibilities,
             )
+            if proposal is not None:
+                [(split_res, debug_info)] = mix_data.tmm.check_splits(
+                    ctx,
+                    [proposal],
+                    debug=True,
+                    fix_responsibilities=self.fix_responsibilities,
+                )
         else:
             if split_res is not None:
                 assert torch.equal(split_res.unit_ids, group)

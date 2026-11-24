@@ -54,7 +54,17 @@ clustering_kwargs = [clukw | ck for ck in clustering_kwargs]
 refinement_kwargs = [
     dict(refinement_strategy=k) for k in refinement_strategies if k != "agglomerate"
 ]
-refinement_kwargs = [dict(refinement_strategy="tmm", signal_rank=0), *refinement_kwargs]
+refinement_kwargs = [
+    dict(refinement_strategy="tmm", signal_rank=0),
+    dict(refinement_strategy="tmm", robust_strategy="huber"),
+    dict(refinement_strategy="tmm", fix_responsibilities_in_split=False),
+    dict(
+        refinement_strategy="tmm",
+        hold_out_criterion=False,
+        mixture_steps=("split", "merge"),
+    ),
+    *refinement_kwargs,
+]
 refinement_kwargs = [refkw | rk for rk in refinement_kwargs]
 
 # refinement runs on the sorting's own labels, except in the last case, which

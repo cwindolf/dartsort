@@ -1,3 +1,5 @@
+import math
+from dataclasses import replace
 from itertools import product
 
 import numpy as np
@@ -76,6 +78,19 @@ def low_k_simulations():
     }
 
 
+def _tmm_from_simulation(sim, ref_cfg, rg):
+    tmm, train_data, val_data, full_data, *_ = mixture.instantiate_and_bootstrap_tmm(
+        sorting=sim["init_sorting"],
+        motion=MotionInfo.from_motion_est(geom=sim["prgeom"][:-1]),
+        clustering_features_cfg=ClusteringFeaturesConfig(feature_rank=TEST_RANK),
+        stable_features=sim["data"],
+        refinement_cfg=ref_cfg,
+        seed=rg,
+        noise=sim["noise"],
+    )
+    return tmm, train_data, val_data, full_data
+
+
 @pytest.mark.parametrize("t_mu", ["smooth"])
 @pytest.mark.parametrize("t_cov_zrad", [("eye", 2.0), ("random", None)])
 # @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
@@ -109,8 +124,6 @@ def test_truncated_mixture(
     sim = moppca_simulations[(t_mu, t_cov, t_w, t_missing, corruption)]
     true_labels = sim["labels"]
     init_sorting = sim["init_sorting"]
-    stable_features = sim["data"]
-    noise = sim["noise"]
     K = sim["K"]
     M = sim["M"]
     cmask = sim["channel_observed_by_unit"]
@@ -124,9 +137,6 @@ def test_truncated_mixture(
     gt_cosines.fill_diagonal_(-torch.inf)
 
     rg = np.random.default_rng(0)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device(device)
-    clu_feat_cfg = ClusteringFeaturesConfig(feature_rank=TEST_RANK)
     ref_cfg = RefinementConfig(
         refinement_strategy="tmm",
         signal_rank=M * (t_w != "zero"),
@@ -138,35 +148,9 @@ def test_truncated_mixture(
         huber_noise=huber_noise,
         split_kmeanspp_metric=split_kmeanspp_metric,
     )
-    no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
-
-    # copy-pasting from tmm_demix here
-    neighb_cov, erp, train_data, val_data, full_data, noise, *_ = (
-        mixture.get_truncated_datasets(
-            sorting=init_sorting,
-            motion=no_motion,
-            clustering_features_cfg=clu_feat_cfg,
-            refinement_cfg=ref_cfg,
-            device=device,
-            rg=rg,
-            noise=noise,
-            stable_features=stable_features,
-        )
-    )
+    tmm, train_data, val_data, full_data = _tmm_from_simulation(sim, ref_cfg, rg)
     huber_noise_unit = robust_strategy == "huber" and huber_noise
-    assert (neighb_cov.huber_k is not None) == huber_noise_unit
-    tmm = mixture.TruncatedMixtureModel.from_config(
-        noise=noise,
-        erp=erp,
-        neighb_cov=neighb_cov,
-        train_data=train_data,
-        refinement_cfg=ref_cfg,
-        seed=rg,
-    )
-    D = tmm.unit_distance_matrix()
-    lut = train_data.bootstrap_candidates(D)
-    tmm.update_lut(lut)
-    eval_scores = None
+    assert (tmm.neighb_cov.huber_k is not None) == huber_noise_unit
 
     # loop:
     # 0: em
@@ -218,7 +202,6 @@ def test_truncated_mixture(
             # pick 2 random units and just accept the kmeans proposal
             to_split = rg.choice(K, size=2, replace=False)
             n_pieces = [3, 3]
-            assert eval_scores is not None
             print(f"False split: {to_split} into {n_pieces} parts.")
             logger.info(f"False split: {to_split} into {n_pieces} parts.")
             split_results = []
@@ -244,19 +227,21 @@ def test_truncated_mixture(
                     min_channel_count=tmm.p.min_channel_count,
                 )
                 assert kmeans_responsibliities is not None
-                split_model, _, _, any_discarded, _, _, _ = (
-                    mixture.TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
-                        data=split_data,
-                        responsibilities=kmeans_responsibliities,
-                        p=tmm.p,
-                        signal_rank=tmm.signal_rank,
-                        erp=tmm.erp,
-                        noise=tmm.noise,
-                        neighb_cov=tmm.neighb_cov,
-                        total_log_proportion=tmm.b.log_proportions[unit_id].item(),
-                    )
+                n_kmeans_units = kmeans_responsibliities.shape[1]
+                split_fit = mixture.TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
+                    data=mixture.ComponentBlockData.single(
+                        split_data, torch.arange(n_kmeans_units)
+                    ),
+                    responsibilities=kmeans_responsibliities,
+                    p=tmm.p,
+                    signal_rank=tmm.signal_rank,
+                    erp=tmm.erp,
+                    noise=tmm.noise,
+                    neighb_cov=tmm.neighb_cov,
+                    total_log_proportions=tmm.b.log_proportions[unit_id][None],
                 )
-                assert not any_discarded
+                split_model = split_fit.model
+                assert split_fit.kept_mask.all()
                 assert split_model.n_units > 1
                 assert split_model.n_units == kmeans_responsibliities.shape[1]
 
@@ -271,62 +256,29 @@ def test_truncated_mixture(
                 )
                 split_results.append(split_result)
 
-        if it:
-            # get scores that split needs
-            train_scores = tmm.soft_assign(
-                data=train_data, full_proposal_view=True, needs_bootstrap=False
-            )
-            if val_data is not None:
-                eval_scores = tmm.soft_assign(
-                    data=val_data, full_proposal_view=True, needs_bootstrap=False
-                )
-            else:
-                eval_scores = tmm.soft_assign(
-                    data=train_data,
-                    full_proposal_view=False,
-                    needs_bootstrap=False,
-                    max_iter=1,
-                )
-        else:
-            train_scores = eval_scores = None
-
         if it in (1, 3):
             print("Split.")
             logger.info("Split.")
-            assert train_scores is not None
-            assert eval_scores is not None
-            split_res = tmm.split(
-                train_data, val_data, train_scores=train_scores, eval_scores=eval_scores
+            split_res = mixture.run_split(
+                tmm, train_data=train_data, val_data=val_data, prog_level=0
             )
-            logger.info(f"Split created {split_res.n_new_units} new units.")
+            assert split_res is not None
             if it == 1:
                 assert split_res.n_new_units == 0
 
         if it in (2, 4):
             print("Merge.")
             logger.info("Merge.")
-            assert train_scores is not None
-            assert eval_scores is not None
-            pair_mask = mixture.violation_pair_mask(
-                tmm=tmm,
-                full_data=full_data,
-                original_sorting=init_sorting,
-                prog_level=1,
-            )
-            assert pair_mask is not None
-            assert pair_mask.shape == (tmm.n_units, tmm.n_units)
-            merge_map = tmm.merge(
+            merge_map = mixture.run_merge(
+                tmm,
                 train_data,
                 val_data,
-                train_scores=train_scores,
-                eval_scores=eval_scores,
-                pair_mask=pair_mask,
+                prog_level=0,
+                full_data=full_data,
+                original_sorting=init_sorting,
             )
             logger.info(f"{gt_cosines=}.")
             logger.info(f"{true_labels.unique(return_counts=True)=}.")
-            logger.info(
-                f"Merge {merge_map.mapping.shape[0]} -> {merge_map.nuniq()} units."
-            )
             assert merge_map.nuniq() == K
 
         if it == 5:
@@ -438,9 +390,7 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
     n_candidates = K + 3
 
     rg = np.random.default_rng(0)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device(device)
-    clu_feat_cfg = ClusteringFeaturesConfig(feature_rank=TEST_RANK)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ref_cfg = RefinementConfig(
         refinement_strategy="tmm",
         signal_rank=sim["M"],
@@ -448,69 +398,25 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
         em_converged_atol=1e-4,
         initialize_at_rank_0=False,
     )
-    no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
-
-    neighb_cov, erp, train_data, val_data, full_data, noise, *_ = (
-        mixture.get_truncated_datasets(
-            sorting=init_sorting,
-            motion=no_motion,
-            clustering_features_cfg=clu_feat_cfg,
-            refinement_cfg=ref_cfg,
-            device=device,
-            rg=rg,
-            noise=sim["noise"],
-            stable_features=sim["data"],
-        )
-    )
+    tmm, train_data, val_data, full_data = _tmm_from_simulation(sim, ref_cfg, rg)
     assert full_data is not None
-    tmm = mixture.TruncatedMixtureModel.from_config(
-        noise=noise,
-        erp=erp,
-        neighb_cov=neighb_cov,
-        train_data=train_data,
-        refinement_cfg=ref_cfg,
-        seed=rg,
-    )
-    lut = train_data.bootstrap_candidates(tmm.unit_distance_matrix())
-    tmm.update_lut(lut)
 
     # em, split, merge
     for step in ("em", "split", "merge"):
-        if step != "em":
-            train_scores = tmm.soft_assign(
-                data=train_data, full_proposal_view=True, needs_bootstrap=False
-            )
-            assert val_data is not None
-            eval_scores = tmm.soft_assign(
-                data=val_data, full_proposal_view=True, needs_bootstrap=False
-            )
-        else:
-            train_scores = eval_scores = None
-
         if step == "split":
-            assert train_scores is not None
-            assert eval_scores is not None
-            split_res = tmm.split(
-                train_data, val_data, train_scores=train_scores, eval_scores=eval_scores
+            split_res = mixture.run_split(
+                tmm, train_data=train_data, val_data=val_data, prog_level=0
             )
+            assert split_res is not None
             assert split_res.n_new_units == 0
         if step == "merge":
-            assert train_scores is not None
-            assert eval_scores is not None
-            pair_mask = mixture.violation_pair_mask(
-                tmm=tmm,
-                full_data=full_data,
-                original_sorting=init_sorting,
-                prog_level=1,
-            )
-            assert pair_mask is not None
-            assert pair_mask.shape == (K, K)
-            merge_map = tmm.merge(
+            merge_map = mixture.run_merge(
+                tmm,
                 train_data,
                 val_data,
-                train_scores=train_scores,
-                eval_scores=eval_scores,
-                pair_mask=pair_mask,
+                prog_level=0,
+                full_data=full_data,
+                original_sorting=init_sorting,
             )
             assert merge_map.nuniq() == K
 
@@ -556,6 +462,138 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
 
 
 
+@pytest.mark.parametrize("signal_rank", [0, 2])
+@pytest.mark.parametrize("robust_strategy", ["none", "huber"])
+@pytest.mark.parametrize("fix_responsibilities", [True, False])
+@pytest.mark.parametrize("prior_pseudocount", [0.0, 10.0])
+@pytest.mark.parametrize("weighted", [False, True])
+@pytest.mark.parametrize("converge", [False, True])
+def test_stacked_block_fit(
+    moppca_simulations,
+    signal_rank,
+    robust_strategy,
+    fix_responsibilities,
+    prior_pseudocount,
+    weighted,
+    converge,
+):
+    mixture.pnoid = True
+    sim = moppca_simulations[("smooth", "eye", "smooth", "random", 0.0)]
+    ref_cfg = RefinementConfig(
+        refinement_strategy="tmm",
+        signal_rank=signal_rank,
+        n_candidates=sim["K"],
+        initialize_at_rank_0=False,
+        robust_strategy=robust_strategy,
+        prior_pseudocount=prior_pseudocount,
+    )
+    tmm, train_data, *_ = _tmm_from_simulation(sim, ref_cfg, np.random.default_rng(0))
+    assert train_data.candidates is not None
+    labels = train_data.candidates[:, 0]
+
+    if converge:
+        p = replace(tmm.p, em_iters=50, elbo_atol=5e-3)
+    else:
+        p = replace(tmm.p, em_iters=8, elbo_atol=-math.inf)
+    groups = [torch.tensor([0, 1]), torch.tensor([2, 3]), torch.tensor([4])]
+    width = max(g.numel() for g in groups)
+    block_ixs = []
+    block_resps = []
+    for g in groups:
+        g = g.to(labels.device)
+        (ixs,) = torch.isin(labels, g).nonzero(as_tuple=True)
+        local = (labels[ixs, None] == g[None]).float().argmax(dim=1)
+        resp = 0.9 * F.one_hot(local, g.numel()).float() + 0.1 / g.numel()
+        block_ixs.append(ixs)
+        block_resps.append(resp)
+    total_lps = torch.stack(
+        [tmm.b.log_proportions[g].logsumexp(dim=0) for g in groups]
+    )
+
+    def fit(blocks, responsibilities, total_log_proportions):
+        return mixture.TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
+            data=blocks,
+            responsibilities=responsibilities,
+            signal_rank=signal_rank,
+            erp=tmm.erp,
+            noise=tmm.noise,
+            neighb_cov=tmm.neighb_cov,
+            total_log_proportions=total_log_proportions,
+            p=p,
+            fix_responsibilities=fix_responsibilities,
+        )
+
+    dense_data = train_data.dense_slice(torch.concatenate(block_ixs))
+    if weighted:
+        gen = torch.Generator(device=labels.device).manual_seed(0)
+        sample_weights = torch.rand(
+            dense_data.N, generator=gen, device=labels.device
+        ).add_(0.5)
+        dense_data = replace(dense_data, sample_weights=sample_weights)
+    torch.manual_seed(0)
+    stacked_data = mixture.ComponentBlockData.from_block_sizes(
+        dense_data,
+        [ixs.numel() for ixs in block_ixs],
+        mixture.contiguous_block_unit_ids(torch.tensor([g.numel() for g in groups])),
+    )
+    stacked = fit(
+        stacked_data,
+        torch.concatenate(
+            [F.pad(r, (0, width - r.shape[1])) for r in block_resps], dim=0
+        ),
+        total_lps,
+    )
+    stacked_scores = stacked.model.score_blocks(stacked.data, skip_noise=True)
+
+    if robust_strategy == "none":
+        elbo_changes = np.diff(stacked.block_elbos, axis=0)
+        assert elbo_changes.min() >= -1e-4
+
+    torch.manual_seed(0)
+    for b, (g, resp) in enumerate(zip(groups, block_resps)):
+        w = g.numel()
+        single = fit(
+            mixture.ComponentBlockData.single(
+                dense_data.slice(stacked_data.block_slice(b)), torch.arange(w)
+            ),
+            resp,
+            total_lps[b, None],
+        )
+        n_checked = single.block_elbos.shape[0]
+        np.testing.assert_allclose(
+            stacked.block_elbos[:n_checked, b],
+            single.block_elbos[:, 0],
+            rtol=1e-4,
+            atol=1e-4,
+        )
+        assert (stacked.block_elbos[n_checked:, b] == stacked.block_elbos[n_checked - 1, b]).all()
+        assert torch.equal(
+            stacked.kept_mask[stacked_data.block_slice(b)], single.kept_mask
+        )
+        units = stacked.data.block_unit_ids[b, :w]
+        torch.testing.assert_close(
+            stacked.model.b.means[units], single.model.b.means, rtol=1e-3, atol=1e-3
+        )
+        if signal_rank:
+            wwt_stacked = stacked.model.b.bases[units].mT @ stacked.model.b.bases[units]
+            wwt_single = single.model.b.bases.mT @ single.model.b.bases
+            torch.testing.assert_close(wwt_stacked, wwt_single, rtol=1e-2, atol=1e-2)
+        in_block = stacked.data.block_slice(b)
+        single_scores = single.model.score(single.data.data, skip_noise=True)
+        torch.testing.assert_close(
+            stacked_scores.log_liks[in_block, :w],
+            single_scores.log_liks,
+            rtol=1e-3,
+            atol=1e-2,
+        )
+        torch.testing.assert_close(
+            stacked.responsibilities[in_block, :w],
+            single.responsibilities,
+            rtol=1e-3,
+            atol=1e-4,
+        )
+
+
 @pytest.mark.parametrize("n_chans", [1, 2])
 @pytest.mark.parametrize("rank", [4])
 # @pytest.mark.parametrize("basis_type", ["zero", "smooth", "random"])
@@ -564,10 +602,9 @@ def test_truncated_mixture_low_k(low_k_simulations, K):
 @pytest.mark.parametrize("cov_type", ["eye", "random"])
 # @pytest.mark.parametrize("mean_type", ["zero", "smooth"])
 @pytest.mark.parametrize("mean_type", ["smooth"])
-@pytest.mark.parametrize("full_svd", [False])
 @pytest.mark.parametrize("true_mean", [True, False])
 def test_component_initialization(
-    mean_type, cov_type, basis_type, rank, n_chans, true_mean, full_svd
+    mean_type, cov_type, basis_type, rank, n_chans, true_mean
 ):
     device = ensure_computation_config(None).actual_device()
     moppca_sim = mixture_testing_util.simulate_moppca(
@@ -595,15 +632,15 @@ def test_component_initialization(
         mean_ = moppca_sim["mu"][0].view(-1).to(device)
     else:
         mean_ = moppca_sim["x"].view(n, -1).mean(0)
-    basis_ = mixture._initialize_single(
-        x=moppca_sim["x"],
-        chans=torch.arange(n_chans, device=device),
-        noise=moppca_sim["noise"],
-        mean=mean_,
+    x = moppca_sim["x"]
+    centered = (x.view(n, -1) - mean_).view(1, *x.shape)
+    basis_ = mixture._initialize_bases(
+        centered,
+        torch.ones((1, n_chans), dtype=torch.bool, device=device),
+        torch.arange(n_chans, device=device),
+        moppca_sim["noise"],
         rank=rank,
-        full_svd=full_svd,
-    )
-    assert basis_ is not None
+    )[0]
     basis_ = basis_.numpy(force=True).reshape(rank, -1)
     subspace_ = basis_.T @ basis_
 
