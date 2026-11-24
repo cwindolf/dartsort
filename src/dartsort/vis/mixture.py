@@ -879,7 +879,6 @@ class CovarianceView(MixtureComponentPlot):
                 mix_data.tmm.signal_rank, -1, mix_data.tmm.neighb_cov.n_channels
             )
             basis = basis[:, :, target_chans].view(mix_data.tmm.signal_rank, -1)
-            basis = basis * mix_data.tmm.p.latent_prior_std
             cov_signal = basis.T @ basis
             assert cov_signal.shape == cov_noise.shape
         else:

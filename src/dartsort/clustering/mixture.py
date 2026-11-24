@@ -527,7 +527,6 @@ class LUTParams(BModule):
         self,
         signal_rank: int,
         n_lut: int,
-        latent_prior_std: float,
         # unit- and neighborhood-dependent terms
         muo: Tensor,
         Linvmuo: Tensor,
@@ -547,7 +546,6 @@ class LUTParams(BModule):
         super().__init__()
         self.signal_rank = signal_rank
         self.n_lut = n_lut
-        self.latent_prior_std = latent_prior_std
         self.register_buffer("muo", muo, persistent=False)
         self.register_buffer("Linvmuo", Linvmuo, persistent=False)
         self.register_buffer("CmoCooinvmuo", CmoCooinvmuo, persistent=False)
@@ -569,7 +567,6 @@ class LUTParams(BModule):
         bases: Tensor | None,
         neighb_cov: NeighborhoodCovariance,
         lut: NeighborhoodLUT,
-        latent_prior_std: float,
         huber_quantile: float | None,
         puff=1.0,
     ):
@@ -586,7 +583,6 @@ class LUTParams(BModule):
             dim_obs=neighb_cov.max_nc_obs * neighb_cov.feat_rank,
             dim_miss_near=neighb_cov.max_nc_miss_near * neighb_cov.feat_rank,
             device=means.device,
-            latent_prior_std=latent_prior_std,
             huber_k=huber_k,
             huber_2logzratio=huber_2logzratio,
             puff=puff,
@@ -611,9 +607,7 @@ class LUTParams(BModule):
             if self.signal_rank == 0:
                 continue
             assert bases is not None
-            _update_lut_ppca_batch(
-                self, i0, i1, bases, lut, neighb_cov, self.latent_prior_std
-            )
+            _update_lut_ppca_batch(self, i0, i1, bases, lut, neighb_cov)
         if pnoid:
             self.check()
 
@@ -625,7 +619,6 @@ class LUTParams(BModule):
         dim_obs: int,
         dim_miss_near: int,
         device: torch.device,
-        latent_prior_std: float,
         huber_k: Tensor | None,
         huber_2logzratio: Tensor | None,
         puff=1.0,
@@ -644,7 +637,6 @@ class LUTParams(BModule):
         self = cls(
             signal_rank=signal_rank,
             n_lut=n0,
-            latent_prior_std=latent_prior_std,
             muo=o,
             Linvmuo=torch.zeros_like(o),
             CmoCooinvmuo=m,
@@ -875,7 +867,6 @@ class TMMParams:
     cl_alpha: float
     cl_split_only: bool
     demolish_cl_alpha: float
-    latent_prior_std: float
     min_count: int
     min_channel_count: int
     split_min_count: int
@@ -928,7 +919,6 @@ class TMMParams:
             cl_alpha=refinement_cfg.cl_alpha,
             cl_split_only=refinement_cfg.cl_split_only,
             demolish_cl_alpha=refinement_cfg.demolish_cl_alpha,
-            latent_prior_std=refinement_cfg.latent_prior_std,
             robust_strategy=refinement_cfg.robust_strategy,
             huber_quantile=refinement_cfg.huber_quantile,
             criterion_clip_level=refinement_cfg.criterion_clip_level,
@@ -2499,7 +2489,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             erp=self.erp,
             gen=self.rg,
             min_channel_count=self.p.min_channel_count,
-            latent_prior_std=self.p.latent_prior_std,
             prior_pseudocount=self.p.prior_pseudocount,
             rank0_model=self,
         )
@@ -2539,7 +2528,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             erp=erp,
             gen=rg,
             min_channel_count=p.min_channel_count,
-            latent_prior_std=p.latent_prior_std * p.initial_basis_shrinkage,
+            initial_basis_shrinkage=p.initial_basis_shrinkage,
             prior_pseudocount=p.prior_pseudocount,
             puff=p.split_k,
         )
@@ -2622,7 +2611,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             else min_channel_count,
             noise=noise,
             weights=responsibilities,
-            latent_prior_std=p.latent_prior_std,
             prior_pseudocount=p.prior_pseudocount,
         )
         assert chan_coverage is not None
@@ -3235,7 +3223,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.b.bases,
                 self.neighb_cov,
                 lut,
-                latent_prior_std=self.p.latent_prior_std,
                 huber_quantile=huber_quantile_if_huber(
                     self.p.robust_strategy, self.p.huber_quantile
                 ),
@@ -5729,9 +5716,9 @@ def initialize_parameters_by_unit(
     signal_rank: int,
     noise: KroneckerNoise,
     erp: NeighborhoodFiller,
-    latent_prior_std: float,
     prior_pseudocount: float,
     gen: torch.Generator,
+    initial_basis_shrinkage: float = 1.0,
     scores: Scores | None = None,
     min_channel_count: int = 1,
     rank0_model: TruncatedMixtureModel | None = None,
@@ -5800,7 +5787,7 @@ def initialize_parameters_by_unit(
             rank=signal_rank,
             noise=noise,
             min_channel_count=min_channel_count,
-            latent_prior_std=latent_prior_std,
+            initial_basis_shrinkage=initial_basis_shrinkage,
             prior_pseudocount=prior_pseudocount,
             mean=rank0_model.b.means[k] if rank0_model is not None else None,
             single_weight=kweight,
@@ -5862,7 +5849,7 @@ def initialize_params_from_dense_data(
     erp: NeighborhoodFiller,
     noise: KroneckerNoise,
     prior_pseudocount: float,
-    latent_prior_std: float,
+    initial_basis_shrinkage: float = 1.0,
     mean: Tensor | None = None,
     min_channel_count: int = 1,
     weights: Tensor | None = None,
@@ -5902,7 +5889,7 @@ def initialize_params_from_dense_data(
             mean=mean,
             rank=rank,
             prior_pseudocount=prior_pseudocount,
-            latent_prior_std=latent_prior_std,
+            initial_basis_shrinkage=initial_basis_shrinkage,
             weight=single_weight,
         )
         return [(covered_chans, mean, W)], None
@@ -5932,7 +5919,7 @@ def initialize_params_from_dense_data(
             mean=smean,
             rank=rank,
             weight=weight,
-            latent_prior_std=latent_prior_std,
+            initial_basis_shrinkage=initial_basis_shrinkage,
             prior_pseudocount=prior_pseudocount,
         )
         res.append((schans, smean, w))
@@ -7150,7 +7137,7 @@ def _initialize_single(
     *,
     mean: Tensor,
     rank: int,
-    latent_prior_std: float = 1.0,
+    initial_basis_shrinkage: float = 1.0,
     prior_pseudocount: float = 0.0,
     weight: Tensor | None = None,
     eps: float = 1e-5,
@@ -7213,11 +7200,10 @@ def _initialize_single(
         s = s.div_(denom).square_()
 
     # extra 1.0 was picked up from identity in whitened space, remove and
-    # compute the low rank factor that remains, which is our basis scaled
-    # up by latent_prior_std
+    # compute the low rank factor that remains, which is our basis (scaled)
     flip = sign(V.diagonal(dim1=-2, dim2=-1))
     s = s.sub_(1.0).clamp_(min=eps)
-    ev = s.sqrt_() / latent_prior_std
+    ev = s.sqrt_() / initial_basis_shrinkage
     W = V.mul_(ev.mul_(flip))
     W = U.T @ W
 
@@ -8140,7 +8126,6 @@ def _update_lut_ppca_batch(
     bases: Tensor,
     lut: NeighborhoodLUT,
     neighb_cov: NeighborhoodCovariance,
-    latent_prior_std: float,
 ):
     """Update low-rank factors
 
@@ -8169,7 +8154,7 @@ def _update_lut_ppca_batch(
     WoCooinvsqrt = WoCooinvsqrt @ neighb_cov.b.spatial_whitener[nn, None].mT
     WoCooinvsqrt = WoCooinvsqrt.view(n, M, neighb_cov.feat_rank * neighb_cov.max_nc_obs)
     cap =WoCooinvsqrt.bmm(WoCooinvsqrt.mT)
-    cap.diagonal(dim1=-2, dim2=-1).add_(latent_prior_std**-2)
+    cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
     if pnoid:
         assert cap.isfinite().all()
         assert torch.all(cap.diagonal(dim1=-2, dim2=-1) > 0)
