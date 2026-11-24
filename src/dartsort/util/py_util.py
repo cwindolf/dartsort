@@ -156,7 +156,7 @@ def relative_to_walk_up(path: Path, start: Path) -> Path:
     """pathlib Path.relative_to(start, walk_up=True) shim"""
     try:
         return path.relative_to(start, walk_up=True)
-    except TypeError:
+    except (TypeError, ValueError):
         try:
             return path.relative_to(start)
         except ValueError:

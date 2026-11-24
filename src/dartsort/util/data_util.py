@@ -1649,7 +1649,8 @@ def pack_hdf5_to_npz(
 
 
 def pack_peeling_hdf5_to_npz(h5_path: Path, npz_path: Path):
-    h5_path = ensure_path(h5_path, strict=True)
+    h5_path = ensure_path(h5_path, strict=True, resolve=True)
+    npz_path = ensure_path(npz_path, resolve=True)
     with h5py.File(h5_path, "r", locking=False) as h5:
         small = {
             k: cast(h5py.Dataset, h5[k])[()]
