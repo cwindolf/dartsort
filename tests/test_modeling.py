@@ -594,6 +594,73 @@ def test_stacked_block_fit(
         )
 
 
+def _check_accumulate_R(tmm, batch, scands, local_luts, hat_dim, gen):
+    lix = local_luts.batch_local_lut_ixs
+    assert torch.equal(local_luts.unit_ids[lix], scands.unit_ixs)
+    assert torch.equal(local_luts.neighb_ids[lix], scands.neighb_ixs)
+    neighb_cov = tmm.neighb_cov
+    coefficients = torch.rand(
+        (scands.spike_ixs.shape[0], hat_dim), device=batch.xt.device, generator=gen
+    )
+    R = mixture._accumulate_R(
+        xt=batch.xt,
+        CmoCooinvx=batch.CmoCooinvx,
+        coefficients=coefficients,
+        spike_ixs=scands.spike_ixs,
+        batch_local_lut_ixs=lix,
+        batch_local_lut_unit_ids=local_luts.unit_ids,
+        batch_local_lut_neighb_ids=local_luts.neighb_ids,
+        neighb_cov_obs_ix=neighb_cov.obs_ix,
+        neighb_cov_miss_near_ix=neighb_cov.miss_near_ix,
+        n_units=tmm.n_units,
+        n_channels=neighb_cov.n_channels,
+    )
+    nc, frank = neighb_cov.n_channels, neighb_cov.feat_rank
+    R_ref = batch.xt.new_zeros((tmm.n_units * (nc + 1), hat_dim, frank))
+    for x, chan_ix in (
+        (batch.xt, neighb_cov.obs_ix),
+        (batch.CmoCooinvx, neighb_cov.miss_near_ix),
+    ):
+        products = coefficients[:, None, :, None] * x[scands.spike_ixs][:, :, None, :]
+        R_ixs = (nc + 1) * scands.unit_ixs[:, None] + chan_ix[scands.neighb_ixs]
+        R_ref.index_add_(0, R_ixs.view(-1), products.reshape(-1, hat_dim, frank))
+    R_ref = R_ref.view(tmm.n_units, nc + 1, hat_dim, frank)[:, :nc]
+    scale = R_ref.abs().max()
+    torch.testing.assert_close(R, R_ref, rtol=1e-4, atol=1e-5 * scale)
+
+
+@pytest.mark.parametrize("hat_dim", [1, 3])
+def test_accumulate_R(moppca_simulations, hat_dim):
+    mixture.pnoid = True
+    sim = moppca_simulations[("smooth", "eye", "smooth", "random", 0.0)]
+    ref_cfg = RefinementConfig(
+        refinement_strategy="tmm",
+        signal_rank=2,
+        n_candidates=sim["K"],
+        initialize_at_rank_0=False,
+    )
+    tmm, train_data, *_ = _tmm_from_simulation(sim, ref_cfg, np.random.default_rng(0))
+    device = tmm.b.means.device
+    gen = torch.Generator(device=device).manual_seed(0)
+
+    # main e-step batches: lut entries of the scored candidates
+    for batch in train_data.batches():
+        scores = tmm.score_batch(batch, n_candidates=train_data.n_candidates)
+        [(scands, local_luts)] = mixture._sparse_candidate_batches(
+            scores.candidates,
+            batch.neighborhood_ids,
+            tmm.lut,
+            batch_size=scores.candidates.shape[0],
+        )
+        _check_accumulate_R(tmm, batch, scands, local_luts, hat_dim, gen)
+
+    dense = train_data.dense_slice(torch.arange(train_data.N, device=device))
+    dense = replace(dense, batch_size=256)
+    data = mixture.ComponentBlockData.single(dense, tmm.unit_ids)
+    for batch, scands, local_luts in data.to_batches(tmm.lut):
+        _check_accumulate_R(tmm, batch, scands, local_luts, hat_dim, gen)
+
+
 @pytest.mark.parametrize("n_chans", [1, 2])
 @pytest.mark.parametrize("rank", [4])
 # @pytest.mark.parametrize("basis_type", ["zero", "smooth", "random"])

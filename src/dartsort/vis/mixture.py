@@ -1889,7 +1889,7 @@ def vis_obs_interpolation(
     (trix,) = (mix_data.train_labels == unit_id).nonzero()
     if trix.size > count:
         trix = np.random.default_rng(0).choice(trix, size=count, replace=False)
-        trix.sort()
+    trix = trix[np.argsort(mix_data.train_ixs[trix])]
     fix = mix_data.train_ixs[trix]
     n = len(trix)
 
